@@ -148,6 +148,11 @@
     return { rows: out, spendIsNegative: !!spendIsNegative };
   }
 
+  /** A stable key for a statement layout, so a column mapping can be remembered per bank export. */
+  function headerSignature(headerRow) {
+    return (headerRow || []).map((h) => String(h || '').trim().toLowerCase()).join('|');
+  }
+
   const dupKey = (date, amount) => `${date}|${Math.round(Math.abs(Number(amount)) * 100)}`;
 
   /** Attach line suggestions, duplicate flags, and non-deductible warnings. */
@@ -173,5 +178,5 @@
     });
   }
 
-  return { parseCSV, parseDateCell, parseAmountCell, detectColumns, normalize, review, dupKey };
+  return { parseCSV, parseDateCell, parseAmountCell, detectColumns, normalize, review, dupKey, headerSignature };
 });

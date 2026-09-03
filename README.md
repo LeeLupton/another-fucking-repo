@@ -8,17 +8,19 @@ It runs entirely in the browser, stores everything on the device, installs to a 
 
 ## What it does
 
-**Capture.** Type an expense the way you'd say it: `$42.13 CVS prescription 3/14`, `18 miles to physical therapy on Aug 3`, `$300 tithe yesterday`. The parser pulls out amount, miles, and date; the categorizer suggests the worksheet line and says why. Corrections are remembered per payee. Snap a receipt from the camera; it is downscaled and stored with the entry. Log a bill at its business-use share, repeat monthly premiums in one go, or compute a simplified-method home office.
+**Capture.** Type an expense the way you'd say it: `$42.13 CVS prescription 3/14`, `18 miles to physical therapy on Aug 3`, `$300 tithe yesterday`. The parser pulls out amount, miles, and date; the categorizer suggests the worksheet line and says why. Corrections are remembered per payee. Snap a receipt from the camera; it is downscaled and stored with the entry. Log a bill at its business-use share, repeat monthly premiums in one go, compute a simplified-method home office, or value a bag of donated goods item by item from a catalog of typical thrift-shop ranges; the itemized list is saved with the entry as the record the IRS expects.
 
 **Trips.** Deductible miles need date, destination, purpose, and miles. Save home and the places you drive to; a place's category (medical, business, charity) picks the worksheet line. Measure between places (road routing when online, straight line × 1.25 when not), or record a drive with GPS: the recorder filters noise, keeps the screen awake, sketches the track, and keeps positions on the device. Every trip becomes an entry on the right mileage line and a row in a mileage log that exports the way the IRS expects.
 
-**Import.** Drop in a bank or card CSV. It works out the columns, flags payments, refunds, rows already in the ledger, and things that are never deductible, suggests a line per row, and adds only what you tick.
+**Import.** Drop in a bank or card CSV. It works out the columns (and remembers the layout per bank), flags payments, refunds, rows already in the ledger, and things that are never deductible, suggests a line per row, and adds only what you tick.
 
-**Insights.** What your entries turn into on the return after the 7.5%-of-AGI medical floor, the state-and-local-tax cap, and gift limits, against your standard deduction by filing status, age, and blindness. Nudges for the rules that cost people money: gifts of $250+ without an acknowledgment, Form 8283 over $500, meals at 50%, standard-mileage versus actual-expense conflicts, missing total miles, gambling losses without winnings, casualty losses outside a federal disaster, self-employed premiums that belong above the line, private-lender TIN requirements, duplicates, and payments that are never deductible.
+**Ledger.** Search, section and attention filters, a date range, and a select mode for bulk moves, marking paper receipts, and deleting, with a few seconds to undo any delete.
+
+**Insights.** What your entries turn into on the return after the 7.5%-of-AGI medical floor, the state-and-local-tax cap, and gift limits, against your standard deduction by filing status, age, and blindness, and a year-over-year comparison once last year's entries exist. Nudges for the rules that cost people money: gifts of $250+ without an acknowledgment, Form 8283 over $500, meals at 50%, standard-mileage versus actual-expense conflicts, missing total miles, gambling losses without winnings, casualty losses outside a federal disaster, self-employed premiums that belong above the line, private-lender TIN requirements, duplicates, and payments that are never deductible.
 
 **Advisor.** A recommendation engine over your own ledger, on your own device. It finds recurring payees and their cadence, so a missed month shows up with a one-tap "Log it"; projects Schedule A to year end through the same tax engine; tells you whether bunching deductible bills into December gets you over the standard deduction, or when to stop chasing Schedule A receipts; spots doctor visits without a logged drive, lines that usually travel together, and amounts far outside a payee's usual range. Every recommendation says why and can be dismissed. The "Your data" panel shows the only thing that could ever leave the device, a coarse summary with no payees, notes, dates, receipts, exact amounts, or exact income, and it leaves only if you send it.
 
-**Worksheet.** The organizer sheet, filled in with your totals, section by section, with notes for the preparer. Print it, save it as a PDF, or copy it as text.
+**Worksheet.** The organizer sheet, filled in with your totals, section by section, with notes for the preparer. Print it, save it as a PDF, or copy it as text. A receipts sheet puts every receipt photo on a printable contact sheet with the paper receipts listed underneath.
 
 **Settings.** Filing status, AGI, age and vision, gambling winnings, state (typed or from your location; a no-income-tax state gets the sales-tax note instead), a FEMA declaration lookup for the casualty line, editable rates and thresholds per tax year, backup and restore including receipts, places, and trips.
 
@@ -46,6 +48,7 @@ js/classify.js        line suggestions with explanations; learned payee map
 js/advisor.js         the recommender: recurrences, projection, gaps, anomalies, bunching, habits
 js/geo.js             distances, GPS trip recorder, track sketch, geocoding/routing/FEMA lookups
 js/importer.js        CSV statement parsing, column detection, dedupe, line suggestions
+js/valuation.js       donated-goods catalog, condition-based values, itemized record
 js/store.js           IndexedDB persistence (entries, receipts, places, trips, settings), backup, CSV
 js/app.js             the UI
 sw.js                 offline cache for the app shell
