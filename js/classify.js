@@ -71,7 +71,7 @@
       // 1. keyword matches
       for (const { line, keywords } of INDEX) {
         for (const kw of keywords) {
-          if (containsPhrase(norm, loose, kw)) bump(line.id, kw.weight, kw.raw);
+          if (containsPhrase(norm, loose, kw)) bump(line.id, kw.weight * ((opts.weights && opts.weights[kw.raw] > 0) ? opts.weights[kw.raw] : 1), kw.raw);
         }
       }
       // 2. section context

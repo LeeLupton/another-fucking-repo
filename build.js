@@ -17,7 +17,7 @@ const path = require('path');
 const root = __dirname;
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
-const SCRIPTS = ['js/schema.js', 'js/rules.js', 'js/parse.js', 'js/classify.js', 'js/advisor.js', 'js/geo.js', 'js/importer.js', 'js/valuation.js', 'js/store.js', 'js/app.js'];
+const SCRIPTS = ['js/schema.js', 'js/rules.js', 'js/parse.js', 'js/classify.js', 'js/advisor.js', 'js/geo.js', 'js/importer.js', 'js/valuation.js', 'js/experiments.js', 'js/store.js', 'js/app.js'];
 
 let html = read('index.html');
 const css = read('styles.css');

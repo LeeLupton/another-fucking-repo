@@ -371,6 +371,16 @@
       scheduleC: { actual: computed.scheduleC.total, projected: projected.scheduleC.total },
       medicalPending: projected.verdict.medicalPending,
     };
+    // Calibration learned from finished years scales the "expected to come" part (see experiments.js).
+    const calib = input.calibration && isFinite(input.calibration.factor) && input.calibration.factor > 0 ? input.calibration : null;
+    if (calib && calib.factor !== 1 && projection.expectedMore > 0) {
+      projection.expectedMoreRaw = projection.expectedMore;
+      projection.expectedMore = cents(projection.expectedMore * calib.factor);
+      projection.projectedTotal = cents(projection.actual + projection.expectedMore);
+      projection.itemize = projection.projectedTotal > projection.standardDeduction;
+      projection.gap = cents(projection.standardDeduction - projection.projectedTotal);
+    }
+    projection.calibration = calib || { factor: 1, n: 0, basis: 'none' };
     const habits = computeHabits(yearEntries, entries, today);
     const all = buildRecommendations({ computed, projected, projection, recurrences, yearEntries, entries, habits, today, taxYear });
     const dismissedAt = settings.advisorDismissed || {};

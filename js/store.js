@@ -36,6 +36,9 @@
     county: '',
     disasterNumber: '',
     importMappings: {},
+    experiments: { snapshots: true, corrections: true, nudges: true },
+    forecastSnapshots: [],
+    keywordWeights: {},
   };
 
   let dbPromise = null;
