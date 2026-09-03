@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check every module
+        run: for f in js/*.js sw.js build.js; do node --check "$f"; done
+      - name: Unit tests
+        run: npm test
+      - name: Single-file build
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: itemizer-single-file
+          path: dist/itemizer.html
