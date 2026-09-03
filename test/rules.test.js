@@ -14,6 +14,13 @@ test('standard deduction by filing status with age/blind add-ons', () => {
   assert.equal(r.standardDeduction.conditions.length, 3);
   // spouse conditions ignored when single
   assert.equal(Rules.compute([], { ...base, spouseAge65: true }).standardDeduction.total, 16100);
+  const blind = Rules.compute([], { ...base, blind: true });
+  assert.equal(blind.standardDeduction.total, 16100 + 2050);
+  assert.deepEqual(blind.standardDeduction.conditions, ['you are blind']);
+  // a qualifying surviving spouse: the joint base and the married add-on for their own condition, never the spouse's
+  assert.equal(Rules.compute([], { ...base, filingStatus: 'qss', blind: true }).standardDeduction.total, 32200 + 1650);
+  assert.equal(Rules.compute([], { ...base, filingStatus: 'qss', blind: true, spouseAge65: true }).standardDeduction.total, 32200 + 1650);
+  assert.equal(Rules.compute([], { ...base, filingStatus: 'mfs', blind: true }).standardDeduction.total, 16100 + 1650);
 });
 
 test('medical: 7.5% AGI floor, miles at the medical rate, pending without AGI', () => {
@@ -98,7 +105,11 @@ test('verdict: itemize when Schedule A beats the standard deduction', () => {
   assert.equal(r.scheduleA.total, 9000 + 12000 + (3000 - 400));
   assert.equal(r.verdict.itemize, true);
   assert.equal(r.verdict.difference, 23600 - 16100);
-  assert.ok(r.insights[0].level === 'good' || r.insights.some((i) => /Itemizing wins/.test(i.title)));
+  const win = r.insights.find((i) => /Itemizing wins/.test(i.title));
+  assert.ok(win, 'the verdict is an insight'); assert.equal(win.level, 'good'); assert.match(win.title, /\$7,500/);
+  // insights sort by urgency: an unacknowledged $300 gift outranks the good news
+  const flagged = Rules.compute(entries.concat([E('2026-02-01', 'ch.org', 300, { hasReceipt: false })]), base);
+  assert.equal(flagged.insights[0].level, 'act');
   const mfj = Rules.compute(entries, { ...base, filingStatus: 'mfj' });
   assert.equal(mfj.verdict.itemize, false);
   assert.ok(mfj.insights.some((i) => /bunching/.test(i.title)), 'close-to-the-line bunching advice');

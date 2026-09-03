@@ -10,7 +10,9 @@ test('great-circle distance: New York to Los Angeles is about 2,450 miles', () =
   assert.ok(mi > 2440 && mi < 2460, `got ${mi}`);
   assert.equal(G.haversineMeters(NYC, NYC), 0);
   assert.equal(G.roundMiles(12.34), 12.3);
-  assert.equal(G.estimateRoadMiles({ lat: 35.0, lon: -80.0 }, { lat: 35.0, lon: -80.1 }), G.roundMiles(G.haversineMiles({ lat: 35.0, lon: -80.0 }, { lat: 35.0, lon: -80.1 }) * G.ROAD_FACTOR));
+  assert.equal(G.ROAD_FACTOR, 1.25);
+  assert.equal(G.estimateRoadMiles({ lat: 35.0, lon: -80.0 }, { lat: 35.0, lon: -80.1 }), 7.1, '5.66 straight-line miles at 35°N, times 1.25, to a tenth');
+  assert.equal(G.estimateRoadMiles({ lat: 35.0, lon: -80.0 }, { lat: 35.0, lon: -80.0 }), 0);
 });
 
 test('track length ignores GPS jitter, poor fixes, and teleports', () => {

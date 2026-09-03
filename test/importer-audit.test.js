@@ -100,3 +100,34 @@ test('only strong matches are pre-ticked, and Schedule C lines only when there i
   const learned = I.review(norm.rows, { learned: { starbucks: 'se.meals' } });
   assert.equal(learned[1].selected, true, 'a learned payee is always strong');
 });
+
+test('withdrawal/deposit headers, the sign override, a type column beside the amount, and odd cells', () => {
+  const two = I.parseCSV('Date,Description,Withdrawals,Deposits\n03/14/2026,CVS PHARMACY,42.13,\n03/15/2026,PAYROLL,,1500.00');
+  const m2 = I.detectColumns(two);
+  assert.equal(m2.debit, 2); assert.equal(m2.credit, 3); assert.equal(m2.amount, -1);
+  assert.deepEqual(I.normalize(two, m2).rows.map((r) => r.amount), [42.13, -1500]);
+  const one = I.parseCSV('Date,Description,Amount\n03/14/2026,CVS PHARMACY,42.13\n03/16/2026,REFUND CVS,-5.00\n03/18/2026,ASPEN DENTAL,10.00');
+  const m1 = I.detectColumns(one);
+  const auto = I.normalize(one, m1);
+  assert.equal(auto.spendIsNegative, false); assert.deepEqual(auto.rows.map((r) => r.amount), [42.13, -5, 10]);
+  const forced = I.normalize(one, m1, { spendIsNegative: true });
+  assert.equal(forced.spendIsNegative, true); assert.deepEqual(forced.rows.map((r) => r.amount), [-42.13, 5, -10], 'the user\'s override wins over the heuristic');
+  const typed = I.parseCSV('Posted Date,Payee,Amount,Type\n03/14/2026,CVS PHARMACY,42.13,Debit\n03/16/2026,CVS PHARMACY,5.00,Credit\n03/18/2026,ASPEN DENTAL,10.00,Debit');
+  const mt = I.detectColumns(typed);
+  assert.equal(mt.type, 3); assert.equal(mt.memo, -1); assert.equal(mt.description, 1);
+  const tn = I.normalize(typed, mt);
+  assert.deepEqual(tn.rows.map((r) => r.amount), [42.13, -5, 10]);
+  assert.equal(tn.spendIsNegative, false, 'reported from the raw signs even though the indicator decides each row');
+  assert.equal(I.parseAmountCell('+12'), 12);
+  assert.equal(I.parseAmountCell('12.00 DR'), 12);
+  assert.equal(I.parseAmountCell('(3.50)'), -3.5);
+  assert.equal(I.parseDateCell('02/30/2026'), null);
+  assert.equal(I.parseDateCell('2026-02-28'), '2026-02-28');
+});
+
+test('a learned payee is filed where it was filed before and says so', () => {
+  const rows = I.parseCSV('Date,Description,Amount\n03/14/2026,JOES AUTO #12,88.00');
+  const norm = I.normalize(rows, I.detectColumns(rows));
+  const out = I.review(norm.rows, { learned: { 'joes auto': 'se.car' }, hasBusiness: true });
+  assert.equal(out[0].lineId, 'se.car'); assert.equal(out[0].suggestions[0].learned, true); assert.equal(out[0].selected, true);
+});

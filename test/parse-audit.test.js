@@ -63,3 +63,22 @@ test('content words survive the description cleanup', () => {
   assert.equal(parse('bought a lamp 30', T).description, 'Lamp');
   assert.equal(parse('water bill 80 paid', T).description, 'Water bill');
 });
+
+test('relative-date aliases, weekday phrases, and the dateSource the UI explains the date with', () => {
+  const d = (s) => { const r = parse(s, T); return [r.date, r.dateSource]; };
+  assert.deepEqual(d('lunch 20 day before yesterday'), ['2026-08-31', 'relative']);
+  assert.deepEqual(d('lunch 20 yday'), ['2026-09-01', 'relative']);
+  assert.deepEqual(d('tithe $300 tonight'), ['2026-09-02', 'relative']);
+  assert.deepEqual(d('coffee 4 this morning'), ['2026-09-02', 'relative']);
+  assert.deepEqual(d('lunch 20 this past monday'), ['2026-08-31', 'relative']);
+  assert.deepEqual(d('lunch 20 on monday'), ['2026-08-31', 'relative']);
+  assert.deepEqual(d('lunch 20 last tue'), ['2026-09-01', 'relative']);
+  assert.deepEqual(d('$45 tolls 7-3-26'), ['2026-07-03', 'numeric']);
+  assert.deepEqual(d('dentist $210 14 Mar'), ['2026-03-14', 'month-name']);
+  assert.deepEqual(d('lunch 20 2026-03-04'), ['2026-03-04', 'iso']);
+  assert.deepEqual(d('lunch 20'), [null, null]);
+  assert.equal(parse('20 bucks lunch', T).amount, 20);
+  assert.equal(parse('15 usd parking', T).amount, 15);
+  const mls = parse('12 mls to clinic', T);
+  assert.equal(mls.miles, 12); assert.equal(mls.amount, null); assert.equal(mls.description, 'Clinic');
+});
