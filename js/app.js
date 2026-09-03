@@ -152,28 +152,72 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { el.hidden = true; }, ms || (action ? 7000 : 2600));
   }
-  function openModal(html, onOpen) {
-    const m = $('#modal');
-    $('#modalPanel').innerHTML = html;
+  // The modal is a real dialog: the page behind it is inert, Tab stays inside, and focus returns to the opener on close.
+  let modalOpener = null, modalOnCancel = null;
+  const behindModal = () => ['.topbar', '#main', '.tabbar'].map((sel) => document.querySelector(sel)).filter(Boolean);
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  function trapTab(ev) {
+    if (ev.key !== 'Tab') return;
+    const panel = $('#modalPanel');
+    const items = [...panel.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (!items.length) { ev.preventDefault(); panel.focus(); return; }
+    const first = items[0], last = items[items.length - 1], inside = panel.contains(document.activeElement);
+    if (ev.shiftKey && (document.activeElement === first || !inside)) { ev.preventDefault(); last.focus(); }
+    else if (!ev.shiftKey && (document.activeElement === last || !inside)) { ev.preventDefault(); first.focus(); }
+  }
+  function openModal(html, onOpen, onCancel) {
+    const m = $('#modal'), panel = $('#modalPanel');
+    modalOpener = document.activeElement;
+    modalOnCancel = onCancel || null;
+    panel.innerHTML = html;
+    const heading = panel.querySelector('h2, h3');
+    panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true'); panel.tabIndex = -1;
+    if (heading) { if (!heading.id) heading.id = 'modalTitle'; panel.setAttribute('aria-labelledby', heading.id); panel.removeAttribute('aria-label'); }
+    else { panel.removeAttribute('aria-labelledby'); panel.setAttribute('aria-label', 'Dialog'); }
     m.hidden = false;
     document.body.style.overflow = 'hidden';
-    if (onOpen) onOpen($('#modalPanel'));
-    const first = $('#modalPanel').querySelector('input, select, textarea, button');
-    if (first) first.focus();
+    for (const el of behindModal()) { el.inert = true; el.setAttribute('aria-hidden', 'true'); }
+    panel.addEventListener('keydown', trapTab);
+    if (onOpen) onOpen(panel);
+    const first = panel.querySelector('input, select, textarea, button');
+    if (first) first.focus(); else panel.focus();
   }
   function closeModal() {
-    const m = $('#modal');
+    const m = $('#modal'), panel = $('#modalPanel');
+    if (m.hidden) return;
     m.hidden = true;
-    $('#modalPanel').innerHTML = '';
+    panel.removeEventListener('keydown', trapTab);
+    panel.innerHTML = '';
     document.body.style.overflow = '';
+    for (const el of behindModal()) { el.inert = false; el.removeAttribute('aria-hidden'); }
+    const opener = modalOpener; modalOpener = null; modalOnCancel = null;
+    if (opener && opener.isConnected && typeof opener.focus === 'function' && opener !== document.body) opener.focus({ preventScroll: true });
+    else { const main = $('#main'); if (main) { main.tabIndex = -1; main.focus({ preventScroll: true }); } }
   }
+  /** Escape or the backdrop: close, and let a pending confirm resolve as "no" instead of hanging. */
+  function cancelModal() { const cb = modalOnCancel; closeModal(); if (cb) cb(); }
   function confirmDialog(title, body, confirmLabel, danger) {
     return new Promise((resolve) => {
       openModal(`<h2>${esc(title)}</h2><p class="note">${esc(body)}</p><div class="modal-actions"><button class="btn" data-act="cancel">Cancel</button><span class="spacer"></span><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-act="ok">${esc(confirmLabel || 'OK')}</button></div>`, (panel) => {
         panel.querySelector('[data-act="cancel"]').onclick = () => { closeModal(); resolve(false); };
         panel.querySelector('[data-act="ok"]').onclick = () => { closeModal(); resolve(true); };
-      });
+      }, () => resolve(false));
     });
+  }
+  /** Re-rendering a view replaces the focused control; remember which one it was and put focus back on its replacement. */
+  function focusKeyOf() {
+    const a = document.activeElement;
+    if (!a || a === document.body) return null;
+    if (a.id) return '#' + a.id;
+    const d = a.dataset || {};
+    for (const k of ['filter', 'themePick', 'mode', 'param', 'sel', 'edit', 'impSel', 'impLine']) if (d[k] != null) return `[data-${k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}="${d[k]}"]`;
+    return null;
+  }
+  function restoreFocus(key) {
+    if (!key) return;
+    let el = null;
+    try { el = document.querySelector(key); } catch (e) { el = null; }
+    if (el && document.activeElement !== el) el.focus({ preventScroll: true });
   }
 
   // ---- receipts ------------------------------------------------------------
@@ -182,8 +226,11 @@
     let source = null, w = 0, h = 0;
     try { source = await createImageBitmap(file, { imageOrientation: 'from-image' }); w = source.width; h = source.height; } catch (e) { source = null; }
     if (!source) {
-      source = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = URL.createObjectURL(file); });
-      w = source.naturalWidth; h = source.naturalHeight;
+      const tmpURL = URL.createObjectURL(file);
+      try {
+        source = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = tmpURL; });
+        w = source.naturalWidth; h = source.naturalHeight;
+      } finally { URL.revokeObjectURL(tmpURL); }
     }
     const scale = Math.min(1, maxDim / Math.max(w, h));
     const cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
@@ -201,6 +248,12 @@
     const url = URL.createObjectURL(rec.blob);
     state.receiptURLs.set(receiptId, url);
     return url;
+  }
+  /** Forget a receipt's object URL (and release it) when the photo or its entry goes away. */
+  function dropReceiptURL(receiptId) {
+    if (!receiptId || !state.receiptURLs.has(receiptId)) return;
+    URL.revokeObjectURL(state.receiptURLs.get(receiptId));
+    state.receiptURLs.delete(receiptId);
   }
   function viewReceipt(url, title) {
     openModal(`<div class="card-head"><h2>${esc(title || 'Receipt')}</h2><button class="btn btn-ghost btn-sm" data-close="1">Close</button></div><img class="receipt-full" src="${url}" alt="Receipt image">`, (panel) => { panel.querySelector('[data-close]').onclick = closeModal; });
@@ -253,10 +306,10 @@
   function receiptIcon(entry) {
     const line = S.getLine(entry.lineId);
     if (!line || line.unit === 'miles') return '<span class="row-receipt rc-none"></span>';
-    if (entry.receiptId) return `<span class="row-receipt rc-attached" title="Receipt photo attached">${ICON.check}</span>`;
-    if (entry.hasReceipt) return `<span class="row-receipt rc-paper" title="Paper receipt filed">${ICON.paper}</span>`;
+    if (entry.receiptId) return `<span class="row-receipt rc-attached" title="Receipt photo attached">${ICON.check}<span class="sr-only">Receipt photo attached</span></span>`;
+    if (entry.hasReceipt) return `<span class="row-receipt rc-paper" title="Paper receipt filed">${ICON.paper}<span class="sr-only">Paper receipt filed</span></span>`;
     const threshold = state.computed.params.receiptThreshold;
-    if ((Number(entry.amount) || 0) >= threshold) return `<span class="row-receipt rc-missing" title="No receipt">${ICON.alert}</span>`;
+    if ((Number(entry.amount) || 0) >= threshold) return `<span class="row-receipt rc-missing" title="No receipt">${ICON.alert}<span class="sr-only">No receipt</span></span>`;
     return '<span class="row-receipt rc-none"></span>';
   }
   function entryRow(e, opts) {
@@ -273,13 +326,13 @@
     }
     return `<button class="row" data-edit="${esc(e.id)}" type="button">
       <span class="row-date">${esc(P.formatDate(e.date, false))}</span>
-      <span class="row-main"><span class="row-desc">${esc(e.description || line.label)}${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}${dupe ? ' <span class="dupe-mark" title="Possible duplicate">⧉</span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
+      <span class="row-main"><span class="row-desc">${esc(e.description || line.label)}${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}${dupe ? ' <span class="dupe-mark" title="Possible duplicate"><span aria-hidden="true">⧉</span><span class="sr-only">Possible duplicate</span></span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
       <span class="row-amt">${esc(fmtAmount(e))}${line.unit === 'miles' && line.treatment !== 'info' ? `<small>${esc(money(Number(e.amount) * (state.computed.params.mileage[line.rate] || 0)))}</small>` : ''}</span>
       ${receiptIcon(e)}
     </button>`;
   }
-  function lineSelectHTML(id, selected) {
-    return `<select id="${id}" class="input"><option value="">Choose a line…</option>${S.SECTIONS.map((sec) => `<optgroup label="${esc(sec.title)}">${sec.lines.map((l) => `<option value="${l.id}" ${l.id === selected ? 'selected' : ''}>${esc(l.label)}${l.unit === 'miles' ? ' (miles)' : ''}</option>`).join('')}</optgroup>`).join('')}</select>`;
+  function lineSelectHTML(id, selected, label) {
+    return `<select id="${id}" class="input" aria-label="${esc(label || 'Worksheet line')}"><option value="">Choose a line…</option>${S.SECTIONS.map((sec) => `<optgroup label="${esc(sec.title)}">${sec.lines.map((l) => `<option value="${l.id}" ${l.id === selected ? 'selected' : ''}>${esc(l.label)}${l.unit === 'miles' ? ' (miles)' : ''}</option>`).join('')}</optgroup>`).join('')}</select>`;
   }
   function meterHTML(cls) {
     const R0 = state.computed;
@@ -339,7 +392,7 @@
           <label class="field span-2"><span>What / who</span><input id="fDesc" value="${esc(cap.description)}" placeholder="CVS pharmacy, Dr. Lee copay, tithe…"></label>
         </div>
         <div class="suggest">
-          <div class="suggest-label">Where it goes on the worksheet</div>
+          <label class="suggest-label" for="fLine">Where it goes on the worksheet</label>
           <div class="chips" id="chips">${chipsHTML(cap)}</div>
           ${lineSelectHTML('fLine', cap.lineId)}
           <div class="line-hint" id="lineHint">${lineHintHTML(cap.lineId)}</div>
@@ -372,7 +425,7 @@
   }
 
   function emptyStateHTML() {
-    return `<div class="empty"><h3>Nothing logged for ${state.settings.taxYear} yet</h3><p>Type an expense above, or load a set of example entries to see how the tracker thinks.</p><button class="btn" type="button" id="loadSample">Load example entries</button></div>`;
+    return `<div class="empty"><h3>Nothing logged for ${esc(state.settings.taxYear)} yet</h3><p>Type an expense above, or load a set of example entries to see how the tracker thinks.</p><button class="btn" type="button" id="loadSample">Load example entries</button></div>`;
   }
 
   function chipsHTML(cap) {
@@ -549,7 +602,7 @@
           <label class="field"><span>Miles, total</span><input id="tripMiles" inputmode="decimal" value="${esc(T.miles)}" placeholder="0.0"></label>
           <label class="field"><span>Worksheet line</span><select id="tripLine" class="input">${MILES_LINES.map((id) => `<option value="${id}" ${T.lineId === id ? 'selected' : ''}>${esc(S.getLine(id).label)} · ${esc(S.getLine(id).sectionTitle)}</option>`).join('')}</select></label>
         </div>
-        <div class="actions"><button class="btn btn-primary" type="button" id="tripLog">Log trip</button><span class="muted small" id="tripHint"></span></div>
+        <div class="actions"><button class="btn btn-primary" type="button" id="tripLog" ${recState !== 'idle' ? 'disabled' : ''}>Log trip</button><span class="muted small" id="tripHint">${recState !== 'idle' ? 'Stop the GPS recording first.' : ''}</span></div>
       </section>
 
       <section class="card">
@@ -629,6 +682,7 @@
   }
   async function logTrip() {
     const T = state.trip;
+    if (state.recorder && state.recorder.state !== 'idle') { toast('Stop the GPS recording first.'); return; }
     const miles = Number(T.miles);
     if (!(miles > 0)) { toast('Enter or measure the miles first.'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(T.date)) { toast('Pick a date.'); return; }
@@ -644,12 +698,21 @@
       note: `${T.roundTrip ? 'Round trip, ' : ''}${METHOD_LABEL[T.method] || T.method}.`, hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false,
     };
     const trip = { id: DB.uid(), date: T.date, taxYear: entry.taxYear, fromId: T.fromId, toId: T.toId, fromLabel, toLabel, purpose: T.purpose.trim(), miles: G.roundMiles(miles), roundTrip: !!T.roundTrip, method: T.method, lineId: T.lineId, entryId: entry.id, points: T.points || null, startedAt: T.startedAt, endedAt: T.endedAt, createdAt: now };
-    await DB.putEntry(entry); state.entries.push(entry);
-    await DB.putTrip(trip); state.trips.push(trip);
-    if (T.purpose.trim()) { C.learn(state.settings.learned, T.purpose, T.lineId); await DB.saveSettings(state.settings); }
+    try {
+      DB.requestPersistence();
+      await DB.putEntry(entry);
+      await DB.putTrip(trip);
+    } catch (e) {
+      await DB.deleteEntry(entry.id).catch(() => {});
+      toast(`Could not log the trip: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
+      return;
+    }
+    state.entries.push(entry); state.trips.push(trip);
+    if (T.purpose.trim()) { C.learn(state.settings.learned, T.purpose, T.lineId); DB.saveSettings(state.settings).catch(() => {}); }
     toast(`Logged ${fmtMiles(trip.miles)} → ${line.label}`);
     const keepFrom = T.fromId;
     state.trip = freshTrip(); state.trip.fromId = keepFrom || state.trip.fromId;
+    clearInterval(state.recorderTimer); state.recorderTimer = null;
     state.recorder = null;
     renderCapture();
   }
@@ -660,18 +723,22 @@
   }
   function drawTrack() {
     const canvas = $('#trackCanvas'); if (!canvas) return;
+    // size the buffer from the layout so the sketch is drawn with square pixels at the device's resolution
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || 640, h = Math.round(w * 200 / 640) || 200;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     const pts = state.recorder ? state.recorder.points : (state.trip && state.trip.points) || [];
-    G.sketch(canvas, pts, trackColors());
+    G.sketch(canvas, pts, Object.assign({ dpr }, trackColors()));
   }
   function updateRecorderUI(rec) {
     const m = $('#recMiles'); if (m) m.textContent = rec.miles.toFixed(1);
     const t = $('#recTime'); if (t) t.textContent = elapsedText(rec.startedAt, rec.state === 'idle' ? rec.endedAt : null);
-    const e = $('#recError'); if (e) e.textContent = rec.error || '';
+    const e = $('#recError'); if (e) e.textContent = rec.error || (rec.waiting && rec.state === 'recording' ? 'Waiting for a GPS fix…' : '');
     drawTrack();
   }
   function startRecording() {
     if (!state.recorder || state.recorder.state === 'idle') {
-      state.recorder = G.createRecorder({ onUpdate: updateRecorderUI, onError: (msg, rec) => { updateRecorderUI(rec); toast(msg); } });
+      state.recorder = G.createRecorder({ onUpdate: updateRecorderUI, onError: (msg, rec) => { updateRecorderUI(rec); toast(msg); if (rec.state === 'idle') { clearInterval(state.recorderTimer); renderCapture(); } } });
     }
     const ok = state.recorder.start();
     if (!ok) { toast(state.recorder.error || 'Location is not available.'); return; }
@@ -747,7 +814,6 @@
     });
   }
 
-  function csvCell(v) { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
   function exportMileageLog() {
     const year = Number(state.settings.taxYear);
     const P0 = state.computed.params;
@@ -756,11 +822,11 @@
     for (const t of state.trips.filter((x) => Number(x.taxYear) === year).sort((a, b) => a.date.localeCompare(b.date))) {
       const line = S.getLine(t.lineId); const rate = line && line.rate ? P0.mileage[line.rate] || 0 : 0;
       covered.add(t.entryId);
-      rows.push([t.date, t.fromLabel, t.toLabel, t.roundTrip ? 'yes' : 'no', t.purpose, t.miles, METHOD_LABEL[t.method] || t.method, line ? line.label : '', rate, (t.miles * rate).toFixed(2)].map(csvCell).join(','));
+      rows.push([DB.csvEscape(t.date), DB.csvText(t.fromLabel), DB.csvText(t.toLabel), t.roundTrip ? 'yes' : 'no', DB.csvText(t.purpose), Number(t.miles) || 0, DB.csvEscape(METHOD_LABEL[t.method] || t.method), DB.csvEscape(line ? line.label : ''), rate, (t.miles * rate).toFixed(2)].join(','));
     }
     for (const e of yearEntries().filter((x) => S.isMiles(x.lineId) && !covered.has(x.id)).sort((a, b) => a.date.localeCompare(b.date))) {
       const line = S.getLine(e.lineId); const rate = line.rate ? P0.mileage[line.rate] || 0 : 0;
-      rows.push([e.date, '', '', '', e.description, e.amount, 'entered by hand', line.label, rate, (Number(e.amount) * rate).toFixed(2)].map(csvCell).join(','));
+      rows.push([DB.csvEscape(e.date), '', '', '', DB.csvText(e.description), Number(e.amount) || 0, 'entered by hand', DB.csvEscape(line.label), rate, (Number(e.amount) * rate).toFixed(2)].join(','));
     }
     downloadText(`itemizer-mileage-log-${year}.csv`, rows.join('\r\n'), 'text/csv');
   }
@@ -780,22 +846,23 @@
     const twoCol = I.map.debit >= 0 || I.map.credit >= 0;
     return `
       <section class="card">
-        <div class="card-head"><h2>${esc(I.fileName)}</h2><span class="muted small">${I.rows.length} rows read${I.remembered ? ' · <span class="pill pill-info">layout remembered</span>' : ''}</span></div>
+        <div class="card-head"><h2>${esc(I.fileName)}</h2><span class="muted small">${I.rows.length} rows read${I.skipped ? ` · <span class="pill pill-warn" title="Rows with no readable date or amount">${I.skipped} skipped</span>` : ''}${I.remembered ? ' · <span class="pill pill-info">layout remembered</span>' : ''}</span></div>
         <div class="grid-3">
           <label class="field"><span>Date column</span>${colSelect('impDate', I.map.date)}</label>
           <label class="field"><span>Description column</span>${colSelect('impDesc', I.map.description)}</label>
-          ${twoCol ? `<label class="field"><span>Debit column</span>${colSelect('impDebit', I.map.debit, true)}</label><label class="field"><span>Credit column</span>${colSelect('impCredit', I.map.credit, true)}</label>` : `<label class="field"><span>Amount column</span>${colSelect('impAmount', I.map.amount)}</label>`}
+          ${twoCol ? `<label class="field"><span>Debit column</span>${colSelect('impDebit', I.map.debit, true)}</label><label class="field"><span>Credit column</span>${colSelect('impCredit', I.map.credit, true)}</label>` : `<label class="field"><span>Amount column</span>${colSelect('impAmount', I.map.amount)}</label><label class="field"><span>Debit/credit indicator column</span>${colSelect('impType', I.map.type, true)}</label>`}
         </div>
         <div class="chips" style="margin-top:10px">
-          ${twoCol ? '' : `<label class="check"><input type="checkbox" id="impNeg" ${I.spendIsNegative ? 'checked' : ''}> Spending is shown as negative</label>`}
-          <label class="check"><input type="checkbox" id="impHeader" ${I.map.headerRow ? 'checked' : ''}> First row is a header</label>
+          ${twoCol || I.map.type >= 0 ? '' : `<label class="check"><input type="checkbox" id="impNeg" ${I.spendIsNegative ? 'checked' : ''}> Spending is shown as negative</label>`}
+          <label class="check"><input type="checkbox" id="impHeader" ${I.map.headerRow ? 'checked' : ''}> ${I.map.headerIndex ? `Row ${I.map.headerIndex + 1} is the header` : 'First row is a header'}</label>
+          <label class="check"><input type="checkbox" id="impDayFirst" ${I.map.dayFirst ? 'checked' : ''}> Day comes before month</label>
           <button class="btn btn-sm btn-ghost" type="button" id="impReset">Choose another file</button>
         </div>
       </section>
       <section class="card">
         <div class="card-head"><h2>Review</h2><div class="btn-row"><button class="btn btn-sm" type="button" id="impSelectSuggested">Tick all with a suggestion</button><button class="btn btn-sm btn-ghost" type="button" id="impClear">Untick all</button></div></div>
         ${I.rows.length ? `<div class="table-wrap"><table class="table-twin import"><thead><tr><th></th><th>Date</th><th>Description</th><th class="num">Amount</th><th>Worksheet line</th></tr></thead><tbody>
-          ${I.rows.map((r, i) => `<tr class="${r.duplicate || r.refund ? 'is-dupe' : ''}"><td><input type="checkbox" data-imp-sel="${i}" ${r.selected ? 'checked' : ''} ${r.refund ? 'disabled' : ''} aria-label="Add this row"></td><td class="small">${esc(P.formatDate(r.date, false))}</td><td><div class="imp-desc">${esc(r.description || '(no description)')}</div>${r.memo ? `<div class="muted small">${esc(r.memo)}</div>` : ''}${r.duplicate ? '<span class="pill pill-info">already logged</span> ' : ''}${r.refund ? '<span class="pill pill-info">payment or refund</span> ' : ''}${r.nonDeductible.length ? `<span class="pill pill-act" title="${esc(r.nonDeductible[0].reason)}">probably not deductible</span>` : ''}</td><td class="num">${esc(moneyCents(Math.abs(r.amount)))}</td><td>${r.refund ? '' : lineSelectHTML(`impLine${i}`, r.lineId).replace('<select ', `<select data-imp-line="${i}" `)}${r.because.length ? `<div class="because">${esc(r.because.join(', '))}</div>` : ''}</td></tr>`).join('')}
+          ${I.rows.map((r, i) => `<tr class="${r.duplicate || r.refund ? 'is-dupe' : ''}"><td><input type="checkbox" data-imp-sel="${i}" ${r.selected ? 'checked' : ''} ${r.refund ? 'disabled' : ''} aria-label="${esc(`Add ${P.formatDate(r.date, false)} ${r.description || 'row'}`)}"></td><td class="small">${esc(P.formatDate(r.date, false))}</td><td><div class="imp-desc">${esc(r.description || '(no description)')}</div>${r.memo ? `<div class="muted small">${esc(r.memo)}</div>` : ''}${r.duplicate ? '<span class="pill pill-info">already logged</span> ' : ''}${r.possibleDuplicate ? '<span class="pill pill-info" title="An entry with this date and amount exists but has no description">same amount logged that day</span> ' : ''}${r.refund ? '<span class="pill pill-info">payment or refund</span> ' : ''}${r.nonDeductible.length ? `<span class="pill pill-act" title="${esc(r.nonDeductible[0].reason)}">probably not deductible</span>` : ''}${r.lineId && !r.strong && !r.refund ? '<span class="pill pill-info" title="The match is weak, so the row is not ticked for you">weak match</span>' : ''}</td><td class="num">${esc(moneyCents(Math.abs(r.amount)))}</td><td>${r.refund ? '' : lineSelectHTML(`impLine${i}`, r.lineId).replace('<select ', `<select data-imp-line="${i}" aria-label="${esc(`Worksheet line for ${r.description || 'this row'}`)}" `)}${r.because.length ? `<div class="because">${esc(r.because.join(', '))}</div>` : ''}</td></tr>`).join('')}
         </tbody></table></div>` : '<p class="note">No rows with a date and an amount were found. Check the column mapping above.</p>'}
         <div class="actions"><button class="btn btn-primary" type="button" id="impAdd" ${selected ? '' : 'disabled'}>Add ${selected} ${selected === 1 ? 'entry' : 'entries'}</button><span class="muted small">Descriptions come from the statement; edit them later in the ledger.</span></div>
       </section>`;
@@ -804,8 +871,12 @@
     const I = state.importer; if (!I) return;
     const norm = IMP.normalize(I.raw, I.map, { spendIsNegative: I.spendIsNegative });
     I.spendIsNegative = norm.spendIsNegative;
-    I.rows = IMP.review(norm.rows, { learned: state.settings.learned, weights: state.settings.keywordWeights, existingEntries: state.entries });
-    I.headers = I.map.headerRow ? I.raw[0] : I.raw[0].map((_, i) => `Column ${i + 1}`);
+    I.skipped = norm.skipped;
+    // Schedule C lines are pre-ticked only when the ledger already shows self-employment; a coffee is not a business meal by default
+    const hasBusiness = !!(state.computed && state.computed.scheduleC && state.computed.scheduleC.hasActivity);
+    I.rows = IMP.review(norm.rows, { learned: state.settings.learned, weights: state.settings.keywordWeights, existingEntries: state.entries, hasBusiness });
+    const headerRow = I.raw[I.map.headerIndex || 0] || I.raw[0] || [];
+    I.headers = I.map.headerRow ? headerRow : headerRow.map((_, i) => `Column ${i + 1}`);
   }
   async function onCSVFile(file) {
     if (!file) return;
@@ -814,14 +885,14 @@
     const raw = IMP.parseCSV(text);
     if (raw.length < 1) { toast('That file has no rows.'); return; }
     const map = IMP.detectColumns(raw);
-    const signature = IMP.headerSignature(raw[0]);
+    const signature = IMP.headerSignature(raw[map.headerIndex || 0]);
     const remembered = map.headerRow ? (state.settings.importMappings || {})[signature] : null;
     if (remembered && remembered.map) Object.assign(map, remembered.map);
     state.importer = { fileName: file.name, raw, map, spendIsNegative: remembered ? remembered.spendIsNegative : undefined, headers: [], rows: [], signature, remembered: !!remembered };
     rebuildImport();
     state.captureMode = 'import';
     renderCapture();
-    toast(`${state.importer.rows.length} rows read, ${state.importer.rows.filter((r) => r.selected).length} look deductible.${remembered ? ' Column layout remembered from last time.' : ''}`);
+    toast(`${state.importer.rows.length} rows read, ${state.importer.rows.filter((r) => r.selected).length} have a strong match.${remembered ? ' Column layout remembered from last time.' : ''}`);
   }
   function bindImportMode() {
     const pick = $('#pickCsv'); if (pick) { pick.onclick = () => $('#csvInput').click(); return; }
@@ -832,10 +903,12 @@
     const a = $('#impAmount'); if (a) a.onchange = (ev) => remap('amount', ev.target.value);
     const db = $('#impDebit'); if (db) db.onchange = (ev) => remap('debit', ev.target.value);
     const cr = $('#impCredit'); if (cr) cr.onchange = (ev) => remap('credit', ev.target.value);
+    const ty = $('#impType'); if (ty) ty.onchange = (ev) => remap('type', ev.target.value);
+    $('#impDayFirst').onchange = (ev) => { I.map.dayFirst = ev.target.checked; rebuildImport(); renderCapture(); };
     const neg = $('#impNeg'); if (neg) neg.onchange = (ev) => { I.spendIsNegative = ev.target.checked; rebuildImport(); renderCapture(); };
     $('#impHeader').onchange = (ev) => { I.map.headerRow = ev.target.checked; I.spendIsNegative = undefined; rebuildImport(); renderCapture(); };
     $('#impReset').onclick = () => { state.importer = null; renderCapture(); };
-    $('#impSelectSuggested').onclick = () => { I.rows.forEach((r) => { r.selected = !!r.lineId && !r.refund; }); renderCapture(); };
+    $('#impSelectSuggested').onclick = () => { I.rows.forEach((r) => { r.selected = !!r.lineId && !r.refund && !r.duplicate; }); renderCapture(); };
     $('#impClear').onclick = () => { I.rows.forEach((r) => { r.selected = false; }); renderCapture(); };
     const root = $('#view-capture');
     root.addEventListener('change', (ev) => {
@@ -847,13 +920,13 @@
       if (!chosen.length) { toast('Tick at least one row with a worksheet line.'); return; }
       const now = new Date().toISOString();
       const entries = chosen.map((r) => ({ id: DB.uid(), date: r.date, taxYear: Number(r.date.slice(0, 4)), lineId: r.lineId, amount: Math.round(r.amount * 100) / 100, description: r.description, note: r.memo ? `Statement category: ${r.memo}` : 'Imported from a statement', hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false, source: 'import' }));
-      await DB.putEntries(entries);
+      try { await DB.putEntries(entries); } catch (e) { toast(`Could not save the rows: ${e && e.message ? e.message : 'storage error'}. Nothing was added.`, 6000); return; }
       state.entries.push(...entries);
       for (const r of chosen) if (r.description) C.learn(state.settings.learned, r.description, r.lineId);
       for (const r of chosen) learnFromChoice(r.suggestions, r.lineId);
       if (I.map.headerRow && I.signature) {
         state.settings.importMappings = state.settings.importMappings || {};
-        state.settings.importMappings[I.signature] = { map: { date: I.map.date, description: I.map.description, amount: I.map.amount, debit: I.map.debit, credit: I.map.credit, memo: I.map.memo, headerRow: true }, spendIsNegative: I.spendIsNegative };
+        state.settings.importMappings[I.signature] = { map: { date: I.map.date, description: I.map.description, amount: I.map.amount, debit: I.map.debit, credit: I.map.credit, type: I.map.type, memo: I.map.memo, headerRow: true, headerIndex: I.map.headerIndex || 0, dayFirst: !!I.map.dayFirst }, spendIsNegative: I.spendIsNegative };
       }
       await DB.saveSettings(state.settings);
       state.importer = null; state.captureMode = 'expense';
@@ -964,7 +1037,7 @@
   function reclassify() {
     const cap = state.capture;
     const textForClass = [cap.description, cap.parsed && cap.parsed.raw !== cap.description ? cap.text : ''].filter(Boolean).join(' ');
-    const res = C.classify(textForClass, { learned: state.settings.learned, weights: state.settings.keywordWeights, miles: cap.parsed ? cap.parsed.miles != null : false, limit: 4 });
+    const res = C.classify(textForClass, { learned: state.settings.learned, description: cap.description, weights: state.settings.keywordWeights, miles: cap.parsed ? cap.parsed.miles != null : false, limit: 4 });
     cap.suggestions = res.suggestions;
     cap.nonDeductible = res.nonDeductible;
   }
@@ -1034,12 +1107,7 @@
     const now = new Date().toISOString();
     const line = S.getLine(cap.lineId);
     const entries = [];
-    let receiptId = null;
-    if (!isMiles && cap.receiptBlob) {
-      receiptId = DB.uid();
-      try { await DB.putReceipt({ id: receiptId, entryId: null, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob }); }
-      catch (e) { receiptId = null; toast(e.message || 'Could not store the receipt photo.'); }
-    }
+    const receiptId = !isMiles && cap.receiptBlob ? DB.uid() : null;
     for (let i = 0; i < Math.max(1, cap.repeat); i++) {
       const date = addMonths(cap.date, i);
       entries.push({
@@ -1050,11 +1118,19 @@
         items: i === 0 ? (cap.items || null) : null,
       });
     }
-    if (receiptId) { await DB.putReceipt({ id: receiptId, entryId: entries[0].id, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob }); }
-    await DB.putEntries(entries);
+    // Everything is written before anything is shown as saved; a failure leaves the form filled in and the store untouched.
+    try {
+      DB.requestPersistence(); // the first save carries the user gesture some browsers require to protect the data from eviction
+      if (receiptId) await DB.putReceipt({ id: receiptId, entryId: entries[0].id, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob });
+      await DB.putEntries(entries);
+    } catch (e) {
+      if (receiptId) await DB.deleteReceipt(receiptId).catch(() => {});
+      toast(`Could not save: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
+      return;
+    }
     state.entries.push(...entries);
     learnFromChoice(cap.suggestions, cap.lineId);
-    if (cap.description.trim()) { C.learn(state.settings.learned, cap.description, cap.lineId); await DB.saveSettings(state.settings); }
+    if (cap.description.trim()) { C.learn(state.settings.learned, cap.description, cap.lineId); DB.saveSettings(state.settings).catch(() => {}); }
     const fileYear = entries[0].taxYear;
     const label = isMiles ? fmtMiles(value) : moneyCents(saved);
     toast(`Saved ${label} → ${line.label}${entries.length > 1 ? ` × ${entries.length} months` : ''}${fileYear !== Number(state.settings.taxYear) ? ` (tax year ${fileYear})` : ''}`);
@@ -1083,7 +1159,7 @@
       const id = entry.receiptId || DB.uid();
       try {
         await DB.putReceipt({ id, entryId: entry.id, type: blob.type || 'image/jpeg', createdAt: new Date().toISOString(), blob });
-        if (state.receiptURLs.has(id)) { URL.revokeObjectURL(state.receiptURLs.get(id)); state.receiptURLs.delete(id); }
+        dropReceiptURL(id);
         entry.receiptId = id; entry.hasReceipt = true; entry.updatedAt = new Date().toISOString();
         await DB.putEntry(entry);
         toast('Receipt attached.');
@@ -1096,18 +1172,17 @@
   // =====================================================================
   // LEDGER
   // =====================================================================
-  function renderLedger() {
+  function ledgerFacts() {
     const R0 = state.computed;
-    const L = state.ledger;
     const dupeIds = new Set(); R0.duplicates.forEach(([a, b]) => { dupeIds.add(a.id); dupeIds.add(b.id); });
-    const noAck = new Set(R0.substantiation.giftsNoAck.map((e) => e.id));
-    const noReceipt = new Set(R0.substantiation.missingReceipts.map((e) => e.id));
-    const samples = yearEntries().filter((e) => e.sample);
-
+    return { R0, dupeIds, noAck: new Set(R0.substantiation.giftsNoAck.map((e) => e.id)), noReceipt: new Set(R0.substantiation.missingReceipts.map((e) => e.id)), samples: yearEntries().filter((e) => e.sample) };
+  }
+  function ledgerList(F) {
+    const L = state.ledger;
     let list = yearEntries().slice();
-    if (L.filter === 'noreceipt') list = list.filter((e) => noReceipt.has(e.id));
-    if (L.filter === 'noack') list = list.filter((e) => noAck.has(e.id));
-    if (L.filter === 'dupes') list = list.filter((e) => dupeIds.has(e.id));
+    if (L.filter === 'noreceipt') list = list.filter((e) => F.noReceipt.has(e.id));
+    if (L.filter === 'noack') list = list.filter((e) => F.noAck.has(e.id));
+    if (L.filter === 'dupes') list = list.filter((e) => F.dupeIds.has(e.id));
     if (L.filter === 'samples') list = list.filter((e) => e.sample);
     if (L.section) list = list.filter((e) => S.getLine(e.lineId).sectionId === L.section);
     if (L.from) list = list.filter((e) => e.date >= L.from);
@@ -1117,25 +1192,20 @@
       list = list.filter((e) => { const l = S.getLine(e.lineId); return [e.description, e.note, l.label, l.sectionTitle, String(e.amount)].join(' ').toLowerCase().includes(q); });
     }
     list.sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
-
-    const totalUsd = list.filter((e) => !S.isMiles(e.lineId)).reduce((a, e) => a + Number(e.amount || 0), 0);
-    const totalMiles = list.filter((e) => S.isMiles(e.lineId) && S.getLine(e.lineId).treatment !== 'info').reduce((a, e) => a + Number(e.amount || 0), 0);
-
-    const groups = [];
-    for (const e of list) {
-      const key = e.date.slice(0, 7);
-      let g = groups[groups.length - 1];
-      if (!g || g.key !== key) { g = { key, entries: [], usd: 0 }; groups.push(g); }
-      g.entries.push(e);
-      if (!S.isMiles(e.lineId)) g.usd += Number(e.amount || 0);
-    }
+    return list;
+  }
+  let ledgerSearchTimer = null;
+  function renderLedger() {
+    const fk = focusKeyOf();
+    const L = state.ledger;
+    const F = ledgerFacts();
     const chip = (id, label, count) => `<button class="chip" type="button" data-filter="${id}" aria-pressed="${L.filter === id}">${esc(label)}${count != null ? ` <span class="count">${count}</span>` : ''}</button>`;
 
     $('#view-ledger').innerHTML = `
       <div class="card filters">
         <div class="filters-row">
           <input class="input" type="search" id="ledgerQ" placeholder="Search what, note, line…" value="${esc(L.q)}" aria-label="Search entries">
-          <select id="ledgerSection" class="input" aria-label="Filter by section"><option value="">All sections</option>${S.SECTIONS.map((s) => `<option value="${s.id}" ${L.section === s.id ? 'selected' : ''}>${esc(s.title)}</option>`).join('')}</select>
+          <select id="ledgerSection" class="input" aria-label="Filter by section"><option value="">All sections</option>${S.SECTIONS.map((sec) => `<option value="${sec.id}" ${L.section === sec.id ? 'selected' : ''}>${esc(sec.title)}</option>`).join('')}</select>
         </div>
         <div class="filters-row">
           <label class="field" style="flex:1 1 140px"><span>From</span><input type="date" id="ledgerFrom" value="${esc(L.from || '')}"></label>
@@ -1144,34 +1214,63 @@
         </div>
         <div class="chips" id="ledgerChips">
           ${chip('all', 'All', yearEntries().length)}
-          ${chip('noreceipt', 'No receipt', noReceipt.size)}
-          ${chip('noack', 'Needs acknowledgment', noAck.size)}
-          ${chip('dupes', 'Possible duplicates', dupeIds.size)}
-          ${samples.length ? chip('samples', 'Examples', samples.length) : ''}
+          ${chip('noreceipt', 'No receipt', F.noReceipt.size)}
+          ${chip('noack', 'Needs acknowledgment', F.noAck.size)}
+          ${chip('dupes', 'Possible duplicates', F.dupeIds.size)}
+          ${F.samples.length ? chip('samples', 'Examples', F.samples.length) : ''}
           <button class="chip" type="button" id="ledgerSelectToggle" aria-pressed="${L.selectMode}">${L.selectMode ? 'Done selecting' : 'Select'}</button>
         </div>
       </div>
-      ${L.selectMode ? `<div class="card bulk-bar"><span><b>${L.selected.size}</b> selected</span><div class="btn-row">${lineSelectHTML('bulkLine', '')}<button class="btn btn-sm" type="button" id="bulkMove" ${L.selected.size ? '' : 'disabled'}>Move to line</button><button class="btn btn-sm" type="button" id="bulkPaper" ${L.selected.size ? '' : 'disabled'}>Mark paper receipt</button><button class="btn btn-sm btn-danger" type="button" id="bulkDelete" ${L.selected.size ? '' : 'disabled'}>Delete</button><button class="btn btn-sm btn-ghost" type="button" id="bulkAll">Select all shown</button></div></div>` : ''}
-      <div class="ledger-summary"><span>${list.length} ${list.length === 1 ? 'entry' : 'entries'}${totalMiles ? ` · ${fmtMiles(totalMiles)}` : ''}</span><span class="num"><b>${moneyCents(totalUsd)}</b></span></div>
-      <div class="card">
-        ${list.length ? groups.map((g) => `<div class="month-head"><span>${esc(monthLabel(g.key))}</span><span class="num">${moneyCents(g.usd)}</span></div><div class="ledger-list">${g.entries.map((e) => entryRow(e, { dupes: dupeIds, select: L.selectMode, selected: L.selected })).join('')}</div>`).join('') : (yearEntries().length ? '<div class="empty"><h3>No entries match</h3><p>Try a different filter or search.</p></div>' : emptyStateHTML())}
-      </div>
-      <div class="btn-row">
-        <button class="btn" type="button" id="csvBtn" ${yearEntries().length ? '' : 'disabled'}>Export ${R0.taxYear} as CSV</button>
-        ${samples.length ? `<button class="btn btn-ghost" type="button" id="removeSamples">Remove ${samples.length} example entries</button>` : ''}
-      </div>`;
+      <div id="ledgerBody" aria-live="polite"></div>`;
 
     const root = $('#view-ledger');
-    $('#ledgerQ').addEventListener('input', (ev) => { L.q = ev.target.value; renderLedger(); const q = $('#ledgerQ'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); });
-    $('#ledgerSection').onchange = (ev) => { L.section = ev.target.value; renderLedger(); };
+    // typing only refreshes the list below, so the search box keeps its focus and caret
+    const q = $('#ledgerQ');
+    q.addEventListener('input', (ev) => { L.q = ev.target.value; if (ev.isComposing) return; clearTimeout(ledgerSearchTimer); ledgerSearchTimer = setTimeout(renderLedgerBody, 120); });
+    q.addEventListener('compositionend', () => { L.q = q.value; clearTimeout(ledgerSearchTimer); renderLedgerBody(); });
+    $('#ledgerSection').onchange = (ev) => { L.section = ev.target.value; renderLedgerBody(); };
     $('#ledgerFrom').onchange = (ev) => { L.from = ev.target.value; renderLedger(); };
     $('#ledgerTo').onchange = (ev) => { L.to = ev.target.value; renderLedger(); };
     const cd = $('#ledgerClearDates'); if (cd) cd.onclick = () => { L.from = ''; L.to = ''; renderLedger(); };
-    $('#ledgerChips').addEventListener('click', (ev) => { const b = ev.target.closest('[data-filter]'); if (!b) return; L.filter = b.dataset.filter; renderLedger(); });
+    $('#ledgerChips').addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-filter]'); if (!b) return;
+      L.filter = b.dataset.filter;
+      $$('#ledgerChips [data-filter]').forEach((c) => c.setAttribute('aria-pressed', String(c.dataset.filter === L.filter)));
+      renderLedgerBody();
+    });
     $('#ledgerSelectToggle').onclick = () => { L.selectMode = !L.selectMode; L.selected.clear(); renderLedger(); };
     root.onclick = (ev) => { const b = ev.target.closest('[data-edit]'); if (b) openEdit(b.dataset.edit); };
     const updateBulkBar = () => { const bar = $('.bulk-bar'); if (!bar) return; bar.querySelector('b').textContent = String(L.selected.size); ['bulkMove', 'bulkPaper', 'bulkDelete'].forEach((id) => { const b = $('#' + id); if (b) b.disabled = !L.selected.size; }); };
     root.onchange = (ev) => { const cb = ev.target.closest('[data-sel]'); if (!cb) return; if (cb.checked) L.selected.add(cb.dataset.sel); else L.selected.delete(cb.dataset.sel); updateBulkBar(); };
+    renderLedgerBody();
+    restoreFocus(fk);
+  }
+  function renderLedgerBody() {
+    const body = $('#ledgerBody'); if (!body) return;
+    const L = state.ledger;
+    const F = ledgerFacts();
+    const R0 = F.R0;
+    const list = ledgerList(F);
+    const totalUsd = list.filter((e) => !S.isMiles(e.lineId)).reduce((a, e) => a + Number(e.amount || 0), 0);
+    const totalMiles = list.filter((e) => S.isMiles(e.lineId) && S.getLine(e.lineId).treatment !== 'info').reduce((a, e) => a + Number(e.amount || 0), 0);
+    const groups = [];
+    for (const e of list) {
+      const key = e.date.slice(0, 7);
+      let g = groups[groups.length - 1];
+      if (!g || g.key !== key) { g = { key, entries: [], usd: 0 }; groups.push(g); }
+      g.entries.push(e);
+      if (!S.isMiles(e.lineId)) g.usd += Number(e.amount || 0);
+    }
+    body.innerHTML = `
+      ${L.selectMode ? `<div class="card bulk-bar"><span><b>${L.selected.size}</b> selected</span><div class="btn-row">${lineSelectHTML('bulkLine', '', 'Line to move the selected entries to')}<button class="btn btn-sm" type="button" id="bulkMove" ${L.selected.size ? '' : 'disabled'}>Move to line</button><button class="btn btn-sm" type="button" id="bulkPaper" ${L.selected.size ? '' : 'disabled'}>Mark paper receipt</button><button class="btn btn-sm btn-danger" type="button" id="bulkDelete" ${L.selected.size ? '' : 'disabled'}>Delete</button><button class="btn btn-sm btn-ghost" type="button" id="bulkAll">Select all shown</button></div></div>` : ''}
+      <div class="ledger-summary"><span>${list.length} ${list.length === 1 ? 'entry' : 'entries'}${totalMiles ? ` · ${fmtMiles(totalMiles)}` : ''}</span><span class="num"><b>${moneyCents(totalUsd)}</b></span></div>
+      <div class="card">
+        ${list.length ? groups.map((g) => `<div class="month-head"><span>${esc(monthLabel(g.key))}</span><span class="num">${moneyCents(g.usd)}</span></div><div class="ledger-list">${g.entries.map((e) => entryRow(e, { dupes: F.dupeIds, select: L.selectMode, selected: L.selected })).join('')}</div>`).join('') : (yearEntries().length ? '<div class="empty"><h3>No entries match</h3><p>Try a different filter or search.</p></div>' : emptyStateHTML())}
+      </div>
+      <div class="btn-row">
+        <button class="btn" type="button" id="csvBtn" ${yearEntries().length ? '' : 'disabled'}>Export ${R0.taxYear} as CSV</button>
+        ${F.samples.length ? `<button class="btn btn-ghost" type="button" id="removeSamples">Remove ${F.samples.length} example entries</button>` : ''}
+      </div>`;
     if (L.selectMode) {
       const chosen = () => list.filter((e) => L.selected.has(e.id));
       $('#bulkAll').onclick = () => { list.forEach((e) => L.selected.add(e.id)); renderLedger(); };
@@ -1179,14 +1278,14 @@
         const lineId = $('#bulkLine').value; if (!lineId) { toast('Pick the line to move them to.'); return; }
         const moved = [], skipped = [];
         for (const e of chosen()) { if (S.isMiles(lineId) !== S.isMiles(e.lineId)) { skipped.push(e); continue; } e.lineId = lineId; e.updatedAt = new Date().toISOString(); moved.push(e); }
-        if (moved.length) await DB.putEntries(moved);
+        try { if (moved.length) await DB.putEntries(moved); } catch (e) { toast(`Could not move them: ${e && e.message ? e.message : 'storage error'}.`, 6000); return; }
         toast(`Moved ${moved.length} to ${S.getLine(lineId).label}${skipped.length ? `; ${skipped.length} skipped (miles and dollars cannot swap)` : ''}.`);
         L.selected.clear(); render();
       };
       $('#bulkPaper').onclick = async () => {
         const changed = chosen().filter((e) => !S.isMiles(e.lineId) && !e.hasReceipt);
         for (const e of changed) { e.hasReceipt = true; e.updatedAt = new Date().toISOString(); }
-        if (changed.length) await DB.putEntries(changed);
+        try { if (changed.length) await DB.putEntries(changed); } catch (e) { toast(`Could not save: ${e && e.message ? e.message : 'storage error'}.`, 6000); return; }
         toast(`Marked ${changed.length} as having a paper receipt.`);
         L.selected.clear(); render();
       };
@@ -1220,6 +1319,17 @@
       panel.querySelector('#copyText').onclick = async () => { try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch (e) { panel.querySelector('#copyArea').select(); toast('Select the text and copy it.'); } };
     });
   }
+  /** Save a Blob without turning it into one string first (backups with many photos). */
+  async function downloadBlob(filename, blob, type) {
+    const dl = await getDownloads();
+    if (dl || globalThis.claude) { await downloadText(filename, await blob.text(), type); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast(`Downloading ${filename}`);
+  }
   async function downloadText(filename, text, type) {
     const dl = await getDownloads();
     if (dl) {
@@ -1250,7 +1360,7 @@
     await DB.deleteEntries(list.map((e) => e.id));
     const ids = new Set(list.map((e) => e.id));
     state.entries = state.entries.filter((x) => !ids.has(x.id));
-    for (const e of list) if (e.receiptId && state.receiptURLs.has(e.receiptId)) { URL.revokeObjectURL(state.receiptURLs.get(e.receiptId)); state.receiptURLs.delete(e.receiptId); }
+    for (const e of list) dropReceiptURL(e.receiptId);
     render();
     const what = list.length === 1 ? (list[0].description || S.getLine(list[0].lineId).label) : `${list.length} entries`;
     toast(`Deleted ${what}.`, 8000, { label: 'Undo', onClick: async () => {
@@ -1275,7 +1385,7 @@
         <label class="field"><span id="eAmountLabel">${isMiles ? 'Miles' : 'Amount ($)'}</span><input id="eAmount" inputmode="decimal" value="${esc(e.amount)}"></label>
         <label class="field"><span>Date</span><input id="eDate" type="date" value="${esc(e.date)}"></label>
         <label class="field span-2"><span>What / who</span><input id="eDesc" value="${esc(e.description)}"></label>
-        <div class="field span-2"><span>Worksheet line</span>${lineSelectHTML('eLine', e.lineId)}<div class="line-hint" id="eHint">${lineHintHTML(e.lineId)}</div></div>
+        <div class="field span-2"><span><label for="eLine">Worksheet line</label></span>${lineSelectHTML('eLine', e.lineId, 'Worksheet line')}<div class="line-hint" id="eHint">${lineHintHTML(e.lineId)}</div></div>
         <label class="field span-2"><span>Note</span><textarea id="eNote">${esc(e.note)}</textarea></label>
         ${e.items && e.items.length ? `<div class="field span-2"><span>Itemized donation record</span><div class="note small" style="white-space:pre-line">${esc(VAL.recordText(e.items, String(e.description || '').split(' — ')[0], e.date))}</div></div>` : ''}
       </div>
@@ -1296,7 +1406,7 @@
       const attach = panel.querySelector('#eAttach') || panel.querySelector('#eReplace');
       if (attach) attach.onclick = () => { state.pendingReceiptTarget = e.id; closeModal(); $('#receiptInput').click(); };
       const rm = panel.querySelector('#eRemovePhoto');
-      if (rm) rm.onclick = async () => { await DB.deleteReceipt(e.receiptId); if (state.receiptURLs.has(e.receiptId)) { URL.revokeObjectURL(state.receiptURLs.get(e.receiptId)); state.receiptURLs.delete(e.receiptId); } e.receiptId = null; e.hasReceipt = false; e.updatedAt = new Date().toISOString(); await DB.putEntry(e); toast('Photo removed.'); openEdit(e.id); };
+      if (rm) rm.onclick = async () => { await DB.deleteReceipt(e.receiptId); dropReceiptURL(e.receiptId); e.receiptId = null; e.hasReceipt = false; e.updatedAt = new Date().toISOString(); await DB.putEntry(e); toast('Photo removed.'); openEdit(e.id); };
       panel.querySelector('#eDelete').onclick = async () => {
         closeModal();
         if (!(await confirmDialog('Delete this entry?', `${e.description || line.label} · ${fmtAmount(e)} on ${P.formatDate(e.date)}. This cannot be undone.`, 'Delete', true))) return;
@@ -1313,8 +1423,8 @@
         if (!e.receiptId) e.hasReceipt = panel.querySelector('#ePaper').checked;
         if (S.isMiles(newLine)) { e.hasReceipt = false; }
         e.updatedAt = new Date().toISOString();
-        await DB.putEntry(e);
-        if (desc) { C.learn(state.settings.learned, desc, newLine); await DB.saveSettings(state.settings); }
+        try { await DB.putEntry(e); } catch (err) { toast(`Could not save: ${err && err.message ? err.message : 'storage error'}.`, 6000); return; }
+        if (desc) { C.learn(state.settings.learned, desc, newLine); DB.saveSettings(state.settings).catch(() => {}); }
         closeModal();
         toast('Saved.');
         render();
@@ -1376,7 +1486,7 @@
       ${R0.entries.length ? `<section class="card">
         <div class="card-head"><h2>Month by month</h2><button class="btn btn-ghost btn-sm" type="button" id="toggleMonthsTable">${state.showMonthsTable ? 'Show chart' : 'Show as table'}</button></div>
         ${state.showMonthsTable ? `<table class="table-twin"><thead><tr><th>Month</th><th class="num">Logged (dollar value)</th></tr></thead><tbody>${months.map((v, i) => `<tr><td>${MONTHS_SHORT[i]} ${R0.taxYear}</td><td class="num">${moneyCents(v)}</td></tr>`).join('')}</tbody></table>` : `
-        <div class="months" role="img" aria-label="Dollar value logged per month">${months.map((v, i) => `<button class="month-col ${i === nowMonth ? 'is-current' : ''} ${i === maxIdx && maxMonth > 0 ? 'is-max' : ''}" type="button" data-tip="${esc(`${MONTHS_SHORT[i]}: ${money(v)}`)}" aria-label="${esc(`${MONTHS_SHORT[i]}: ${money(v)}`)}">${i === maxIdx && maxMonth > 0 ? `<span class="month-value">${money(v)}</span>` : ''}<div class="month-bar" style="height:${maxMonth ? Math.max(2, v / maxMonth * 100) : 2}%"></div></button>`).join('')}</div>
+        <div class="months" role="group" aria-label="Dollar value logged per month">${months.map((v, i) => `<div class="month-col ${i === nowMonth ? 'is-current' : ''} ${i === maxIdx && maxMonth > 0 ? 'is-max' : ''}" role="img" tabindex="0" data-tip="${esc(`${MONTHS_SHORT[i]}: ${money(v)}`)}" aria-label="${esc(`${MONTHS_SHORT[i]}: ${money(v)}`)}">${i === maxIdx && maxMonth > 0 ? `<span class="month-value">${money(v)}</span>` : ''}<div class="month-bar" style="height:${maxMonth ? Math.max(2, v / maxMonth * 100) : 2}%"></div></div>`).join('')}</div>
         <div class="month-axis">${MONTHS_SHORT.map((m) => `<span>${m[0]}</span>`).join('')}</div>`}
         <p class="note" style="margin-top:10px">Miles are shown at their dollar value. ${nowMonth >= 0 ? 'The current month is highlighted.' : ''}</p>
       </section>` : ''}
@@ -1390,7 +1500,7 @@
             <dt>Interest</dt><dd>${money(A.interest.total)}</dd>
             <dt>Gifts to charity${A.charity.floor ? ' (after floor)' : ''}</dt><dd>${money(A.charity.deductible)}</dd>
             <dt>Gambling losses (to winnings)</dt><dd>${money(A.other.deductible)}</dd>
-            <dt>Casualty (federal disaster)</dt><dd>${money(A.casualty.deductible)}</dd>
+            <dt>Casualty (${A.casualty.qualified ? 'qualified disaster loss' : 'declared disaster'})</dt><dd>${money(A.casualty.deductible)}</dd>
             <div class="total" style="display:contents"><dt>Itemized total</dt><dd>${money(A.total)}</dd></div>
             <dt>Standard deduction</dt><dd>${money(SD.total)}</dd>
           </dl>
@@ -1495,7 +1605,7 @@
         if (l.group !== group) { group = l.group; if (group) html += `<div class="sheet-group">${esc(group)}</div>`; }
         html += lineRow(l);
         if (l.id === 'int.individual' && R0.lines[l.id].count) {
-          for (const e of R0.lines[l.id].entries) html += `<div class="sheet-line"><div class="lbl"><span>Name / Address: ${esc(e.description || '—')}${e.note ? ' · ' + esc(e.note) : ''}</span></div><span></span></div>`;
+          for (const e of R0.lines[l.id].entries) html += `<div class="sheet-line sheet-line-wrap"><div class="lbl"><span>Name / Address: ${esc(e.description || '—')}${e.note ? '<br>' + esc(e.note) : ''}</span></div><span></span></div>`;
         }
       }
       const secTotal = R0.sections[sec.id];
@@ -1509,7 +1619,9 @@
     const notes = [];
     for (const i of R0.insights.filter((x) => x.level === 'act' || x.level === 'warn')) notes.push(`${i.title}. ${i.body.split(/(?<=\.)\s/)[0]}`);
     if (R0.scheduleA.other.gamblingLosses) notes.push(`Gambling winnings reported by taxpayer: ${money(R0.scheduleA.other.gamblingWinnings)}.`);
-    if (R0.scheduleA.casualty.gross) notes.push(`Casualty loss ${R0.scheduleA.casualty.federalDisaster ? 'IS' : 'is NOT'} marked as a federally declared disaster${state.settings.disasterNumber ? ` (FEMA ${state.settings.disasterNumber})` : ''}.`);
+    if (R0.scheduleA.casualty.gross) notes.push(`Casualty loss ${R0.scheduleA.casualty.federalDisaster ? 'IS' : 'is NOT'} marked as a declared disaster${state.settings.disasterNumber ? ` (FEMA ${state.settings.disasterNumber})` : ''}${R0.scheduleA.casualty.qualified ? '; taxpayer marked it a qualified disaster loss ($500 floor, no AGI reduction)' : ''}.`);
+    if (R0.scheduleA.taxes.withheld) notes.push(`State and local income tax withheld per W-2 (boxes 17 and 19), as entered by taxpayer: ${money(R0.scheduleA.taxes.withheld)} — included in the state-and-local total above the cap.`);
+    if (R0.scheduleA.charity.carryforward) notes.push(`Charitable gifts exceed the AGI limit by ${money(R0.scheduleA.charity.carryforward)}; carry the excess forward.`);
     const tripCount = state.trips.filter((t) => Number(t.taxYear) === R0.taxYear).length;
     if (tripCount) notes.push(`Mileage log: ${tripCount} ${tripCount === 1 ? 'trip' : 'trips'} with date, destination, purpose, and miles (export from Capture → Trip).`);
     if (R0.scheduleC.hasActivity && R0.scheduleC.vehicle.totalMiles) notes.push(`Vehicle: ${fmtMiles(R0.scheduleC.vehicle.miles)} business of ${fmtMiles(R0.scheduleC.vehicle.totalMiles)} total (${Math.round((R0.scheduleC.vehicle.businessUseShare || 0) * 100)}% business use).`);
@@ -1617,7 +1729,8 @@
     const KIND = { log: ['act', 'Log it'], check: ['warn', 'Check'], plan: ['info', 'Plan'], good: ['good', 'On track'], habit: ['info', 'Habit'] };
     const actionLabel = (r) => (!r.action ? '' : ({ prefill: 'Log it', edit: 'Open entry', ledger: 'Open ledger', capture: 'Log something', settings: 'Open settings' })[r.action.type] || 'Open');
     const recHTML = (r) => `<article class="insight insight-${KIND[r.kind][0]} rec"><div class="insight-stripe"></div><div class="insight-body"><div class="insight-top"><span class="pill pill-${KIND[r.kind][0]}">${KIND[r.kind][1]}</span><h3>${esc(r.title)}</h3></div><p>${esc(r.body)}</p><div class="because">Because: ${esc(r.because)}</div><div class="btn-row rec-actions">${r.action ? `<button class="btn btn-sm btn-primary" type="button" data-rec-act="go" data-rec="${esc(r.id)}">${esc(actionLabel(r))}</button>` : ''}<button class="btn btn-sm btn-ghost" type="button" data-rec-act="dismiss" data-rec="${esc(r.id)}">Dismiss</button></div></div></article>`;
-    const statusPill = (s) => (s === 'overdue' ? '<span class="pill pill-act">Overdue</span>' : s === 'due' ? '<span class="pill pill-warn">Due</span>' : '<span class="pill pill-info">Upcoming</span>');
+    const statusPill = (s) => (s === 'overdue' ? '<span class="pill pill-act">Overdue</span>' : s === 'due' ? '<span class="pill pill-warn">Due</span>' : s === 'lapsed' ? '<span class="pill pill-info" title="More than a full period past due; nothing is projected for it">Stopped?</span>' : '<span class="pill pill-info">Upcoming</span>');
+    const closed = !!pr.closed;
     const H = adv.habits;
     const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const receiptRows = Object.values(H.receiptsBySection).sort((a, b) => b.count - a.count);
@@ -1625,10 +1738,10 @@
 
     $('#view-advisor').innerHTML = `
       <section class="card verdict">
-        <div class="verdict-kicker"><span class="pill pill-accent">Year-end forecast</span><span class="pill pill-info">${R0.taxYear}</span>${pr.projectedEntries ? `<span class="pill pill-info">${pr.projectedEntries} expected ${pr.projectedEntries === 1 ? 'entry' : 'entries'} still to come</span>` : ''}</div>
-        <h2 class="verdict-title">${pr.itemize ? 'On pace to itemize' : 'On pace for the standard deduction'}</h2>
-        <div class="hero">${pr.itemize ? `${money(pr.projectedTotal - pr.standardDeduction)} <small>projected above the standard deduction</small>` : `${money(pr.gap)} <small>projected short of itemizing</small>`}</div>
-        <p class="verdict-note">${money(pr.actual)} counts so far. Recurring payees found in your entries should add about ${money(pr.expectedMore)} by Dec 31, for a projected ${money(pr.projectedTotal)} against a ${money(pr.standardDeduction)} standard deduction.${pr.calibration && pr.calibration.factor !== 1 ? ` The expected part is calibrated ×${pr.calibration.factor} from ${pr.calibration.n} past forecasts.` : ''}${pr.medicalPending ? ' Medical costs are waiting on your AGI in Settings.' : ''}</p>
+        <div class="verdict-kicker"><span class="pill pill-accent">${closed ? 'Year in review' : 'Year-end forecast'}</span><span class="pill pill-info">${R0.taxYear}</span>${pr.projectedEntries ? `<span class="pill pill-info">${pr.projectedEntries} expected ${pr.projectedEntries === 1 ? 'entry' : 'entries'} still to come</span>` : ''}</div>
+        <h2 class="verdict-title">${closed ? (pr.itemize ? 'Itemizing won' : 'The standard deduction won') : (pr.itemize ? 'On pace to itemize' : 'On pace for the standard deduction')}</h2>
+        <div class="hero">${pr.itemize ? `${money(pr.projectedTotal - pr.standardDeduction)} <small>${closed ? 'above' : 'projected above'} the standard deduction</small>` : `${money(pr.gap)} <small>${closed ? 'short' : 'projected short'} of itemizing</small>`}</div>
+        <p class="verdict-note">${closed ? `${money(pr.actual)} counted for ${R0.taxYear} against a ${money(pr.standardDeduction)} standard deduction.` : `${money(pr.actual)} counts so far.${pr.expectedMore > 0 ? ` Recurring payees found in your entries should add about ${money(pr.expectedMore)} by Dec 31, for a projected ${money(pr.projectedTotal)}` : ` Nothing more is expected from recurring payees, so the projection stays at ${money(pr.projectedTotal)}`} against a ${money(pr.standardDeduction)} standard deduction.`}${pr.calibration && pr.calibration.factor !== 1 ? ` The expected part is calibrated ×${pr.calibration.factor} from ${pr.calibration.n} past forecasts.` : ''}${pr.medicalPending ? ' Medical costs are waiting on your AGI in Settings.' : ''}</p>
         <div class="meter" role="img" aria-label="${esc(`${money(pr.actual)} so far, ${money(pr.projectedTotal)} projected, ${money(pr.standardDeduction)} standard deduction`)}">
           <div class="meter-track"><div class="meter-proj" style="width:${pct(pr.projectedTotal)}"></div><div class="meter-fill ${pr.actual > pr.standardDeduction ? 'is-over' : ''}" style="width:${pct(pr.actual)}"></div><div class="meter-marker" style="left:${pct(pr.standardDeduction)}"></div></div>
           <div class="meter-labels"><span><span class="legend-dot" style="background:var(--accent)"></span>So far <b>${money(pr.actual)}</b></span><span><span class="legend-dot" style="background:var(--accent-proj)"></span>Projected <b>${money(pr.projectedTotal)}</b></span><span>Standard deduction <b>${money(pr.standardDeduction)}</b></span></div>
@@ -1696,10 +1809,11 @@
   // SETTINGS
   // =====================================================================
   function renderSettings() {
+    const fk = focusKeyOf();
     const s = state.settings;
     const R0 = state.computed;
     const P0 = R0.params;
-    const marriedJoint = s.filingStatus === 'mfj' || s.filingStatus === 'qss';
+    const marriedJoint = s.filingStatus === 'mfj'; // a qualifying surviving spouse files alone: no spouse add-on
     const overrides = (s.paramOverrides && s.paramOverrides[R0.taxYear]) || {};
     const defaults = R.getParams(R0.taxYear, {});
     const fmtParam = (kind, v) => (kind === 'usd' ? money(v) : kind === 'rate' ? R.pct(v) : R.perMile(v));
@@ -1717,11 +1831,12 @@
             <div class="field"><span>Age &amp; vision</span><div class="chips"><label class="check"><input type="checkbox" id="sAge65" ${s.age65 ? 'checked' : ''}> I'm 65 or older</label><label class="check"><input type="checkbox" id="sBlind" ${s.blind ? 'checked' : ''}> I'm blind</label></div></div>
             <div class="field" ${marriedJoint ? '' : 'hidden'}><span>Spouse</span><div class="chips"><label class="check"><input type="checkbox" id="sSpouseAge65" ${s.spouseAge65 ? 'checked' : ''}> Spouse is 65 or older</label><label class="check"><input type="checkbox" id="sSpouseBlind" ${s.spouseBlind ? 'checked' : ''}> Spouse is blind</label></div></div>
             <label class="field"><span>Gambling winnings reported ($)</span><input id="sWinnings" inputmode="numeric" value="${esc(s.gamblingWinnings)}" placeholder="0"></label>
+            <label class="field"><span>State &amp; local income tax withheld ($)</span><input id="sWithheld" inputmode="numeric" value="${esc(s.stateWithholding || '')}" placeholder="W-2 boxes 17 and 19"></label>
             <label class="field"><span>State</span><select id="sState" class="input"><option value="">Not set</option>${G.US_STATES.map((st) => `<option value="${st.code}" ${s.state === st.code ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select></label>
             <label class="field"><span>County</span><input id="sCounty" value="${esc(s.county || '')}" placeholder="for disaster lookups"></label>
             <div class="field span-2"><span>Location</span><div class="btn-row"><button class="btn btn-sm" type="button" id="sLocate">Use my location to fill in state and county</button></div></div>
             <div class="field span-2"><span>Casualty losses</span>
-              <div class="chips"><label class="check"><input type="checkbox" id="sDisaster" ${s.casualtyFederalDisaster ? 'checked' : ''}> From a federally declared disaster</label><input id="sDisasterNumber" class="input" style="max-width:220px" value="${esc(s.disasterNumber || '')}" placeholder="FEMA declaration number"><button class="btn btn-sm" type="button" id="femaLookup">Look up declarations for ${esc(s.state || 'my state')}</button></div>
+              <div class="chips"><label class="check"><input type="checkbox" id="sDisaster" ${s.casualtyFederalDisaster ? 'checked' : ''}> From a ${R0.taxYear >= 2026 ? 'federally or state-declared' : 'federally declared'} disaster</label><label class="check" ${s.casualtyFederalDisaster ? '' : 'hidden'}><input type="checkbox" id="sQualifiedDisaster" ${s.casualtyQualifiedDisaster ? 'checked' : ''}> Qualified disaster loss ($500 floor, no AGI reduction, counts without itemizing)</label><input id="sDisasterNumber" class="input" style="max-width:220px" value="${esc(s.disasterNumber || '')}" placeholder="FEMA declaration number" aria-label="FEMA declaration number"><button class="btn btn-sm" type="button" id="femaLookup">Look up declarations for ${esc(s.state || 'my state')}</button></div>
               <div id="femaPanel"></div>
             </div>
           </div>
@@ -1794,10 +1909,11 @@
     const save = async () => { await DB.saveSettings(state.settings); recompute(); };
     $('#sFiling').onchange = async (ev) => { s.filingStatus = ev.target.value; await save(); renderSettings(); };
     $('#sAgi').addEventListener('change', async (ev) => { s.agi = ev.target.value.replace(/[^0-9.]/g, ''); ev.target.value = s.agi; await save(); });
-    for (const [id, key] of [['sAge65', 'age65'], ['sBlind', 'blind'], ['sSpouseAge65', 'spouseAge65'], ['sSpouseBlind', 'spouseBlind'], ['sDisaster', 'casualtyFederalDisaster']]) {
-      const el = $('#' + id); if (el) el.onchange = async () => { s[key] = el.checked; await save(); };
+    for (const [id, key] of [['sAge65', 'age65'], ['sBlind', 'blind'], ['sSpouseAge65', 'spouseAge65'], ['sSpouseBlind', 'spouseBlind'], ['sDisaster', 'casualtyFederalDisaster'], ['sQualifiedDisaster', 'casualtyQualifiedDisaster']]) {
+      const el = $('#' + id); if (el) el.onchange = async () => { s[key] = el.checked; await save(); if (key === 'casualtyFederalDisaster') renderSettings(); };
     }
     $('#sWinnings').addEventListener('change', async (ev) => { s.gamblingWinnings = ev.target.value.replace(/[^0-9.]/g, ''); ev.target.value = s.gamblingWinnings; await save(); });
+    $('#sWithheld').addEventListener('change', async (ev) => { s.stateWithholding = ev.target.value.replace(/[^0-9.]/g, ''); ev.target.value = s.stateWithholding; await save(); });
     $('#sState').onchange = async (ev) => { s.state = ev.target.value; await save(); renderSettings(); };
     $('#sCounty').addEventListener('change', async (ev) => { s.county = ev.target.value.trim(); await save(); });
     $('#sDisasterNumber').addEventListener('change', async (ev) => { s.disasterNumber = ev.target.value.trim(); await save(); });
@@ -1818,7 +1934,7 @@
       panel.innerHTML = '<p class="note small">Looking up FEMA declarations…</p>';
       try {
         const list = await G.femaDeclarations({ state: s.state, county: s.county, since: `${R0.taxYear}-01-01` });
-        if (!list.length) { panel.innerHTML = `<p class="note small">No federal declarations found for ${esc(s.state)}${s.county ? ', ' + esc(s.county) : ''} since Jan 1, ${R0.taxYear}. Personal casualty losses outside a declared disaster are not deductible.</p>`; return; }
+        if (!list.length) { panel.innerHTML = `<p class="note small">The lookup returned no federal declarations for ${esc(s.state)}${s.county ? ', ' + esc(s.county) : ''} since Jan 1, ${R0.taxYear}. The list may be incomplete or lag the event; check FEMA.gov or your state's emergency management site, and enter the declaration number by hand if you find one.</p>`; return; }
         panel.innerHTML = `<div class="fema-list">${list.slice(0, 12).map((d) => `<div class="fema-item"><span><b>${esc(d.type)}-${esc(d.number)}</b> ${esc(d.title)}<br><span class="muted small">${esc(d.incident)} · declared ${esc(d.declared)} · ${esc(d.area)}</span></span><button class="btn btn-sm" type="button" data-fema="${esc(d.type)}-${esc(d.number)}">Use</button></div>`).join('')}</div>`;
         panel.querySelectorAll('[data-fema]').forEach((b) => { b.onclick = async () => { s.casualtyFederalDisaster = true; s.disasterNumber = b.dataset.fema; await save(); renderSettings(); toast(`Casualty losses marked as federal disaster ${b.dataset.fema}.`); }; });
       } catch (e) { panel.innerHTML = `<p class="note small">${esc(e.message)}</p>`; }
@@ -1835,7 +1951,15 @@
     }));
     $('#resetParams').onclick = async () => { delete s.paramOverrides[R0.taxYear]; await save(); renderSettings(); toast('Defaults restored.'); };
     $$('[data-theme-pick]').forEach((b) => b.onclick = async () => { s.theme = b.dataset.themePick; applyTheme(); await save(); renderSettings(); });
-    $('#exportJson').onclick = async () => { const data = await DB.exportJSON(); downloadText(`itemizer-backup-${P.todayISO()}.json`, JSON.stringify(data), 'application/json'); };
+    $('#exportJson').onclick = async () => {
+      const btn = $('#exportJson'); btn.disabled = true;
+      try {
+        const out = await DB.exportBackup();
+        await downloadBlob(`itemizer-backup-${P.todayISO()}.json`, out.blob, 'application/json');
+        if (out.failed) toast(`Backup saved; ${out.failed} receipt ${out.failed === 1 ? 'photo' : 'photos'} could not be read and ${out.failed === 1 ? 'was' : 'were'} left out.`, 7000);
+      } catch (e) { toast(`Could not build the backup: ${e && e.message ? e.message : 'unknown error'}.`, 6000); }
+      finally { btn.disabled = false; }
+    };
     $('#importJson').onclick = () => $('#importInput').click();
     $('#exportAllCsv').onclick = () => downloadText('itemizer-all-years.csv', DB.toCSV(state.entries, S), 'text/csv');
     const ls = $('#loadSample2'); if (ls) ls.onclick = loadSampleData;
@@ -1850,17 +1974,20 @@
     $('#resetDismissed').onclick = async () => { s.advisorDismissed = {}; await save(); renderSettings(); toast('All recommendations are visible again.'); };
     $('#wipeAll').onclick = async () => {
       if (!(await confirmDialog('Delete everything?', 'All entries, receipts, learned categories, and settings on this device will be removed.', 'Delete all data', true))) return;
-      await DB.clearAll();
-      for (const u of state.receiptURLs.values()) URL.revokeObjectURL(u);
-      state.receiptURLs.clear();
-      state.entries = []; state.settings = await DB.getSettings(); state.capture = null;
+      try { await DB.clearAll(); } catch (e) { toast(`Could not delete everything: ${e && e.message ? e.message : 'storage error'}.`, 6000); }
+      await reloadState();
       applyTheme(); render(); toast('All data deleted.');
     };
     DB.storageInfo().then((info) => {
       const el = $('#storageNote'); if (!el) return;
       const used = info.estimate && info.estimate.usage ? ` · ${(info.estimate.usage / 1048576).toFixed(1)} MB used` : '';
-      el.textContent = info.mode === 'idb' ? `Stored in this browser's IndexedDB${used}.` : 'This browser has no IndexedDB, so entries are kept in localStorage and receipt photos cannot be stored.';
+      let text = info.mode === 'idb' ? `Stored in this browser's IndexedDB${used}.` : 'This browser has no IndexedDB, so entries are kept in localStorage and receipt photos cannot be stored.';
+      if (info.persisted === true) text += ' The browser has agreed not to evict this data.';
+      else if (info.persisted === false) text += ' The browser may delete this data when disk space runs low (Safari: after 7 days without a visit). Install the app to your home screen and download a backup now and then.';
+      if (info.notice) text += ` ${info.notice}`;
+      el.textContent = text;
     });
+    restoreFocus(fk);
   }
   function unsetPath(obj, path) {
     const keys = path.split('.');
@@ -1882,14 +2009,14 @@
     if (!file) return;
     let data;
     try { data = JSON.parse(await file.text()); } catch (e) { toast('That file is not readable JSON.'); return; }
-    const ok = await confirmDialog('Restore this backup?', `${(data.entries || []).length} entries and ${(data.receipts || []).length} receipts will be merged with what is already here. Existing entries with the same id are replaced.`, 'Restore');
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.app !== 'itemizer' || !Array.isArray(data.entries)) { toast('That file is not an Itemizer backup.'); return; }
+    const ok = await confirmDialog('Restore this backup?', `${data.entries.length} entries and ${Array.isArray(data.receipts) ? data.receipts.length : 0} receipts will be merged with what is already here. Existing entries with the same id are replaced.`, 'Restore');
     if (!ok) return;
     try {
-      const res = await DB.importJSON(data);
-      state.entries = await DB.getEntries();
-      state.settings = await DB.getSettings();
+      const res = await DB.importJSON(data, { schema: S });
+      await reloadState();
       applyTheme();
-      toast(`Restored ${res.entries} entries and ${res.receipts} receipts.`);
+      toast(`Restored ${res.entries} entries and ${res.receipts} receipts.${res.skipped ? ` ${res.skipped} ${res.skipped === 1 ? 'row was' : 'rows were'} not valid and skipped.` : ''}${res.badReceipts ? ` ${res.badReceipts} receipt ${res.badReceipts === 1 ? 'image' : 'images'} could not be read.` : ''}`, 7000);
       render();
     } catch (e) { toast(e.message || 'Import failed.'); }
   }
@@ -1991,18 +2118,33 @@
     navigator.serviceWorker.register('sw.js').catch(() => { /* offline install is a bonus, not a requirement */ });
   }
 
-  async function init() {
+  /** Load (or reload) everything from storage; used at start, after "Delete all data", and after a restore. */
+  async function reloadState() {
+    for (const u of state.receiptURLs.values()) URL.revokeObjectURL(u);
+    state.receiptURLs.clear();
+    if (state.recorder && state.recorder.state !== 'idle') { try { state.recorder.stop(); } catch (e) { /* nothing to release */ } }
+    clearInterval(state.recorderTimer); state.recorderTimer = null; state.recorder = null;
     state.settings = await DB.getSettings();
-    applyTheme();
     state.entries = await DB.getEntries();
-    for (const e of state.entries) if (!e.taxYear && e.date) e.taxYear = Number(e.date.slice(0, 4));
+    for (const e of state.entries) { try { if (!e.taxYear && typeof e.date === 'string') e.taxYear = Number(e.date.slice(0, 4)); } catch (err) { /* a bad row never blocks start-up */ } }
     try { state.places = await DB.getPlaces(); state.trips = await DB.getTrips(); } catch (e) { state.places = []; state.trips = []; }
+    state.capture = null; state.trip = null; state.importer = null;
+  }
+  async function init() {
+    try { await reloadState(); }
+    catch (e) {
+      state.settings = state.settings || Object.assign({}, DB.DEFAULT_SETTINGS);
+      state.entries = state.entries || []; state.places = state.places || []; state.trips = state.trips || [];
+      toast(`Local storage could not be opened: ${e && e.message ? e.message : 'unknown error'}. Close other Itemizer tabs and reload; nothing will be saved until then.`, 30000);
+    }
+    applyTheme();
     $('#yearSelect').onchange = async (ev) => { state.settings.taxYear = Number(ev.target.value); await DB.saveSettings(state.settings); state.capture = null; state.trip = null; render(); };
     $('#receiptInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
     $('#importInput').onchange = importBackup;
     $('#csvInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onCSVFile(f); };
-    $('#modal').addEventListener('click', (ev) => { if (ev.target.classList.contains('modal-backdrop')) closeModal(); });
-    document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('#modal').hidden) closeModal(); });
+    $('#modal').addEventListener('click', (ev) => { if (ev.target.classList.contains('modal-backdrop')) cancelModal(); });
+    document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('#modal').hidden) cancelModal(); });
+    window.addEventListener('resize', () => { if ($('#trackCanvas')) drawTrack(); });
     window.addEventListener('hashchange', route);
     route();
     registerSW();

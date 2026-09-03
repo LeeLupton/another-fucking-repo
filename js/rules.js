@@ -48,11 +48,13 @@
       charityFloorRate: 0,
       nonItemizerCharity: null,
       casualtyPerEvent: 100,
+      casualtyQualifiedPerEvent: 500,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
       acknowledgmentThreshold: 250,
       receiptThreshold: 75,
+      pmiPhaseout: null,
     },
     2025: {
       standardDeduction: { single: 15750, mfj: 31500, mfs: 15750, hoh: 23625, qss: 31500 },
@@ -69,11 +71,13 @@
       charityFloorRate: 0,
       nonItemizerCharity: null,
       casualtyPerEvent: 100,
+      casualtyQualifiedPerEvent: 500,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
       acknowledgmentThreshold: 250,
       receiptThreshold: 75,
+      pmiPhaseout: null,
     },
     2026: {
       standardDeduction: { single: 16100, mfj: 32200, mfs: 16100, hoh: 24150, qss: 32200 },
@@ -83,18 +87,20 @@
       saltPhaseout: { start: { default: 505000, mfs: 252500 }, rate: 0.3, floor: { default: 10000, mfs: 5000 } },
       mileage: { business: 0.725, medical: 0.21, charity: 0.14 },
       studentLoanInterestCap: 2500,
-      studentLoanPhaseout: null, // indexed annually — enter this year's range in Settings if you are near the limit
+      studentLoanPhaseout: { single: [85000, 100000], mfj: [175000, 205000] }, // Rev. Proc. 2025-32
       mealsDeductibleRate: 0.5,
       gamblingLossRate: 0.9,
       charityCashAgiLimit: 0.6,
       charityFloorRate: 0.005,
       nonItemizerCharity: { single: 1000, mfj: 2000 },
       casualtyPerEvent: 100,
+      casualtyQualifiedPerEvent: 500,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
       acknowledgmentThreshold: 250,
       receiptThreshold: 75,
+      pmiPhaseout: { default: [100000, 109000], mfs: [50000, 54500] }, // P.L. 119-21 §70108
     },
   };
   const KNOWN_YEARS = Object.keys(PARAMS).map(Number).sort();
@@ -173,7 +179,8 @@
   /**
    * @param {Array} allEntries  every entry in the store (any year)
    * @param {Object} settings   { taxYear, filingStatus, agi, age65, blind, spouseAge65, spouseBlind,
-   *                              gamblingWinnings, casualtyFederalDisaster, paramOverrides, today }
+   *                              gamblingWinnings, stateWithholding, casualtyFederalDisaster,
+   *                              casualtyQualifiedDisaster, state, paramOverrides, today }
    */
   function compute(allEntries, settings) {
     const s = Object.assign({ filingStatus: 'single' }, settings || {});
@@ -245,7 +252,10 @@
       shortfall: medFloor == null ? null : cents(Math.max(0, medFloor - medGross)),
     };
 
-    const taxGross = cents(sections.taxes.value);
+    // W-2 state and local withholding is usually the largest SALT item and is never an entry; states without an income tax use the sales-tax election instead.
+    const stateCode = String(s.state || '').toUpperCase() || null;
+    const withheld = NO_INCOME_TAX_STATES.has(stateCode || '') ? 0 : cents(Math.max(0, Number(s.stateWithholding) || 0));
+    const taxGross = cents(sections.taxes.value + withheld);
     let saltCap = isMFS ? P.saltCap.mfs : P.saltCap.default;
     let saltPhasedOut = false;
     if (P.saltPhaseout && agi != null) {
@@ -253,7 +263,7 @@
       const floor = isMFS ? P.saltPhaseout.floor.mfs : P.saltPhaseout.floor.default;
       if (agi > start) { saltCap = Math.max(floor, saltCap - P.saltPhaseout.rate * (agi - start)); saltPhasedOut = true; }
     }
-    const taxes = { gross: taxGross, cap: cents(saltCap), deductible: cents(Math.min(taxGross, saltCap)), excess: cents(Math.max(0, taxGross - saltCap)), phasedOut: saltPhasedOut };
+    const taxes = { gross: taxGross, entered: cents(sections.taxes.value), withheld, cap: cents(saltCap), deductible: cents(Math.min(taxGross, saltCap)), excess: cents(Math.max(0, taxGross - saltCap)), phasedOut: saltPhasedOut };
 
     const interest = { total: cents(sections.interest.value) };
 
@@ -262,13 +272,19 @@
     const volunteer = cents(sections.volunteer.value);
     const charGross = cents(cash + noncash + volunteer);
     const charFloor = P.charityFloorRate > 0 ? (agi == null ? null : cents(agi * P.charityFloorRate)) : 0;
+    // One bound that is always right: no more than the cash AGI limit counts this year; the rest carries forward.
+    // (The lower 30%/50% limits for property gifts cannot be told apart on a single worksheet line.)
+    const charAfterFloor = cents(Math.max(0, charGross - (charFloor || 0)));
+    const charLimit = agi == null ? null : cents(agi * P.charityCashAgiLimit);
     const charity = {
       cash, noncash, volunteer, volunteerMilesValue: valueOf(Schema.getLine('vol.miles')),
       gross: charGross,
       floor: charFloor,
       floorPending: charFloor == null && charGross > 0,
-      deductible: cents(Math.max(0, charGross - (charFloor || 0))),
-      cashLimit: agi == null ? null : cents(agi * P.charityCashAgiLimit),
+      deductible: charLimit == null ? charAfterFloor : cents(Math.min(charAfterFloor, charLimit)),
+      carryforward: charLimit == null ? 0 : cents(Math.max(0, charAfterFloor - charLimit)),
+      limitPending: charLimit == null && charGross > 0,
+      cashLimit: charLimit,
       nonCashNeedsForm8283: noncash > P.nonCashForm8283,
       nonCashNeedsAppraisal: noncash > P.nonCashAppraisal,
     };
@@ -278,13 +294,21 @@
     const other = { gamblingLosses: losses, gamblingWinnings: winnings, allowedLosses: cents(losses * P.gamblingLossRate), deductible: cents(Math.min(losses * P.gamblingLossRate, winnings)) };
 
     const casGross = T('cas.loss');
+    // A "qualified disaster loss" (declarations covered by P.L. 118-148 and P.L. 119-21) uses a $500 floor, no AGI reduction,
+    // and counts on top of the standard deduction for non-itemizers.
+    const qualifiedDisaster = !!s.casualtyFederalDisaster && !!s.casualtyQualifiedDisaster;
+    const perEvent = qualifiedDisaster ? (P.casualtyQualifiedPerEvent || 500) : P.casualtyPerEvent;
     const casualty = {
       gross: casGross,
       federalDisaster: !!s.casualtyFederalDisaster,
-      afterLimits: agi == null ? null : cents(Math.max(0, casGross - P.casualtyPerEvent - agi * P.casualtyAgiRate)),
+      qualified: qualifiedDisaster,
+      perEvent,
+      afterLimits: qualifiedDisaster ? cents(Math.max(0, casGross - perEvent)) : (agi == null ? null : cents(Math.max(0, casGross - perEvent - agi * P.casualtyAgiRate))),
       deductible: 0,
+      addedToStandard: false,
     };
     if (casualty.federalDisaster && casualty.afterLimits != null) casualty.deductible = casualty.afterLimits;
+    if (qualifiedDisaster && casualty.deductible > 0) casualty.addedToStandard = true;
 
     const scheduleA = { medical, taxes, interest, charity, other, casualty };
     scheduleA.total = cents((medical.deductible || 0) + taxes.deductible + interest.total + charity.deductible + other.deductible + casualty.deductible);
@@ -295,38 +319,44 @@
     const conditions = [];
     if (s.age65) conditions.push('you are 65 or older');
     if (s.blind) conditions.push('you are blind');
-    if (s.filingStatus === 'mfj' || s.filingStatus === 'qss') {
+    // Only a joint return carries the spouse's age/blindness add-on (§63(f)); a qualifying surviving spouse files alone.
+    if (s.filingStatus === 'mfj') {
       if (s.spouseAge65) conditions.push('your spouse is 65 or older');
       if (s.spouseBlind) conditions.push('your spouse is blind');
     }
     const perCondition = married ? P.additionalStdDed.married : P.additionalStdDed.unmarried;
+    const baseStd = P.standardDeduction[s.filingStatus];
     const standardDeduction = {
-      base: P.standardDeduction[s.filingStatus] || P.standardDeduction.single,
+      base: Number.isFinite(baseStd) ? baseStd : P.standardDeduction.single,
       additional: cents(conditions.length * perCondition),
       conditions,
+      disasterLoss: casualty.addedToStandard ? casualty.deductible : 0,
       total: 0,
     };
-    standardDeduction.total = cents(standardDeduction.base + standardDeduction.additional);
+    standardDeduction.total = cents(standardDeduction.base + standardDeduction.additional + standardDeduction.disasterLoss);
 
+    const sliPaid = T('edu.loan_interest');
+    const saltFloor = P.saltPhaseout ? (isMFS ? P.saltPhaseout.floor.mfs : P.saltPhaseout.floor.default) : Infinity;
     const verdict = {
       itemize: scheduleA.total > standardDeduction.total,
       difference: cents(scheduleA.total - standardDeduction.total),
       progress: standardDeduction.total ? Math.min(1, scheduleA.total / standardDeduction.total) : 0,
       medicalPending: medical.pending,
+      // Without an AGI the engine assumes the best case for every income-based limit; say so instead of staying quiet.
+      agiPending: agi == null && !!(medical.pending || charity.floorPending || charity.limitPending || taxGross > saltFloor || (casGross > 0 && s.casualtyFederalDisaster) || sliPaid > 0),
     };
 
     // ---- above the line / credits ----
-    const sliPaid = T('edu.loan_interest');
     let sliDeductible = cents(Math.min(sliPaid, P.studentLoanInterestCap));
     let sliPhase = 'n/a';
     if (P.studentLoanPhaseout && agi != null && sliPaid > 0) {
-      const range = married ? P.studentLoanPhaseout.mfj : P.studentLoanPhaseout.single;
+      const range = s.filingStatus === 'mfj' ? P.studentLoanPhaseout.mfj : P.studentLoanPhaseout.single; // the joint range is for joint returns only
       if (isMFS) { sliDeductible = 0; sliPhase = 'mfs'; }
       else if (agi >= range[1]) { sliDeductible = 0; sliPhase = 'out'; }
       else if (agi > range[0]) { sliDeductible = cents(sliDeductible * (1 - (agi - range[0]) / (range[1] - range[0]))); sliPhase = 'partial'; }
       else sliPhase = 'full';
     } else if (isMFS && sliPaid > 0) { sliDeductible = 0; sliPhase = 'mfs'; }
-    const adjustments = { studentLoanInterest: { paid: sliPaid, cap: P.studentLoanInterestCap, deductible: sliDeductible, phase: sliPhase } };
+    const adjustments = { studentLoanInterest: { paid: sliPaid, cap: P.studentLoanInterestCap, deductible: sliDeductible, phase: sliPhase, phaseoutChecked: !!(P.studentLoanPhaseout && agi != null) || isMFS } };
 
     const credits = {
       educationCosts: cents(['edu.expenses', 'edu.tuition', 'edu.books', 'edu.lab', 'edu.supplies'].reduce((a, id) => a + T(id), 0)),
@@ -385,7 +415,7 @@
 
     const result = {
       taxYear, params: P, agi, filingStatus: s.filingStatus, married,
-      state: String(s.state || '').toUpperCase() || null,
+      state: stateCode,
       entries, lines, sections, months: months.map(cents),
       scheduleA, standardDeduction, verdict, adjustments, credits, scheduleC, substantiation, duplicates,
     };
@@ -402,19 +432,22 @@
     const T = (id) => R.lines[id].total;
     const today = s.today ? new Date(s.today + 'T00:00:00') : new Date();
     const inYear = today.getFullYear() === R.taxYear;
+    const isMFS0 = R.filingStatus === 'mfs';
     const month = today.getMonth() + 1;
 
+    const noIncomeTax0 = NO_INCOME_TAX_STATES.has(R.state || '');
     if (P.isFallback) add('warn', `No built-in figures for ${R.taxYear}`, `Using ${P.baseYear} standard deductions, caps, and mileage rates. Check Settings → Rates & thresholds and enter the ${R.taxYear} figures when the IRS publishes them.`, { view: 'settings' });
 
     // The verdict
     if (R.entries.length === 0) {
       add('info', `Nothing logged for ${R.taxYear} yet`, `Your standard deduction is ${money(SD.total)}. Log expenses as they happen and this page will tell you the moment itemizing starts to pay.`);
     } else if (V.itemize) {
-      add('good', `Itemizing wins by ${money(V.difference)}`, `Schedule A deductions of ${money(A.total)} beat your ${money(SD.total)} standard deduction. Every additional dollar you log now lowers your taxable income — keep the receipts.`);
+      add('good', `Itemizing wins by ${money(V.difference)}`, `Schedule A deductions of ${money(A.total)} beat your ${money(SD.total)} standard deduction. Every additional dollar you log now lowers your taxable income — keep the receipts.${V.agiPending ? ' This assumes the full state-and-local cap and no income-based limits; enter your estimated AGI in Settings to confirm.' : ''}`, V.agiPending ? { view: 'settings' } : undefined);
     } else {
       const need = money(-V.difference);
       let body = `Your itemized deductions come to ${money(A.total)} after floors and caps, against a ${money(SD.total)} standard deduction. You would need ${need} more for itemizing to help.`;
       if (V.medicalPending) body += ` Medical expenses are not counted yet — enter your AGI in Settings.`;
+      if (!A.taxes.withheld && !noIncomeTax0 && T('tax.state_income') + T('tax.real_estate') > 0) body += ` State and local income tax withheld from your pay (W-2 boxes 17 and 19) also counts — enter it in Settings.`;
       add('info', 'Standard deduction still wins', body, { view: 'settings' });
       const closeEnough = -V.difference <= Math.max(3000, SD.total * 0.3);
       if (closeEnough && A.total > 0) {
@@ -433,7 +466,8 @@
     if (R.scheduleC.hasActivity && T('med.insurance') > 0) add('act', 'Self-employed? Move health premiums above the line', `With self-employment profit, health, dental, and long-term-care premiums (${money(T('med.insurance') + T('med.ltc'))}) can be deducted on Schedule 1 with no ${pct(P.medicalFloorRate)} floor — usually far better than Schedule A. Tell your preparer which it is.`);
 
     // Taxes
-    if (A.taxes.excess > 0) add('warn', 'State and local taxes hit the cap', `${money(A.taxes.gross)} logged but only ${money(A.taxes.cap)} can be deducted${A.taxes.phasedOut ? ' (the cap is reduced at your income level)' : ''}. ${money(A.taxes.excess)} will not count — there is no reason to prepay more this year.`);
+    if (A.taxes.withheld > 0) add('info', `${money(A.taxes.withheld)} of state tax withholding is counted`, 'Income tax withheld from your pay (W-2 boxes 17 and 19) counts toward the state-and-local deduction alongside the payments you log here.');
+    if (A.taxes.excess > 0) add('warn', 'State and local taxes hit the cap', `${money(A.taxes.gross)} ${A.taxes.withheld > 0 ? 'logged and withheld' : 'logged'} but only ${money(A.taxes.cap)} can be deducted${A.taxes.phasedOut ? ' (the cap is reduced at your income level)' : ''}. ${money(A.taxes.excess)} will not count — there is no reason to prepay more this year.`);
     if (T('tax.personal_property') > 0) add('info', 'Only the value-based part of vehicle fees counts', 'Personal property tax must be based on the item\'s value (ad valorem). Flat registration or plate fees are not deductible — check the registration notice for the breakdown.');
     if (T('int.mortgage') > 0 && T('tax.real_estate') === 0) add('act', 'Mortgage interest logged but no property tax', 'If your lender pays property tax from escrow, the amount disbursed is on Form 1098 box 10 or your annual escrow statement — it belongs on the Real Estate Tax line.', { view: 'capture' });
     const noIncomeTax = NO_INCOME_TAX_STATES.has(R.state || '');
@@ -444,6 +478,7 @@
     if (T('int.individual') > 0) add('act', 'Record the private lender\'s name, address, and TIN', 'With no Form 1098, Schedule A requires the individual lender\'s name, address, and Social Security or employer ID number. Put them in the entry note.', { view: 'ledger' });
     if (T('int.second') > 0) add('info', 'Home equity interest has a use test', 'Interest on a HELOC or second mortgage counts only if the money was used to buy, build, or substantially improve the home securing it — not for cars, tuition, or paying off cards.');
     if (T('int.points') > 0) add('info', 'Points: purchase vs. refinance', 'Points paid to buy your main home are deductible in full this year. Points on a refinance are spread evenly over the life of the loan (any unamortized balance is deductible when that loan is paid off).');
+    if (R.taxYear >= 2026 && P.pmiPhaseout && T('int.mortgage') > 0) add('info', 'Mortgage insurance premiums count again from 2026', `Premiums for mortgage insurance (Form 1098 box 5 — PMI, FHA, VA, or USDA) are deductible as mortgage interest again starting 2026, phasing out between ${money(isMFS0 ? P.pmiPhaseout.mfs[0] : P.pmiPhaseout.default[0])} and ${money(isMFS0 ? P.pmiPhaseout.mfs[1] : P.pmiPhaseout.default[1])} of AGI. Log the box 5 amount on the Home Mortgage Interest line.`);
     if (T('int.investment') > 0) add('info', 'Investment interest is limited to investment income', 'Margin and other investment interest is deductible only up to net investment income, on Form 4952; the excess carries forward.');
 
     // Charity
@@ -455,13 +490,14 @@
     else if (A.charity.nonCashNeedsForm8283) add('act', 'Non-cash gifts total over $500 — Form 8283', `${money(A.charity.noncash)} of donated goods requires Form 8283. For each drop-off keep the dated receipt plus your own list: item, condition, and thrift-shop value. Items must be in good used condition or better.`);
     if (T('ch.cfc') > 0) add('info', 'CFC: keep the pledge card and final pay statement', 'Payroll-deducted Combined Federal Campaign gifts are substantiated by your pledge confirmation together with the last pay statement of the year showing the total withheld.');
     if (A.charity.volunteer > 0) add('info', 'Volunteer costs count, your time does not', `${money(A.charity.volunteer)} of out-of-pocket volunteer costs${T('vol.miles') > 0 ? ` (including ${T('vol.miles').toLocaleString()} miles at ${perMile(P.mileage.charity)})` : ''} are treated as gifts to the organization. Keep a note of the event and the organization for each.`);
-    if (A.charity.cashLimit != null && A.charity.cash > A.charity.cashLimit) add('warn', 'Cash gifts exceed the AGI limit', `Cash gifts are deductible up to ${pct(P.charityCashAgiLimit)} of AGI (${money(A.charity.cashLimit)}). The excess is not lost — it carries forward up to five years.`);
+    if (A.charity.carryforward > 0) add('warn', 'Gifts exceed the AGI limit', `Charitable gifts are deductible up to ${pct(P.charityCashAgiLimit)} of AGI (${money(A.charity.cashLimit)}) this year, so ${money(A.charity.carryforward)} is left out of the total. It is not lost — it carries forward up to five years. Gifts of property can be subject to lower 30% or 50% limits that this worksheet cannot tell apart; your preparer will.`);
+    else if (A.charity.limitPending && A.charity.gross > 0 && A.charity.gross > 5000) add('info', 'Large gifts: enter your AGI', `Gifts are deductible only up to ${pct(P.charityCashAgiLimit)} of AGI in a year. Enter your estimated AGI in Settings to see whether ${money(A.charity.gross)} all counts this year.`, { view: 'settings' });
     if (P.charityFloorRate > 0 && A.charity.gross > 0 && V.itemize) {
       if (agi == null) add('info', `A ${pct(P.charityFloorRate)}-of-AGI floor applies to gifts`, `From ${R.taxYear}, itemizers lose the first ${pct(P.charityFloorRate)} of AGI of charitable gifts. Enter your AGI to see the effect.`, { view: 'settings' });
       else add('info', `First ${money(A.charity.floor)} of gifts does not count`, `Itemizers lose the first ${pct(P.charityFloorRate)} of AGI of charitable gifts starting ${R.taxYear}. ${money(A.charity.deductible)} of your ${money(A.charity.gross)} counts.`);
     }
     if (P.nonItemizerCharity && !V.itemize && A.charity.cash > 0) {
-      const cap = R.married && R.filingStatus !== 'mfs' ? P.nonItemizerCharity.mfj : P.nonItemizerCharity.single;
+      const cap = R.filingStatus === 'mfj' ? P.nonItemizerCharity.mfj : P.nonItemizerCharity.single; // $2,000 is for joint returns only
       add('good', 'Cash gifts count even without itemizing', `Starting ${R.taxYear}, non-itemizers can deduct up to ${money(cap)} of cash gifts. You have logged ${money(A.charity.cash)} — ${money(Math.min(cap, A.charity.cash))} of it counts on top of the standard deduction.`);
     }
 
@@ -471,9 +507,10 @@
       else add('info', `${money(A.other.deductible)} of gambling losses count`, `Limited to ${money(A.other.gamblingWinnings)} of winnings${P.gamblingLossRate < 1 ? `, and only ${pct(P.gamblingLossRate)} of losses are allowed from ${R.taxYear}` : ''}. Keep a diary: date, place, game, amounts won and lost, and any W-2G.`);
     }
     if (A.casualty.gross > 0) {
-      if (!A.casualty.federalDisaster) add('warn', 'Casualty losses count only for declared disasters', `${money(A.casualty.gross)} logged. Personal casualty and theft losses are deductible only when attributable to a federally declared disaster. If yours was, turn that on in Settings and keep the FEMA declaration number.`, { view: 'settings' });
+      if (!A.casualty.federalDisaster) add('warn', 'Casualty losses count only for declared disasters', `${money(A.casualty.gross)} logged. Personal casualty and theft losses are deductible only when attributable to a ${R.taxYear >= 2026 ? 'federally or state-declared disaster (from 2026 a governor\'s declaration also qualifies)' : 'federally declared disaster'}. If yours was, turn that on in Settings and keep the declaration number.`, { view: 'settings' });
       else if (A.casualty.afterLimits == null) add('act', 'Enter AGI to size the casualty loss', 'Disaster losses are reduced by insurance reimbursement, $100 per event, and 10% of AGI (Form 4684).', { view: 'settings' });
-      else add('info', `${money(A.casualty.deductible)} of the disaster loss counts`, `After the ${money(P.casualtyPerEvent)} per-event reduction and ${pct(P.casualtyAgiRate)} of AGI. Log only the unreimbursed loss (Form 4684).`);
+      else if (A.casualty.qualified) add('info', `${money(A.casualty.deductible)} of the qualified disaster loss counts`, `After a ${money(A.casualty.perEvent)} per-event reduction and with no AGI reduction. A qualified disaster loss counts on top of the standard deduction if you do not itemize, so it is included in your ${money(SD.total)} standard deduction figure. Log only the unreimbursed loss (Form 4684).`);
+      else add('info', `${money(A.casualty.deductible)} of the disaster loss counts`, `After the ${money(P.casualtyPerEvent)} per-event reduction and ${pct(P.casualtyAgiRate)} of AGI. Log only the unreimbursed loss (Form 4684).${R.taxYear <= 2025 ? ' If FEMA declared this disaster between 2020 and early 2025 it is probably a "qualified disaster loss": a $500 floor, no AGI reduction, and it counts even without itemizing — turn that on in Settings.' : ''}`, { view: 'settings' });
     }
 
     // Above the line & credits
@@ -482,9 +519,10 @@
       if (SLI.phase === 'mfs') add('warn', 'Student loan interest is not allowed when filing separately', 'Married filing separately cannot take the student loan interest deduction.');
       else if (SLI.phase === 'out') add('warn', 'Income is above the student loan interest phase-out', `At ${money(agi)} of AGI the deduction is fully phased out this year.`);
       else if (SLI.phase === 'partial') add('info', 'Student loan interest is partly phased out', `${money(SLI.deductible)} of ${money(Math.min(SLI.paid, SLI.cap))} is allowed at your income.`);
-      else add('good', `${money(SLI.deductible)} of student loan interest counts without itemizing`, `${SLI.paid > SLI.cap ? `Capped at ${money(SLI.cap)} of the ${money(SLI.paid)} paid. ` : ''}This is an adjustment to income, so it helps even if you take the standard deduction. Your servicer's Form 1098-E is the proof.${P.studentLoanPhaseout ? '' : ' It phases out at higher incomes — see IRS Publication 970 for this year\'s range.'}`);
+      else add(SLI.phaseoutChecked ? 'good' : 'info', `${money(SLI.deductible)} of student loan interest ${SLI.phaseoutChecked ? 'counts' : 'may count'} without itemizing`, `${SLI.paid > SLI.cap ? `Capped at ${money(SLI.cap)} of the ${money(SLI.paid)} paid. ` : ''}This is an adjustment to income, so it helps even if you take the standard deduction. Your servicer's Form 1098-E is the proof.${SLI.phaseoutChecked ? '' : (agi == null ? ' It phases out at higher incomes — enter your estimated AGI in Settings to check.' : ' It phases out at higher incomes and the range for this year is not built in — see IRS Publication 970.')}`, SLI.phaseoutChecked ? undefined : { view: 'settings' });
     }
-    if (R.credits.tuition > 0) add('good', 'Tuition may qualify for an education credit', `The American Opportunity Credit (up to $2,500 per student, first four years) or Lifetime Learning Credit (up to $2,000) is usually worth far more than a deduction. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged).`);
+    if (R.credits.tuition > 0 && R.filingStatus === 'mfs') add('warn', 'Education credits are not allowed when married filing separately', `The American Opportunity and Lifetime Learning credits require a joint return for married couples, so ${money(R.credits.tuition)} of tuition earns no credit on a separate return. Filing jointly may be worth more than the separate returns — ask your preparer.`);
+    else if (R.credits.tuition > 0) add('good', 'Tuition may qualify for an education credit', `The American Opportunity Credit (up to $2,500 per student, first four years) or Lifetime Learning Credit (up to $2,000) is usually worth far more than a deduction. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged).`);
     else if (R.credits.educationCosts > 0) add('info', 'Education costs: tell your preparer the purpose', `${money(R.credits.educationCosts)} logged. Costs for a degree program may support a credit; K-12 educators can deduct up to $300 of classroom expenses above the line; job-related training for employees is generally not deductible.`);
 
     // Schedule C

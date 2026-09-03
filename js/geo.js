@@ -47,20 +47,31 @@
    * tiny wobbles are ignored, and impossible jumps (teleports) are dropped.
    */
   function trackMeters(points, opts) {
-    const o = Object.assign({ maxAccuracy: 60, maxSpeed: 70, minStep: 6 }, opts || {}); // maxSpeed in m/s
-    let total = 0, last = null;
+    const o = Object.assign({ maxAccuracy: 60, maxSpeed: 70, minStep: 6, minSpeed: 0.5 }, opts || {}); // speeds in m/s
+    let total = 0, last = null, pending = null;
     for (const p of points || []) {
+      if (p && p.gap) { last = null; pending = null; continue; } // a pause: the straight line to the resume point is not driven
       if (!p || !isFinite(p.lat) || !isFinite(p.lon)) continue;
       if (p.acc != null && p.acc > o.maxAccuracy) continue;
+      // a fix that reports itself as standing still is jitter, not distance
+      if (p.speed != null && isFinite(p.speed) && p.speed >= 0 && p.speed < o.minSpeed) continue;
       if (!last) { last = p; continue; }
       const d = haversineMeters(last, p);
-      if (d < o.minStep) continue;
+      // a point must move farther than its own error radius before it counts, or a parked car drifts for miles
+      const step = Math.max(o.minStep, ((Number(last.acc) || 0) + (Number(p.acc) || 0)) / 2);
+      if (d < step) continue;
       if (p.t != null && last.t != null) {
         const dt = (p.t - last.t) / 1000;
-        if (dt > 0 && d / dt > o.maxSpeed) continue;
+        if (dt <= 0 || d / dt > o.maxSpeed) {
+          // impossible jump: if two rejected fixes agree with each other, the old anchor was the outlier — re-anchor without adding the jump
+          if (pending && pending.t != null && p.t > pending.t && haversineMeters(pending, p) / ((p.t - pending.t) / 1000) <= o.maxSpeed) last = pending;
+          pending = p;
+          continue;
+        }
       }
       total += d;
       last = p;
+      pending = null;
     }
     return total;
   }
@@ -70,18 +81,21 @@
   function thin(points, stepMeters) {
     const step = stepMeters || 10;
     const out = [];
+    let lastKept = null;
     for (const p of points || []) {
+      if (p && p.gap) { if (out.length && !out[out.length - 1].gap) out.push(p); lastKept = null; continue; } // keep the pause marker
       if (!p || !isFinite(p.lat) || !isFinite(p.lon)) continue;
-      if (!out.length || haversineMeters(out[out.length - 1], p) >= step) out.push(p);
+      if (!lastKept || haversineMeters(lastKept, p) >= step) { out.push(p); lastKept = p; }
     }
-    if (points && points.length > 1 && out.length && out[out.length - 1] !== points[points.length - 1]) out.push(points[points.length - 1]);
+    const tail = points && points.length > 1 ? points[points.length - 1] : null;
+    if (tail && !tail.gap && out.length && out[out.length - 1] !== tail) out.push(tail);
     return out;
   }
 
   function bounds(points) {
     let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
     for (const p of points || []) {
-      if (!p || !isFinite(p.lat) || !isFinite(p.lon)) continue;
+      if (!p || p.gap || !isFinite(p.lat) || !isFinite(p.lon)) continue;
       minLat = Math.min(minLat, p.lat); maxLat = Math.max(maxLat, p.lat);
       minLon = Math.min(minLon, p.lon); maxLon = Math.max(maxLon, p.lon);
     }
@@ -91,40 +105,55 @@
   /** Draw a track on a canvas: equirectangular projection fitted to the box, start/end markers, scale bar. */
   function sketch(canvas, points, opts) {
     if (!canvas || !canvas.getContext) return false;
-    const o = Object.assign({ line: '#0e6b52', start: '#0e6b52', end: '#d03b3b', ink: '#75817a', bg: 'transparent', pad: 18 }, opts || {});
+    const o = Object.assign({ line: '#0e6b52', start: '#0e6b52', end: '#d03b3b', ink: '#75817a', bg: 'transparent', pad: 18, dpr: 1, maxAccuracy: 60, minExtentMeters: 150 }, opts || {});
     const ctx = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height;
+    const dpr = o.dpr > 0 ? o.dpr : 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels on a device-pixel buffer
+    const W = canvas.width / dpr, H = canvas.height / dpr;
     ctx.clearRect(0, 0, W, H);
     if (o.bg !== 'transparent') { ctx.fillStyle = o.bg; ctx.fillRect(0, 0, W, H); }
-    const pts = (points || []).filter((p) => p && isFinite(p.lat) && isFinite(p.lon));
-    const b = bounds(pts);
-    if (!b || pts.length < 2) {
+    const finite = (points || []).filter((p) => p && (p.gap || (isFinite(p.lat) && isFinite(p.lon))));
+    // the same accuracy gate as the distance, so a few wild fixes do not stretch the picture
+    let pts = finite.filter((p) => p.gap || p.acc == null || p.acc <= o.maxAccuracy);
+    if (pts.filter((p) => !p.gap).length < 2) pts = finite;
+    const real = pts.filter((p) => !p.gap);
+    const b = bounds(real);
+    if (!b || real.length < 2) {
       ctx.fillStyle = o.ink; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(pts.length ? 'Waiting for movement…' : 'No track yet', W / 2, H / 2);
+      ctx.fillText(real.length ? 'Waiting for movement…' : 'No track yet', W / 2, H / 2);
       return false;
     }
     const midLat = (b.minLat + b.maxLat) / 2;
     const kx = Math.cos(toRad(midLat));
-    const spanX = Math.max(1e-6, (b.maxLon - b.minLon) * kx), spanY = Math.max(1e-6, b.maxLat - b.minLat);
+    // never magnify GPS jitter to fill the box: a track spans at least minExtentMeters
+    const minDeg = o.minExtentMeters / ((Math.PI / 180) * EARTH_RADIUS_M);
+    const spanX = Math.max(minDeg, (b.maxLon - b.minLon) * kx), spanY = Math.max(minDeg, b.maxLat - b.minLat);
     const scale = Math.min((W - 2 * o.pad) / spanX, (H - 2 * o.pad) / spanY);
-    const offX = (W - spanX * scale) / 2, offY = (H - spanY * scale) / 2;
-    const X = (p) => offX + (p.lon - b.minLon) * kx * scale;
-    const Y = (p) => H - (offY + (p.lat - b.minLat) * scale);
+    const cx = ((b.minLon + b.maxLon) / 2) * kx, cy = (b.minLat + b.maxLat) / 2;
+    const X = (p) => W / 2 + (p.lon * kx - cx) * scale;
+    const Y = (p) => H / 2 - (p.lat - cy) * scale;
     ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.strokeStyle = o.line;
     ctx.beginPath();
-    pts.forEach((p, i) => (i ? ctx.lineTo(X(p), Y(p)) : ctx.moveTo(X(p), Y(p))));
+    let pen = false;
+    for (const p of pts) {
+      if (p.gap) { pen = false; continue; } // a pause is a break in the line
+      if (pen) ctx.lineTo(X(p), Y(p)); else ctx.moveTo(X(p), Y(p));
+      pen = true;
+    }
     ctx.stroke();
     const dot = (p, color) => { ctx.beginPath(); ctx.arc(X(p), Y(p), 5, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke(); };
-    dot(pts[0], o.start); dot(pts[pts.length - 1], o.end);
-    // scale bar: a round number of miles that fits a third of the width
-    const metersPerPx = 1 / (scale * (Math.PI / 180) * EARTH_RADIUS_M); // degrees → meters, latitude direction
+    dot(real[0], o.start); dot(real[real.length - 1], o.end);
+    // scale bar: a round number of miles that fits a third of the width (skipped when even the smallest would not fit)
+    const metersPerPx = ((Math.PI / 180) * EARTH_RADIUS_M) / scale; // scale is px per degree of latitude
     const targetMiles = metersToMiles((W / 3) * metersPerPx);
-    const nice = [0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 50, 100].filter((n) => n <= targetMiles).pop() || 0.1;
+    const nice = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 50, 100].filter((n) => n <= targetMiles).pop() || 0.05;
     const barPx = milesToMeters(nice) / metersPerPx;
-    ctx.strokeStyle = o.ink; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(o.pad, H - 8); ctx.lineTo(o.pad + barPx, H - 8); ctx.stroke();
-    ctx.fillStyle = o.ink; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'left';
-    ctx.fillText(`${nice} mi`, o.pad, H - 12);
+    if (barPx <= W - 2 * o.pad) {
+      ctx.strokeStyle = o.ink; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(o.pad, H - 8); ctx.lineTo(o.pad + barPx, H - 8); ctx.stroke();
+      ctx.fillStyle = o.ink; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText(`${nice} mi`, o.pad, H - 12);
+    }
     return true;
   }
 
@@ -133,7 +162,8 @@
   const hasGeolocation = () => typeof navigator !== 'undefined' && !!navigator.geolocation;
 
   function toPoint(pos) {
-    return { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, t: pos.timestamp || Date.now() };
+    const speed = pos.coords.speed;
+    return { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, speed: speed != null && isFinite(speed) ? speed : null, t: pos.timestamp || Date.now() };
   }
 
   function getPosition(opts) {
@@ -147,7 +177,7 @@
     if (!err) return 'Location unavailable.';
     if (err.code === 1) return 'Location permission was denied. Allow it in the browser settings to record trips.';
     if (err.code === 2) return 'Location is unavailable right now.';
-    if (err.code === 3) return 'Location timed out. Try again outdoors or with GPS on.';
+    if (err.code === 3) return 'Waiting for a GPS fix…';
     return err.message || 'Location unavailable.';
   }
 
@@ -157,22 +187,44 @@
    */
   function createRecorder(handlers) {
     handlers = handlers || {};
-    const rec = { state: 'idle', points: [], miles: 0, startedAt: null, endedAt: null, last: null, error: null, watchId: null, wakeLock: null };
+    const rec = { state: 'idle', points: [], miles: 0, startedAt: null, endedAt: null, pausedMs: 0, pausedAt: null, last: null, error: null, waiting: false, watchId: null, wakeLock: null };
     const update = () => { rec.miles = roundMiles(trackMiles(rec.points)); if (handlers.onUpdate) handlers.onUpdate(rec); };
-    const onPos = (pos) => { if (rec.state !== 'recording') return; const p = toPoint(pos); rec.points.push(p); rec.last = p; update(); };
-    const onErr = (err) => { if (rec.state !== 'recording') return; rec.error = geoErrorText(err); if (handlers.onError) handlers.onError(rec.error, rec); };
+    const clearWatch = () => { if (rec.watchId != null && hasGeolocation()) navigator.geolocation.clearWatch(rec.watchId); rec.watchId = null; };
+    const onPos = (pos) => { if (rec.state !== 'recording') return; const p = toPoint(pos); rec.points.push(p); rec.last = p; rec.error = null; rec.waiting = false; update(); };
+    const onErr = (err) => {
+      if (rec.state !== 'recording') return;
+      if (err && err.code === 3) { rec.waiting = true; update(); return; } // no fix yet: a quiet status, not an error
+      rec.error = geoErrorText(err);
+      if (err && err.code === 1) { clearWatch(); unlock(); rec.state = 'idle'; rec.endedAt = Date.now(); } // permission denied: nothing is being recorded
+      if (handlers.onError) handlers.onError(rec.error, rec);
+      update();
+    };
+    const onVis = () => { if (rec.state === 'recording' && typeof document !== 'undefined' && document.visibilityState === 'visible') lock(); };
     async function lock() {
-      try { if (typeof navigator !== 'undefined' && navigator.wakeLock && !rec.wakeLock) rec.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { /* optional */ }
+      try {
+        if (typeof navigator === 'undefined' || !navigator.wakeLock) return;
+        if (rec.wakeLock && !rec.wakeLock.released) return;
+        const wl = await navigator.wakeLock.request('screen');
+        rec.wakeLock = wl;
+        wl.addEventListener('release', () => { if (rec.wakeLock === wl) rec.wakeLock = null; }); // the browser released it (screen off, tab hidden)
+      } catch (e) { /* optional */ }
     }
     async function unlock() {
-      try { if (rec.wakeLock) { await rec.wakeLock.release(); rec.wakeLock = null; } } catch (e) { /* optional */ }
+      const wl = rec.wakeLock; rec.wakeLock = null;
+      try { if (wl) await wl.release(); } catch (e) { /* optional */ }
     }
     rec.start = function () {
       if (!hasGeolocation()) { rec.error = 'This device does not offer location.'; if (handlers.onError) handlers.onError(rec.error, rec); return false; }
       if (rec.state === 'recording') return true;
-      if (rec.state === 'idle') { rec.points = []; rec.miles = 0; rec.startedAt = Date.now(); rec.endedAt = null; }
-      rec.state = 'recording'; rec.error = null;
-      rec.watchId = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+      if (rec.state === 'idle') { rec.points = []; rec.miles = 0; rec.startedAt = Date.now(); rec.endedAt = null; rec.pausedMs = 0; }
+      if (rec.state === 'paused') {
+        if (rec.pausedAt) rec.pausedMs += Date.now() - rec.pausedAt;
+        if (rec.points.length) rec.points.push({ gap: true }); // the distance between the pause and resume points was not driven
+      }
+      rec.pausedAt = null;
+      rec.state = 'recording'; rec.error = null; rec.waiting = true;
+      rec.watchId = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 60000 });
+      if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('visibilitychange', onVis);
       lock();
       update();
       return true;
@@ -180,19 +232,24 @@
     rec.pause = function () {
       if (rec.state !== 'recording') return;
       rec.state = 'paused';
-      if (rec.watchId != null) { navigator.geolocation.clearWatch(rec.watchId); rec.watchId = null; }
+      rec.pausedAt = Date.now();
+      clearWatch();
+      if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', onVis);
       unlock();
       update();
     };
     rec.resume = function () { if (rec.state === 'paused') rec.start(); };
     rec.stop = function () {
-      if (rec.watchId != null) { navigator.geolocation.clearWatch(rec.watchId); rec.watchId = null; }
+      clearWatch();
+      if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', onVis);
       unlock();
+      if (rec.state === 'paused' && rec.pausedAt) rec.pausedMs += Date.now() - rec.pausedAt;
+      rec.pausedAt = null;
       rec.state = 'idle';
       rec.endedAt = Date.now();
-      rec.error = null;
+      rec.error = null; rec.waiting = false;
       update();
-      return { points: thin(rec.points, 10), miles: rec.miles, startedAt: rec.startedAt, endedAt: rec.endedAt };
+      return { points: thin(rec.points, 10), miles: rec.miles, startedAt: rec.startedAt, endedAt: rec.endedAt, pausedMs: rec.pausedMs };
     };
     return rec;
   }
@@ -204,13 +261,16 @@
   async function fetchJSON(url, opts) {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => ctl.abort(), (opts && opts.timeout) || 9000) : null;
+    let res;
     try {
-      const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctl ? ctl.signal : undefined });
-      if (!res.ok) throw new Error(`Lookup failed (${res.status}).`);
-      return await res.json();
+      res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctl ? ctl.signal : undefined });
     } catch (e) {
       throw new Error(/abort/i.test(String(e && e.name)) ? 'The lookup timed out.' : 'Online lookup is not available here. Check the connection, or enter the value by hand.');
     } finally { if (timer) clearTimeout(timer); }
+    // the status says what went wrong; "check the connection" would be misleading for a refusal
+    if (res.status === 429) throw new Error('The lookup service is busy; try again in a minute.');
+    if (!res.ok) throw new Error(`The lookup service refused this request (${res.status}). Enter the value by hand.`);
+    try { return await res.json(); } catch (e) { throw new Error('The lookup service sent an unreadable reply. Enter the value by hand.'); }
   }
 
   const NOMINATIM = 'https://nominatim.openstreetmap.org';
@@ -242,15 +302,21 @@
    * Federal disaster declarations for a state since a date, optionally narrowed to a county.
    * Source: OpenFEMA DisasterDeclarationsSummaries (public, no key).
    */
+  /** "Wake (County)", "Orleans (Parish)", "Wake County" → "wake": the bare area name for exact comparison. */
+  const areaName = (s) => String(s || '').toLowerCase().replace(/\s*\(.*\)\s*$/, '').replace(/\s+(county|parish|borough|census area|municipality|municipio|independent city|city and borough)$/, '').trim();
   async function femaDeclarations(params) {
     const state = String(params.state || '').toUpperCase();
     if (!/^[A-Z]{2}$/.test(state)) throw new Error('Pick a state first.');
     const since = params.since || `${new Date().getFullYear()}-01-01`;
-    const filter = `state eq '${state}' and declarationDate ge '${since}T00:00:00.000z'`;
-    const url = `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=${encodeURIComponent(filter)}&$orderby=declarationDate%20desc&$top=100&$select=disasterNumber,declarationTitle,declarationDate,declarationType,designatedArea,incidentType,incidentBeginDate,incidentEndDate,state`;
+    const county = areaName(params.county);
+    // A declaration is often dated weeks after the incident, so match either date against the tax year; a county filter runs
+    // on the server too, so the row cap applies to this county's declarations rather than to the whole state's.
+    let filter = `state eq '${state}' and (declarationDate ge '${since}T00:00:00.000z' or incidentBeginDate ge '${since}T00:00:00.000z')`;
+    if (county) filter += ` and (substringof('${county.replace(/'/g, "''")}', designatedArea) or designatedArea eq 'Statewide')`;
+    const url = `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=${encodeURIComponent(filter)}&$orderby=declarationDate%20desc&$top=1000&$select=disasterNumber,declarationTitle,declarationDate,declarationType,designatedArea,incidentType,incidentBeginDate,incidentEndDate,state`;
     const data = await fetchJSON(url, { timeout: 12000 });
     let items = (data && data.DisasterDeclarationsSummaries) || [];
-    if (params.county) { const c = String(params.county).toLowerCase().replace(/\s+county$/, ''); items = items.filter((d) => String(d.designatedArea || '').toLowerCase().includes(c) || /statewide/i.test(d.designatedArea || '')); }
+    if (county) items = items.filter((d) => areaName(d.designatedArea) === county || /statewide/i.test(d.designatedArea || ''));
     // one row per declaration number
     const seen = new Set();
     return items.filter((d) => { if (seen.has(d.disasterNumber)) return false; seen.add(d.disasterNumber); return true; })
@@ -272,5 +338,5 @@
   ];
   const lineForCategory = (cat) => { const c = PLACE_CATEGORIES.find((x) => x.id === cat); return c ? c.lineId : null; };
 
-  return { ROAD_FACTOR, haversineMeters, haversineMiles, metersToMiles, milesToMeters, roundMiles, estimateRoadMiles, trackMeters, trackMiles, thin, bounds, sketch, hasGeolocation, getPosition, createRecorder, isOnline, geocode, reverse, routeMiles, femaDeclarations, osmLink, geoURI, US_STATES, PLACE_CATEGORIES, lineForCategory };
+  return { ROAD_FACTOR, areaName, haversineMeters, haversineMiles, metersToMiles, milesToMeters, roundMiles, estimateRoadMiles, trackMeters, trackMiles, thin, bounds, sketch, hasGeolocation, getPosition, createRecorder, isOnline, geocode, reverse, routeMiles, femaDeclarations, osmLink, geoURI, US_STATES, PLACE_CATEGORIES, lineForCategory };
 });
