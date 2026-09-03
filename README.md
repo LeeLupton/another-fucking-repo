@@ -24,6 +24,14 @@ It runs entirely in the browser, stores everything on the device, installs to a 
 
 **Settings.** Filing status, AGI, age and vision, gambling winnings, state (typed or from your location; a no-income-tax state gets the sales-tax note instead), a FEMA declaration lookup for the casualty line, editable rates and thresholds per tax year, backup and restore including receipts, places, and trips.
 
+## Experiments
+
+Three ways the app studies its own judgement and checks it later, all on the device, all switchable in Settings, all expiring:
+
+- **Forecast snapshots.** Once a month the advisor's year-end forecast is written down. When the year closes, every snapshot is compared with the final figure on the Advisor page (how far off, whether the itemize call was right) and the advisor calibrates the "expected to come" part of future forecasts from the median of what actually came. Snapshots older than 24 months are dropped.
+- **Correction learning.** Override a suggested line and the keywords behind the wrong suggestion lose weight for you, while the keywords behind your choice gain some. Weights drift back to neutral and are forgotten; the current ones are listed in Settings.
+- **Session nudges.** Right after a save, at most one follow-up based only on what was just logged: add the drive to that visit, log the year's total miles, attach the acknowledgment for a gift of $250 or more. Nothing about it is stored.
+
 ## Run it locally
 
 No install, no build.

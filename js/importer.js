@@ -164,7 +164,7 @@
       const key = dupKey(x.date, x.amount);
       const duplicate = existing.has(key) || seenHere.has(key);
       seenHere.add(key);
-      const res = Classify.classify([x.description, x.memo].filter(Boolean).join(' '), { learned: opts.learned, limit: 3 });
+      const res = Classify.classify([x.description, x.memo].filter(Boolean).join(' '), { learned: opts.learned, weights: opts.weights, limit: 3 });
       const top = res.suggestions[0] || null;
       return Object.assign({}, x, {
         duplicate,

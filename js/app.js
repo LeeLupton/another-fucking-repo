@@ -18,6 +18,7 @@
   const G = globalThis.ItemizerGeo;
   const IMP = globalThis.ItemizerImporter;
   const VAL = globalThis.ItemizerValuation;
+  const EXP = globalThis.ItemizerExperiments;
 
   const VIEWS = ['capture', 'ledger', 'advisor', 'insights', 'worksheet', 'settings'];
   const $ = (sel, root) => (root || document).querySelector(sel);
@@ -57,6 +58,8 @@
     importer: null,
     donation: null,
     showReceiptSheet: false,
+    validation: [],
+    session: { nudged: new Set() },
   };
 
   function freshCapture() {
@@ -79,7 +82,57 @@
   function recompute() {
     const today = P.todayISO();
     state.computed = R.compute(state.entries, Object.assign({}, state.settings, { today }));
-    state.advice = ADV.analyze({ entries: state.entries, settings: state.settings, computed: state.computed, today });
+    const ex = state.settings.experiments || {};
+    const snaps = state.settings.forecastSnapshots || [];
+    // Finished years with snapshots get their final figure, so past forecasts can be checked.
+    const thisYear = Number(today.slice(0, 4));
+    const finals = {};
+    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today })).scheduleA.total;
+    state.validation = EXP.validate(snaps, finals);
+    const calibration = ex.snapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
+    state.advice = ADV.analyze({ entries: state.entries, settings: state.settings, computed: state.computed, today, calibration });
+    maybeSnapshot(today);
+  }
+  /** Once a month, write down the live year's forecast so it can be checked when the year closes. */
+  function maybeSnapshot(today) {
+    const ex = state.settings.experiments || {};
+    if (ex.snapshots === false) return;
+    const pr = state.advice && state.advice.projection;
+    if (!pr || Number(state.settings.taxYear) !== Number(today.slice(0, 4)) || !state.computed.entries.length) return;
+    const s = { today, taxYear: state.computed.taxYear, actual: pr.actual, expectedMore: pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore, projectedTotal: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore), standardDeduction: pr.standardDeduction, itemize: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore) > pr.standardDeduction };
+    if (!EXP.changed(state.settings.forecastSnapshots || [], s)) return;
+    state.settings.forecastSnapshots = EXP.snapshot(state.settings.forecastSnapshots || [], s);
+    DB.saveSettings(state.settings).catch(() => {});
+  }
+  const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  /** Learn from which line was chosen versus which was suggested (experiments.js). */
+  function learnFromChoice(suggestions, chosenLineId) {
+    const ex = state.settings.experiments || {};
+    if (ex.corrections === false || !suggestions || !suggestions.length || !chosenLineId) return;
+    const top = suggestions[0];
+    const chosen = suggestions.find((x) => x.lineId === chosenLineId);
+    state.settings.keywordWeights = EXP.applyCorrection(state.settings.keywordWeights, top.lineId, (top.because || []).filter(EXP.isKeyword), chosenLineId, chosen ? (chosen.because || []).filter(EXP.isKeyword) : []);
+    DB.saveSettings(state.settings).catch(() => {});
+  }
+  /** One follow-up right after a save, based only on what was just logged. Nothing is stored. */
+  function sessionNudge(entry) {
+    const ex = state.settings.experiments || {};
+    if (ex.nudges === false || !entry) return;
+    const line = S.getLine(entry.lineId); if (!line) return;
+    const once = (k) => { if (state.session.nudged.has(k)) return false; state.session.nudged.add(k); return true; };
+    const dayMs = 86400000;
+    if (ADV.VISIT_LINES.includes(entry.lineId)) {
+      const hasDrive = state.entries.some((e) => e.lineId === 'med.miles' && Math.abs(new Date(e.date + 'T00:00:00') - new Date(entry.date + 'T00:00:00')) <= dayMs);
+      const history = state.entries.filter((e) => e.lineId === 'med.miles').map((e) => Number(e.amount) || 0);
+      if (!hasDrive && (history.length || state.places.some((p) => p.category === 'medical')) && once('drive:' + entry.id)) {
+        const typical = history.length ? median(history) : '';
+        setTimeout(() => toast(`Saved. Add the drive to ${entry.description || line.label}?`, 9000, { label: 'Add drive', onClick: () => prefillCapture({ lineId: 'med.miles', amount: typical, description: `Round trip — ${entry.description || line.label}`, date: entry.date }) }), 60);
+      }
+    } else if (entry.lineId === 'se.miles' && !state.entries.some((e) => e.lineId === 'se.total_miles' && Number(e.taxYear) === Number(entry.taxYear)) && once('totalmiles:' + entry.taxYear)) {
+      setTimeout(() => toast("Saved. Schedule C also needs the year's total miles.", 9000, { label: 'Log total miles', onClick: () => prefillCapture({ lineId: 'se.total_miles', amount: '', description: 'Odometer, all miles this year', date: `${entry.taxYear}-12-31` }) }), 60);
+    } else if (['ch.worship', 'ch.college', 'ch.org', 'ch.cfc', 'ch.other'].includes(entry.lineId) && Number(entry.amount) >= state.computed.params.acknowledgmentThreshold && !entry.hasReceipt && once('ack:' + entry.id)) {
+      setTimeout(() => toast("Saved. Gifts of $250 or more need the charity's written acknowledgment; attach it when it arrives.", 6000), 60);
+    }
   }
 
   function yearEntries() { return state.computed ? state.computed.entries : []; }
@@ -751,7 +804,7 @@
     const I = state.importer; if (!I) return;
     const norm = IMP.normalize(I.raw, I.map, { spendIsNegative: I.spendIsNegative });
     I.spendIsNegative = norm.spendIsNegative;
-    I.rows = IMP.review(norm.rows, { learned: state.settings.learned, existingEntries: state.entries });
+    I.rows = IMP.review(norm.rows, { learned: state.settings.learned, weights: state.settings.keywordWeights, existingEntries: state.entries });
     I.headers = I.map.headerRow ? I.raw[0] : I.raw[0].map((_, i) => `Column ${i + 1}`);
   }
   async function onCSVFile(file) {
@@ -797,6 +850,7 @@
       await DB.putEntries(entries);
       state.entries.push(...entries);
       for (const r of chosen) if (r.description) C.learn(state.settings.learned, r.description, r.lineId);
+      for (const r of chosen) learnFromChoice(r.suggestions, r.lineId);
       if (I.map.headerRow && I.signature) {
         state.settings.importMappings = state.settings.importMappings || {};
         state.settings.importMappings[I.signature] = { map: { date: I.map.date, description: I.map.description, amount: I.map.amount, debit: I.map.debit, credit: I.map.credit, memo: I.map.memo, headerRow: true }, spendIsNegative: I.spendIsNegative };
@@ -910,7 +964,7 @@
   function reclassify() {
     const cap = state.capture;
     const textForClass = [cap.description, cap.parsed && cap.parsed.raw !== cap.description ? cap.text : ''].filter(Boolean).join(' ');
-    const res = C.classify(textForClass, { learned: state.settings.learned, miles: cap.parsed ? cap.parsed.miles != null : false, limit: 4 });
+    const res = C.classify(textForClass, { learned: state.settings.learned, weights: state.settings.keywordWeights, miles: cap.parsed ? cap.parsed.miles != null : false, limit: 4 });
     cap.suggestions = res.suggestions;
     cap.nonDeductible = res.nonDeductible;
   }
@@ -999,6 +1053,7 @@
     if (receiptId) { await DB.putReceipt({ id: receiptId, entryId: entries[0].id, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob }); }
     await DB.putEntries(entries);
     state.entries.push(...entries);
+    learnFromChoice(cap.suggestions, cap.lineId);
     if (cap.description.trim()) { C.learn(state.settings.learned, cap.description, cap.lineId); await DB.saveSettings(state.settings); }
     const fileYear = entries[0].taxYear;
     const label = isMiles ? fmtMiles(value) : moneyCents(saved);
@@ -1008,6 +1063,7 @@
     state.capture.date = todayInYear();
     renderCapture();
     $('#quickInput').focus();
+    sessionNudge(entries[0]);
   }
 
   async function onReceiptFile(file) {
@@ -1572,7 +1628,7 @@
         <div class="verdict-kicker"><span class="pill pill-accent">Year-end forecast</span><span class="pill pill-info">${R0.taxYear}</span>${pr.projectedEntries ? `<span class="pill pill-info">${pr.projectedEntries} expected ${pr.projectedEntries === 1 ? 'entry' : 'entries'} still to come</span>` : ''}</div>
         <h2 class="verdict-title">${pr.itemize ? 'On pace to itemize' : 'On pace for the standard deduction'}</h2>
         <div class="hero">${pr.itemize ? `${money(pr.projectedTotal - pr.standardDeduction)} <small>projected above the standard deduction</small>` : `${money(pr.gap)} <small>projected short of itemizing</small>`}</div>
-        <p class="verdict-note">${money(pr.actual)} counts so far. Recurring payees found in your entries should add about ${money(pr.expectedMore)} by Dec 31, for a projected ${money(pr.projectedTotal)} against a ${money(pr.standardDeduction)} standard deduction.${pr.medicalPending ? ' Medical costs are waiting on your AGI in Settings.' : ''}</p>
+        <p class="verdict-note">${money(pr.actual)} counts so far. Recurring payees found in your entries should add about ${money(pr.expectedMore)} by Dec 31, for a projected ${money(pr.projectedTotal)} against a ${money(pr.standardDeduction)} standard deduction.${pr.calibration && pr.calibration.factor !== 1 ? ` The expected part is calibrated ×${pr.calibration.factor} from ${pr.calibration.n} past forecasts.` : ''}${pr.medicalPending ? ' Medical costs are waiting on your AGI in Settings.' : ''}</p>
         <div class="meter" role="img" aria-label="${esc(`${money(pr.actual)} so far, ${money(pr.projectedTotal)} projected, ${money(pr.standardDeduction)} standard deduction`)}">
           <div class="meter-track"><div class="meter-proj" style="width:${pct(pr.projectedTotal)}"></div><div class="meter-fill ${pr.actual > pr.standardDeduction ? 'is-over' : ''}" style="width:${pct(pr.actual)}"></div><div class="meter-marker" style="left:${pct(pr.standardDeduction)}"></div></div>
           <div class="meter-labels"><span><span class="legend-dot" style="background:var(--accent)"></span>So far <b>${money(pr.actual)}</b></span><span><span class="legend-dot" style="background:var(--accent-proj)"></span>Projected <b>${money(pr.projectedTotal)}</b></span><span>Standard deduction <b>${money(pr.standardDeduction)}</b></span></div>
@@ -1590,6 +1646,8 @@
           ${adv.recurrences.map((r) => `<tr><td><b>${esc(r.description)}</b><br><span class="muted small">${esc(r.label)}</span></td><td>${esc(r.cadenceLabel)}<br><span class="muted small">${r.count} times</span></td><td class="num">${esc(r.unit === 'miles' ? fmtMiles(r.typicalAmount) : moneyCents(r.typicalAmount))}</td><td>${esc(P.formatDate(r.lastDate, false))}</td><td>${esc(P.formatDate(r.nextDate, r.nextDate.slice(0, 4) !== String(R0.taxYear)))}</td><td>${statusPill(r.status)}</td></tr>`).join('')}
         </tbody></table></div>
       </section>` : ''}
+
+      ${forecastCardHTML()}
 
       <section class="card">
         <div class="card-head"><h2>How you use it</h2><span class="muted small">computed from your entries</span></div>
@@ -1616,6 +1674,22 @@
     $('#downloadAggregate').onclick = () => downloadText(`itemizer-summary-${R0.taxYear}.json`, JSON.stringify(adv.aggregate, null, 2), 'application/json');
     const ud = $('#undismiss'); if (ud) ud.onclick = async () => { state.settings.advisorDismissed = {}; await DB.saveSettings(state.settings); render(); toast('All recommendations are visible again.'); };
     const ics = $('#icsBtn'); if (ics) ics.onclick = () => downloadText(`itemizer-due-dates-${R0.taxYear}.ics`, icsText(), 'text/calendar');
+  }
+
+  function forecastCardHTML() {
+    const ex = state.settings.experiments || {};
+    const snaps = state.settings.forecastSnapshots || [];
+    const rows = state.validation || [];
+    const calib = (state.advice.projection && state.advice.projection.calibration) || { factor: 1, n: 0 };
+    const live = snaps.filter((s) => s.taxYear === state.computed.taxYear);
+    const sum = EXP.summary(rows);
+    return `<section class="card">
+      <div class="card-head"><h2>Forecast check</h2><span class="muted small">${ex.snapshots === false ? 'snapshots are off' : `${snaps.length} monthly ${snaps.length === 1 ? 'snapshot' : 'snapshots'} on this device`}</span></div>
+      ${rows.length ? `<p class="note">Past forecasts against the finished year${sum ? `: off by ${Math.round(sum.maePct * 100)}% on average, running ${sum.biasPct >= 0 ? 'high' : 'low'} by ${Math.abs(Math.round(sum.biasPct * 100))}%; the itemize call was right ${sum.verdictRight} of ${sum.verdictTotal} times` : ''}.</p>
+      <div class="table-wrap"><table class="table-twin"><thead><tr><th>Forecast made</th><th class="num">Projected</th><th class="num">Final</th><th class="num">Off by</th><th>Call</th></tr></thead><tbody>${rows.slice(-12).map((r) => `<tr><td>${esc(r.month)}</td><td class="num">${money(r.projectedTotal)}</td><td class="num">${money(r.final)}</td><td class="num">${r.error > 0 ? '+' : ''}${money(r.error)}</td><td>${r.verdictRight ? '<span class="pill pill-good">right</span>' : '<span class="pill pill-warn">wrong</span>'}</td></tr>`).join('')}</tbody></table></div>
+      <p class="note small" style="margin-top:8px">Calibration in use: ${calib.factor === 1 ? 'none' : `×${calib.factor} on the expected-to-come part`} (${esc(calib.basis || '')}).</p>` : `<p class="note">Each month the advisor's year-end forecast is written down here (kept ${EXP.KEEP_MONTHS} months, then dropped). When the year closes, every forecast is checked against the final figure and the advisor calibrates itself. ${live.length ? `${live.length} ${live.length === 1 ? 'snapshot' : 'snapshots'} taken for ${state.computed.taxYear} so far.` : 'Nothing to check yet.'}</p>`}
+      ${live.length ? `<div class="table-wrap"><table class="table-twin"><thead><tr><th>Month</th><th class="num">Counted so far</th><th class="num">Projected year end</th><th>Call</th></tr></thead><tbody>${live.map((s) => `<tr><td>${esc(s.month)}</td><td class="num">${money(s.actual)}</td><td class="num">${money(s.projectedTotal)}</td><td>${s.itemize ? 'itemize' : 'standard'}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    </section>`;
   }
 
   // =====================================================================
@@ -1678,6 +1752,18 @@
             ${state.entries.some((e) => e.sample) ? `<button class="btn btn-ghost" type="button" id="removeSamples2">Remove example entries</button>` : `<button class="btn btn-ghost" type="button" id="loadSample2">Load example entries</button>`}
           </div>
           <p class="note small" id="storageNote" style="margin-top:10px"></p>
+        </section>
+
+        <section class="card">
+          <div class="card-head"><h2>Experiments</h2><span class="muted small">on this device, switchable, expiring</span></div>
+          <p class="note">Three ways the app studies its own judgement and checks it later. Nothing here leaves the device.</p>
+          <div class="chips" style="margin-top:10px">
+            <label class="check"><input type="checkbox" id="xSnapshots" ${(s.experiments || {}).snapshots === false ? '' : 'checked'}> Monthly forecast snapshots, checked when the year closes</label>
+            <label class="check"><input type="checkbox" id="xCorrections" ${(s.experiments || {}).corrections === false ? '' : 'checked'}> Learn from corrected suggestions</label>
+            <label class="check"><input type="checkbox" id="xNudges" ${(s.experiments || {}).nudges === false ? '' : 'checked'}> A follow-up right after a save</label>
+          </div>
+          ${Object.keys(s.keywordWeights || {}).length ? `<div class="learned-list" style="margin-top:10px">${Object.entries(s.keywordWeights).sort((a, b) => a[1] - b[1]).slice(0, 12).map(([k, v]) => `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">${v < 1 ? 'demoted' : 'boosted'} to ×${v}</span></span></div>`).join('')}</div>` : ''}
+          <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="xClearSnapshots" ${(s.forecastSnapshots || []).length ? '' : 'disabled'}>Clear ${(s.forecastSnapshots || []).length} ${(s.forecastSnapshots || []).length === 1 ? 'snapshot' : 'snapshots'}</button><button class="btn btn-sm" type="button" id="xResetWeights" ${Object.keys(s.keywordWeights || {}).length ? '' : 'disabled'}>Reset keyword weights</button></div>
         </section>
 
         <section class="card">
@@ -1756,6 +1842,11 @@
     const rs = $('#removeSamples2'); if (rs) rs.onclick = removeSampleData;
     $$('[data-forget]').forEach((b) => b.onclick = async () => { C.forget(s.learned, b.dataset.forget); await save(); renderSettings(); });
     const fa = $('#forgetAll'); if (fa) fa.onclick = async () => { s.learned = {}; await save(); renderSettings(); };
+    for (const [id, key] of [['xSnapshots', 'snapshots'], ['xCorrections', 'corrections'], ['xNudges', 'nudges']]) {
+      const el = $('#' + id); if (el) el.onchange = async () => { s.experiments = Object.assign({ snapshots: true, corrections: true, nudges: true }, s.experiments || {}); s.experiments[key] = el.checked; await save(); };
+    }
+    $('#xClearSnapshots').onclick = async () => { s.forecastSnapshots = []; await save(); renderSettings(); toast("Forecast snapshots cleared. This month's forecast for the live year is written down again."); };
+    $('#xResetWeights').onclick = async () => { s.keywordWeights = {}; await save(); renderSettings(); toast('Keyword weights reset.'); };
     $('#resetDismissed').onclick = async () => { s.advisorDismissed = {}; await save(); renderSettings(); toast('All recommendations are visible again.'); };
     $('#wipeAll').onclick = async () => {
       if (!(await confirmDialog('Delete everything?', 'All entries, receipts, learned categories, and settings on this device will be removed.', 'Delete all data', true))) return;
