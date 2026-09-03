@@ -119,3 +119,44 @@ test('a missing AGI is flagged whenever an income-based limit could not be check
   const small = Rules.compute([E('2026-01-05', 'tax.real_estate', 3000)], { ...base, agi: '' });
   assert.equal(small.verdict.agiPending, false);
 });
+
+test('charity, interest, casualty and education insights fire on the right facts', () => {
+  const has = (r, re) => titles(r).some((x) => re.test(x));
+  const big = Rules.compute([E('2026-04-01', 'ch.noncash', 6000)], base);
+  assert.equal(big.scheduleA.charity.nonCashNeedsAppraisal, true);
+  assert.ok(has(big, /qualified appraisal/) && !has(big, /Form 8283/), 'over $5,000 the appraisal note replaces the Form 8283 note');
+  const mid = Rules.compute([E('2026-04-01', 'ch.noncash', 600)], base);
+  assert.ok(has(mid, /Form 8283/) && !has(mid, /qualified appraisal/));
+  const gifts = Rules.compute([E('2026-04-01', 'ch.org', 60000)], base);
+  assert.equal(gifts.scheduleA.charity.cashLimit, 48000, '60% of an $80,000 AGI');
+  assert.ok(has(gifts, /exceed the AGI limit/));
+  const mort = Rules.compute([E('2026-02-01', 'int.mortgage', 20000)], base);
+  const escrow = mort.insights.find((i) => /no property tax/.test(i.title));
+  assert.ok(escrow); assert.equal(escrow.level, 'act'); assert.equal(escrow.view, 'capture');
+  assert.ok(!has(Rules.compute([E('2026-02-01', 'int.mortgage', 20000), E('2026-02-02', 'tax.real_estate', 1)], base), /no property tax/));
+  const cas = Rules.compute([E('2026-05-01', 'cas.loss', 5000)], { ...base, agi: '', casualtyFederalDisaster: true });
+  assert.equal(cas.scheduleA.casualty.afterLimits, null); assert.equal(cas.scheduleA.casualty.deductible, 0);
+  const sizing = cas.insights.find((i) => /Enter AGI to size the casualty loss/.test(i.title));
+  assert.ok(sizing); assert.equal(sizing.level, 'act'); assert.equal(sizing.view, 'settings');
+  const tuition = Rules.compute([E('2026-08-20', 'edu.tuition', 4000)], base);
+  const credit = tuition.insights.find((i) => /education credit/.test(i.title));
+  assert.ok(credit); assert.equal(credit.level, 'good');
+});
+
+test('Schedule C mileage guards, the married-filing-separately note, and the date-gated year-end checklist', () => {
+  const has = (r, re) => titles(r).some((x) => re.test(x));
+  const alone = Rules.compute([E('2026-03-01', 'se.miles', 100)], base);
+  const log = alone.insights.find((i) => /Log total miles/.test(i.title));
+  assert.ok(log); assert.equal(log.level, 'act'); assert.equal(log.view, 'capture');
+  const over = Rules.compute([E('2026-03-01', 'se.miles', 100), E('2026-12-31', 'se.total_miles', 50)], base);
+  assert.ok(has(over, /Business miles exceed total miles/));
+  assert.equal(over.scheduleC.vehicle.businessUseShare, 1, 'the share is clamped');
+  assert.ok(!has(Rules.compute([E('2026-03-01', 'se.miles', 100), E('2026-12-31', 'se.total_miles', 500)], base), /Log total miles|exceed total miles/));
+  assert.ok(has(Rules.compute([E('2026-03-01', 'ch.worship', 100)], { ...base, filingStatus: 'mfs' }), /itemize together or not at all/));
+  const gift = [E('2026-03-01', 'ch.worship', 100)];
+  assert.ok(has(Rules.compute(gift, { ...base, today: '2026-11-15' }), /Year-end checklist/));
+  assert.ok(!has(Rules.compute(gift, { ...base, today: '2026-09-02' }), /Year-end checklist/), 'not before November');
+  assert.ok(!has(Rules.compute(gift, { ...base, today: '2027-11-15' }), /Year-end checklist/), 'not once the year is over');
+  const itemizer = [E('2026-01-05', 'tax.real_estate', 9000), E('2026-01-06', 'int.mortgage', 12000)];
+  assert.ok(!has(Rules.compute(itemizer, { ...base, today: '2026-11-15' }), /Year-end checklist/), 'only while the standard deduction is winning');
+});

@@ -55,3 +55,15 @@ test('receipt data URLs are decoded locally and only when they are images', asyn
   await assert.rejects(DB.dataURLToBlob('https://example.com/x.png'), /Not an image/);
   await assert.rejects(DB.dataURLToBlob('data:text/html;base64,PHNjcmlwdD4='), /Not an image/);
 });
+
+test('toCSV: header, date order, section and line names, units, and escaping', () => {
+  const rows = DB.toCSV([
+    { id: 'b', date: '2026-03-02', taxYear: 2026, lineId: 'med.doctor', amount: 45, description: 'Dr "Lee", copay', note: '', hasReceipt: true, receiptId: 'r1' },
+    { id: 'a', date: '2026-01-01', taxYear: 2026, lineId: 'se.miles', amount: 12, description: 'Client visit', note: 'n', hasReceipt: false, receiptId: null },
+  ], Schema).split('\r\n');
+  assert.equal(rows[0], 'date,tax_year,section,line,amount,unit,description,note,has_receipt,receipt_attached,id');
+  assert.equal(rows.length, 3);
+  assert.equal(rows[1], '2026-01-01,2026,Self-Employed Expenses,Business Miles,12,miles,Client visit,n,no,no,a', 'sorted by date, not by input order');
+  assert.equal(rows[2], '2026-03-02,2026,Medical Expenses,Doctor,45,usd,"Dr ""Lee"", copay",,yes,yes,b');
+  assert.equal(DB.toCSV([], Schema).split('\r\n').length, 1, 'header only when there is nothing to export');
+});

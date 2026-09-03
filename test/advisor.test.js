@@ -57,23 +57,31 @@ test('semiannual property tax is recognised across years and becomes a bunching 
 });
 
 test('a medical visit without a drive gets a mileage suggestion from the payee history', () => {
+  // Patel is a 30-mile round trip; the other drives (10, 6, 8) pull the overall median down to 10, so the two branches differ
   const entries = [
     E('2026-02-11', 'med.doctor', 45, 'Dr. Patel copay'),
-    E('2026-02-11', 'med.miles', 14, 'Round trip to Dr. Patel'),
+    E('2026-02-11', 'med.miles', 30, 'Round trip to Dr. Patel'),
+    E('2026-03-20', 'med.doctor', 60, 'Dr. Kim checkup'),
+    E('2026-03-20', 'med.miles', 10, 'Round trip to Dr. Kim'),
     E('2026-04-02', 'med.doctor', 45, 'Dr. Patel copay'),
-    E('2026-04-02', 'med.miles', 14, 'Round trip to Dr. Patel'),
+    E('2026-04-02', 'med.miles', 30, 'Round trip to Dr. Patel'),
+    E('2026-05-06', 'med.doctor', 40, 'Dr. Lee visit'),
+    E('2026-05-06', 'med.miles', 6, 'Round trip to Dr. Lee'),
     E('2026-06-03', 'med.dental', 210, 'Aspen Dental crown'),
+    E('2026-07-08', 'med.doctor', 40, 'Dr. Lee visit'),
+    E('2026-07-08', 'med.miles', 8, 'Round trip to Dr. Lee'),
     E('2026-08-19', 'med.doctor', 45, 'Dr. Patel copay'),
   ];
   const r = run(entries);
   const dental = r.recommendations.find((x) => x.title.includes('Aspen Dental'));
   assert.ok(dental);
   assert.equal(dental.action.entry.lineId, 'med.miles');
-  assert.equal(dental.action.entry.amount, 14, 'overall median when the payee has no mileage history');
-  assert.match(dental.body, /average 14 miles/);
+  assert.equal(dental.action.entry.amount, 10, 'overall median when the payee has no mileage history');
+  assert.match(dental.body, /average 10 miles/);
   const patel = r.recommendations.find((x) => x.title.includes('Dr. Patel') && x.title.includes('Aug 19'));
   assert.ok(patel);
-  assert.match(patel.body, /logged 14 miles for this trip before/);
+  assert.equal(patel.action.entry.amount, 30, 'this payee\'s own median');
+  assert.match(patel.body, /logged 30 miles for this trip before/);
 });
 
 test('an amount far above a payee\'s usual is flagged for a second look', () => {

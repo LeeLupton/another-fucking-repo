@@ -116,3 +116,72 @@ test('the open list is capped after dismissed items are removed', () => {
   assert.equal(r2.recommendations.length + r2.dismissed.length, Math.min(12, 16 - 5) + 5, '16 recommendations exist in total: 15 payees and one plan');
   assert.equal(r2.dismissed.length, 5);
 });
+
+test('a line that usually comes with another gets a prefill for the missing partner; drives are never paired', () => {
+  const entries = [];
+  for (const d of ['2026-02-01', '2026-03-01', '2026-04-01']) entries.push(E(d, 'se.travel', 300, 'Client site trip'), E(d, 'se.meals', 60, 'Dinner on the road'));
+  entries.push(E('2026-05-01', 'se.travel', 300, 'Client site trip'));
+  const r = run(entries);
+  const pair = r.recommendations.find((x) => x.id.startsWith('pair:'));
+  assert.ok(pair, 'a co-occurrence recommendation');
+  assert.equal(pair.title, 'Travel on May 1 usually comes with Meals');
+  assert.equal(pair.action.type, 'prefill');
+  assert.deepEqual(pair.action.entry, { description: '', lineId: 'se.meals', amount: 60, date: '2026-05-01' });
+  assert.match(pair.body, /On 3 dates/);
+  assert.ok(!r.recommendations.some((x) => x.id.startsWith('pair:') && x.action.entry.lineId === 'se.travel'), 'meals never went without travel, so no prefill the other way');
+  const visits = [];
+  for (const d of ['2026-02-11', '2026-04-02', '2026-06-03']) visits.push(E(d, 'med.doctor', 45, 'Dr. Patel copay'), E(d, 'med.miles', 14, 'Round trip to Dr. Patel'));
+  visits.push(E('2026-08-19', 'med.doctor', 45, 'Dr. Patel copay'));
+  const v = run(visits);
+  assert.ok(!v.recommendations.some((x) => x.id.startsWith('pair:')), 'the mileage rule owns doctor + drive');
+  assert.ok(v.recommendations.some((x) => x.id.startsWith('miles:')));
+});
+
+test('thin receipts in a section become a habit recommendation that opens the ledger filter', () => {
+  const entries = [E('2026-03-01', 'se.supplies', 80, 'Uline boxes', { hasReceipt: false }), E('2026-04-01', 'se.supplies', 45, 'Uline tape', { hasReceipt: false }), E('2026-05-01', 'se.supplies', 120, 'Uline labels', { hasReceipt: false }), E('2026-05-02', 'ch.worship', 100, 'Tithe')];
+  const r = run(entries);
+  const habit = r.recommendations.find((x) => x.id === 'habit:receipts:selfemp:2026');
+  assert.ok(habit, 'the weakest section is named');
+  assert.equal(habit.title, 'Receipts are thin for Self-Employed Expenses: 0 of 3');
+  assert.match(habit.body, /examiner/);
+  assert.deepEqual(habit.action, { type: 'ledger', filter: 'noreceipt' });
+  const fine = run([E('2026-03-01', 'se.supplies', 80, 'Uline boxes'), E('2026-04-01', 'se.supplies', 45, 'Uline tape'), E('2026-05-01', 'se.supplies', 120, 'Uline labels')]);
+  assert.ok(!fine.recommendations.some((x) => x.id.startsWith('habit:receipts:')), 'all receipts present: nothing to say');
+});
+
+test('the year plan: on pace to itemize, a gap planning can close, or stop chasing Schedule A receipts', () => {
+  const pace = run([E('2026-01-05', 'tax.real_estate', 9000, 'County tax'), E('2026-01-06', 'int.mortgage', 12000, 'Mortgage interest')]);
+  const onPace = pace.recommendations.find((x) => x.id === 'plan:itemize:2026');
+  assert.ok(onPace); assert.equal(onPace.kind, 'good'); assert.match(onPace.title, /^On pace to itemize/); assert.equal(pace.projection.itemize, true);
+  const close = run([E('2026-01-06', 'int.mortgage', 13000, 'Mortgage interest')]);
+  const c = close.recommendations.find((x) => x.id === 'plan:close:2026');
+  assert.ok(c, 'a $3,100 gap is under 30% of the standard deduction'); assert.match(c.title, /\$3,100 short of itemizing/);
+  assert.ok(!close.recommendations.some((x) => x.id === 'plan:stop:2026'));
+  const stop = run([E('2026-01-06', 'int.mortgage', 10000, 'Mortgage interest')]);
+  const s = stop.recommendations.find((x) => x.id === 'plan:stop:2026');
+  assert.ok(s, 'a $6,100 gap is past the 30% line'); assert.match(s.title, /stop chasing Schedule A receipts/); assert.match(s.body, /\$6,100 short/);
+  assert.ok(!stop.recommendations.some((x) => x.id === 'plan:close:2026' || x.id === 'plan:itemize:2026'));
+});
+
+test('weekly, biweekly, quarterly and yearly payees are recognised; same-day entries are one occurrence; one miss is tolerated after five', () => {
+  const sundays = [];
+  for (let i = 0; i < 8; i++) { const d = new Date(2026, 0, 4 + 7 * i); sundays.push(E(`2026-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, 'ch.worship', 50, 'Sunday offering')); }
+  const weekly = run(sundays, {}, '2026-03-05').recurrences.find((x) => x.description === 'Sunday offering');
+  assert.ok(weekly); assert.equal(weekly.cadence, 'weekly'); assert.equal(weekly.perYear, 52); assert.equal(weekly.nextDate, '2026-03-01'); assert.equal(weekly.status, 'overdue'); assert.equal(weekly.typicalAmount, 50);
+  const biweekly = [];
+  for (let i = 0; i < 6; i++) { const d = new Date(2026, 0, 2 + 14 * i); biweekly.push(E(`2026-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, 'ch.org', 25, 'Food bank payroll gift')); }
+  assert.equal(run(biweekly).recurrences.find((x) => x.description === 'Food bank payroll gift').cadence, 'biweekly');
+  const quarterly = ['2025-10-01', '2026-01-01', '2026-04-01', '2026-07-01'].map((d) => E(d, 'med.insurance', 900, 'Blue Cross premium'));
+  const q = run(quarterly).recurrences.find((x) => x.description === 'Blue Cross premium');
+  assert.ok(q); assert.equal(q.cadence, 'quarterly'); assert.equal(q.perYear, 4); assert.equal(q.nextDate, '2026-10-01'); assert.equal(q.status, 'due');
+  const yearly = ['2025-03-10', '2026-03-10'].map((d) => E(d, 'tax.personal_property', 320, 'Vehicle tax'));
+  const y = run(yearly).recurrences.find((x) => x.description === 'Vehicle tax');
+  assert.ok(y); assert.equal(y.cadence, 'annual'); assert.equal(y.nextDate, '2027-03-10'); assert.equal(y.status, 'upcoming');
+  const split = [];
+  for (const m of [1, 2, 3, 4, 5, 6]) split.push(E(`2026-${String(m).padStart(2, '0')}-05`, 'ch.worship', 30, 'St. Mark'), E(`2026-${String(m).padStart(2, '0')}-05`, 'ch.worship', 20, 'St. Mark'));
+  const merged = run(split).recurrences.find((x) => x.description === 'St. Mark');
+  assert.ok(merged); assert.equal(merged.cadence, 'monthly'); assert.equal(merged.count, 6); assert.equal(merged.typicalAmount, 50);
+  const tolerant = run(monthly(2026, [1, 2, 3, 5, 6], 'se.utilities', 80, 'Verizon')).recurrences.find((x) => x.description === 'Verizon');
+  assert.ok(tolerant, 'one skipped month after five occurrences is still monthly'); assert.equal(tolerant.cadence, 'monthly');
+  assert.equal(run(monthly(2026, [1, 2, 4], 'se.utilities', 80, 'Verizon')).recurrences.length, 0, 'three occurrences with a gap are no pattern');
+});

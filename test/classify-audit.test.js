@@ -96,3 +96,15 @@ test('section context only falls back to a real catch-all line', () => {
   assert.equal(C.classify('tax').suggestions.length, 0, 'no fallback for taxes');
   assert.equal(C.classify('loan').suggestions.length, 0, 'no fallback for interest');
 });
+
+test('the limit option caps suggestions, the key is the learned-map key, and more never-deductible groups warn', () => {
+  const full = C.classify('office supplies');
+  assert.ok(full.suggestions.length >= 2, 'an ambiguous phrase offers several lines');
+  assert.ok(full.suggestions.length <= 4, 'four by default');
+  const one = C.classify('office supplies', { limit: 1 });
+  assert.equal(one.suggestions.length, 1); assert.equal(one.suggestions[0].lineId, full.suggestions[0].lineId);
+  assert.equal(C.classify('CVS #123').key, 'cvs');
+  const political = C.classify('ActBlue donation');
+  assert.equal(political.nonDeductible.length, 1); assert.match(political.nonDeductible[0].reason, /Political/);
+  assert.match(C.classify('daycare for Sam').nonDeductible[0].reason, /2441|credit/i);
+});
