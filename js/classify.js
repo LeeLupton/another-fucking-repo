@@ -18,7 +18,7 @@
   function normalize(text) {
     return ' ' + String(text || '')
       .toLowerCase()
-      .replace(/[’`]/g, '\'')
+      .replace(/[’`']/g, '')
       .replace(/[.,;:!?()[\]{}"#*_~<>|\\]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim() + ' ';
@@ -35,22 +35,25 @@
     }),
   }));
   const CONTEXT = Schema.CONTEXT.map((c) => ({ sections: c.sections, words: c.words.map((w) => normalize(w)) }));
-  const NON_DEDUCTIBLE = Schema.NON_DEDUCTIBLE.map((n) => ({ reason: n.reason, words: n.words.map((w) => normalize(w)) }));
+  const NON_DEDUCTIBLE = Schema.NON_DEDUCTIBLE.map((n) => ({ reason: n.reason, suppress: n.suppress || [], words: n.words.map((w) => normalize(w)) }));
+  // The catch-all line each section falls back to when only context words matched. Taxes and interest have no safe catch-all.
+  const FALLBACK = { medical: 'med.other', education: 'edu.expenses', selfemp: 'se.other', charity: 'ch.other', volunteer: 'vol.expenses' };
 
   function containsPhrase(hayNorm, hayLoose, needle) {
     return hayNorm.includes(needle.norm) || hayLoose.includes(needle.loose);
   }
 
-  /** Key under which a description is remembered: lower-case, digits and store numbers removed. */
+  /** Key under which a description is remembered: lower-case, store numbers and standalone amounts removed (tokens like 1098e stay). */
   function keyFor(description) {
-    let k = normalize(description).replace(/#?\d[\d,.\-]*/g, ' ').replace(/\s+/g, ' ').trim();
+    let k = normalize(description).replace(/#\d[\d,.\-]*/g, ' ').replace(/(^| )[$#]?\d[\d,.\-]*(?= |$)/g, ' ').replace(/\s+/g, ' ').trim();
     if (k.length > 48) k = k.slice(0, 48).trim();
     return k;
   }
 
   /**
    * @param {string} text          description / payee typed by the user
-   * @param {object} [opts]        { learned: {key: lineId}, miles: boolean, limit: number }
+   * @param {object} [opts]        { learned: {key: lineId}, weights: {keyword: multiplier}, miles: boolean, limit: number,
+   *                                 description: the payee on its own when `text` also carries the raw input, so a learned key still matches exactly }
    * @returns {{ suggestions: Array<{lineId, score, because: string[], learned?: boolean}>, nonDeductible: Array<{reason, matched}> }}
    */
   function classify(text, opts) {
@@ -89,19 +92,20 @@
         if (scores.size === 0) {
           // Nothing specific matched, but the context tells us the section: offer its catch-all line.
           for (const sid of activeSections) {
-            const lines = Schema.linesForSection(sid);
-            const fallback = lines.find((l) => /other/i.test(l.label) && l.unit === 'usd') || lines[0];
-            bump(fallback.id, 0.4, 'section context');
+            if (FALLBACK[sid] && Schema.getLine(FALLBACK[sid])) bump(FALLBACK[sid], 0.4, 'section context');
           }
         }
       }
       // 3. learned payees outrank everything
       const learned = opts.learned || {};
-      const key = keyFor(text);
+      const keys = new Set([keyFor(text)]);
+      if (opts.description) keys.add(keyFor(opts.description));
       for (const lk of Object.keys(learned)) {
         if (!lk || !Schema.getLine(learned[lk])) continue;
-        if (lk === key) bump(learned[lk], 8, 'you filed this here before', true);
-        else if (lk.length >= 3 && norm.includes(' ' + lk + ' ')) bump(learned[lk], 5, `"${lk}" filed here before`, true);
+        const lkn = lk.replace(/['’`]/g, ''); // keys learned before apostrophes were stripped still match
+        if (keys.has(lkn)) bump(learned[lk], 8, 'you filed this here before', true);
+        // a partial match only counts for distinctive keys: a short generic word ("gas", "amazon") must not hijack every later entry
+        else if ((lkn.includes(' ') || lkn.length >= 6) && norm.includes(' ' + lkn + ' ')) bump(learned[lk], 5, `"${lk}" filed here before`, true);
       }
     }
 
@@ -131,10 +135,13 @@
     list.sort((a, b) => b.score - a.score || a.lineId.localeCompare(b.lineId));
 
     const nonDeductible = [];
+    const suppressed = new Set();
     for (const nd of NON_DEDUCTIBLE) {
       const hit = nd.words.find((w) => norm.includes(w) || loose.includes(loosen(w)));
-      if (hit) nonDeductible.push({ reason: nd.reason, matched: hit.trim() });
+      if (hit) { nonDeductible.push({ reason: nd.reason, matched: hit.trim() }); nd.suppress.forEach((id) => suppressed.add(id)); }
     }
+    // an IRS payment must not be offered as State Income Tax, a car loan not as Student Loan Interest
+    if (suppressed.size) list = list.filter((s) => !suppressed.has(s.lineId));
 
     return { suggestions: list.slice(0, limit), nonDeductible, key: keyFor(text) };
   }

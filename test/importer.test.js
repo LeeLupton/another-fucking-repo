@@ -49,10 +49,15 @@ test('bank export with debit and credit columns, and duplicate detection', () =>
   assert.equal(map.description, 1);
   const norm = I.normalize(rows, map);
   assert.deepEqual(norm.rows.map((r) => r.amount), [45, -2500, 45]);
-  const rev = I.review(norm.rows, { existingEntries: [{ date: '2026-02-11', amount: 45 }] });
+  const rev = I.review(norm.rows, { existingEntries: [{ date: '2026-02-11', amount: 45, description: 'Dr. Patel copay' }] });
   assert.equal(rev[0].duplicate, true, 'already in the ledger');
-  assert.equal(rev[2].duplicate, true, 'same date and amount twice in the file');
+  assert.equal(rev[2].duplicate, true, 'same date, amount and payee twice in the file');
   assert.equal(rev[0].selected, false);
+  // a ledger entry with no description only earns a soft warning: the row stays ticked
+  const soft = I.review(norm.rows, { existingEntries: [{ date: '2026-02-11', amount: 45, description: '' }] });
+  assert.equal(soft[0].duplicate, false);
+  assert.equal(soft[0].possibleDuplicate, true);
+  assert.equal(soft[0].selected, true);
 });
 
 test('a file with no header row is sniffed', () => {

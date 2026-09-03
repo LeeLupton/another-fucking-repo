@@ -29,13 +29,18 @@
   const CADENCES = [
     { id: 'weekly', label: 'weekly', days: 7, tol: 2, min: 3, perYear: 52 },
     { id: 'biweekly', label: 'every two weeks', days: 14, tol: 3, min: 3, perYear: 26 },
+    { id: 'fourweekly', label: 'every four weeks', days: 28, tol: 2, min: 4, perYear: 13 },
     { id: 'monthly', label: 'monthly', days: 30.44, tol: 6, min: 3, perYear: 12 },
     { id: 'quarterly', label: 'quarterly', days: 91.3, tol: 14, min: 3, perYear: 4 },
     { id: 'semiannual', label: 'twice a year', days: 182.6, tol: 21, min: 2, perYear: 2 },
     { id: 'annual', label: 'yearly', days: 365.25, tol: 30, min: 2, perYear: 1 },
   ];
+  // State estimated payments follow the IRS calendar, not a fixed interval.
+  const ESTIMATED = { id: 'estimated', label: 'each estimated-tax deadline', days: 91.3, tol: 20, min: 3, perYear: 4 };
+  const ESTIMATED_DEADLINES = ['01-15', '04-15', '06-15', '09-15'];
+  const MONTHS_PER = { monthly: 1, quarterly: 3, semiannual: 6, annual: 12 };
   const VISIT_LINES = ['med.doctor', 'med.dental', 'med.therapy', 'med.lab', 'med.hospital', 'med.operations', 'med.glasses', 'med.dentures', 'med.hearing'];
-  const STATUS_ORDER = { overdue: 0, due: 1, upcoming: 2 };
+  const STATUS_ORDER = { overdue: 0, due: 1, upcoming: 2, lapsed: 3 };
 
   const pad2 = (n) => String(n).padStart(2, '0');
   const toDate = (iso) => new Date(iso + 'T00:00:00');
@@ -64,12 +69,30 @@
   function fmtDate(iso) { const d = toDate(iso); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
   function fmtValue(lineId, n) { return Schema.isMiles(lineId) ? `${Number(n).toLocaleString('en-US', { maximumFractionDigits: 1 })} mi` : money(n); }
   function keyOf(e) { const k = Classify.keyFor(e.description || ''); return (k || '-') + '|' + e.lineId; }
-  function step(iso, cadence) {
-    if (cadence.id === 'monthly') return addMonths(iso, 1);
-    if (cadence.id === 'quarterly') return addMonths(iso, 3);
-    if (cadence.id === 'semiannual') return addMonths(iso, 6);
-    if (cadence.id === 'annual') return addMonths(iso, 12);
-    return addDays(iso, cadence.days);
+  /** The next estimated-tax deadline strictly after a date (Sep 15 rolls to Jan 15 of the next year). */
+  function nextDeadline(iso) {
+    const y = Number(iso.slice(0, 4));
+    for (const md of ESTIMATED_DEADLINES) { const d = `${y}-${md}`; if (d > iso) return d; }
+    return `${y + 1}-${ESTIMATED_DEADLINES[0]}`;
+  }
+  /** The k-th occurrence after an anchor date, generated from the anchor so month-ends never drift. */
+  function nth(anchorIso, cadence, k) {
+    if (cadence.id === 'estimated') { let d = anchorIso; for (let i = 0; i < k; i++) d = nextDeadline(d); return d; }
+    if (MONTHS_PER[cadence.id]) return addMonths(anchorIso, k * MONTHS_PER[cadence.id]);
+    return addDays(anchorIso, Math.round(k * cadence.days));
+  }
+  function step(iso, cadence) { return nth(iso, cadence, 1); }
+  /** True when every occurrence sits near an estimated-tax deadline and at least three distinct deadlines are hit. */
+  function looksEstimated(occ) {
+    if (occ.length < ESTIMATED.min) return false;
+    const hit = new Set();
+    for (const o of occ) {
+      const y = Number(o.date.slice(0, 4));
+      const near = [y - 1, y, y + 1].flatMap((yy) => ESTIMATED_DEADLINES.map((md) => `${yy}-${md}`)).find((d) => Math.abs(daysBetween(d, o.date)) <= ESTIMATED.tol);
+      if (!near) return false;
+      hit.add(near);
+    }
+    return hit.size >= ESTIMATED.min;
   }
 
   // ---- recurrences -----------------------------------------------------------
@@ -84,11 +107,14 @@
     const taxYear = Number(opts.taxYear);
     const yearStart = `${taxYear}-01-01`, yearEnd = `${taxYear}-12-31`;
     const groups = new Map();
+    const byLine = new Map(); // lineId -> every real occurrence, whatever its key: a re-spelled payee still satisfies an expected date
     for (const e of entries) {
       if (!e.date || !Schema.getLine(e.lineId)) continue;
       const k = keyOf(e);
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(e);
+      if (!byLine.has(e.lineId)) byLine.set(e.lineId, []);
+      byLine.get(e.lineId).push({ date: e.date, amount: Number(e.amount) || 0, key: k });
     }
     const out = [];
     for (const [key, list] of groups) {
@@ -105,29 +131,43 @@
       const intervals = [];
       for (let i = 1; i < occ.length; i++) intervals.push(daysBetween(occ[i - 1].date, occ[i].date));
       const med = median(intervals);
+      const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      const line = Schema.getLine(list[0].lineId);
       let cadence = null;
+      if (line.sectionId === 'taxes' && looksEstimated(occ)) cadence = ESTIMATED;
       for (const c of CADENCES) {
+        if (cadence) break;
         if (occ.length < c.min || Math.abs(med - c.days) > c.tol) continue;
+        // "every four weeks" must be unambiguous, or a month-end payee (28, 28, 31 days) would be pinned to the wrong dates
+        if (c.id === 'fourweekly' && Math.abs(mean - c.days) > c.tol) continue;
         const misses = intervals.filter((iv) => Math.abs(iv - c.days) > c.tol).length;
         if (misses <= (occ.length >= 5 ? 1 : 0)) { cadence = c; break; }
       }
       if (!cadence) continue;
-      const line = Schema.getLine(list[0].lineId);
       const last = occ[occ.length - 1];
       const typicalAmount = cents(median(occ.map((o) => o.amount)));
-      const next = step(last.date, cadence);
+      // An expected date already covered by a same-line entry filed under a different spelling counts as done.
+      const others = (byLine.get(line.id) || []).filter((o) => o.key !== key);
+      const satisfied = (d) => others.some((o) => Math.abs(daysBetween(o.date, d)) <= cadence.tol && Math.abs(o.amount - typicalAmount) <= 0.25 * Math.max(typicalAmount, 1));
+      let k = 1;
+      while (k < 60 && satisfied(nth(last.date, cadence, k))) k++;
+      const next = nth(last.date, cadence, k);
       const overdueBy = daysBetween(next, today);
       let status = 'upcoming';
-      if (overdueBy > cadence.tol) status = 'overdue';
+      // more than a full period past due: the payee probably stopped, so nothing is projected for it
+      if (overdueBy > cadence.days + 2 * cadence.tol) status = 'lapsed';
+      else if (overdueBy > cadence.tol) status = 'overdue';
       else if (overdueBy >= -cadence.tol) status = 'due';
       // occurrences still expected inside the tax year (overdue ones included — they probably happened)
       const expected = [];
-      let d = next, guard = 0;
-      while (d <= yearEnd && guard++ < 60) { if (d >= yearStart) expected.push(d); d = step(d, cadence); }
-      // occurrences in the first four months of next year: candidates for paying early
       const nextYearEarly = [];
-      d = next; guard = 0;
-      while (d <= `${taxYear + 1}-04-30` && guard++ < 80) { if (d > yearEnd) nextYearEarly.push(d); d = step(d, cadence); }
+      for (let j = k; j < k + 80; j++) {
+        const d = nth(last.date, cadence, j);
+        if (d > `${taxYear + 1}-04-30`) break;
+        if (satisfied(d)) continue;
+        if (d > yearEnd) nextYearEarly.push(d);
+        else if (d >= yearStart) expected.push(d);
+      }
       out.push({
         key, lineId: line.id, sectionId: line.sectionId, label: line.label, unit: line.unit,
         description: mode(occ.map((o) => o.description)) || line.label,
@@ -141,19 +181,20 @@
 
   function syntheticEntries(recurrences, taxYear) {
     const out = [];
-    for (const r of recurrences) for (const d of r.expected) out.push({ id: `proj:${r.key}:${d}`, date: d, taxYear, lineId: r.lineId, amount: r.typicalAmount, description: r.description, hasReceipt: true, projected: true });
+    for (const r of recurrences) for (const d of (r.status === 'lapsed' || r.muted ? [] : r.expected)) out.push({ id: `proj:${r.key}:${d}`, date: d, taxYear, lineId: r.lineId, amount: r.typicalAmount, description: r.description, hasReceipt: true, projected: true });
     return out;
   }
 
   // ---- habits ------------------------------------------------------------------
 
   function computeHabits(yearEntries, allEntries, today) {
-    const created = allEntries.filter((e) => e.createdAt && !e.sample && !e.projected).map((e) => e.createdAt.slice(0, 10)).sort();
+    // createdAt is a UTC timestamp; compare calendar days in local time like `today`
+    const created = allEntries.filter((e) => e.createdAt && !e.sample && !e.projected).map((e) => { const d = new Date(e.createdAt); return isNaN(d) ? null : isoOf(d); }).filter(Boolean).sort();
     const distinct = [...new Set(created)];
     const gaps = [];
     for (let i = 1; i < distinct.length; i++) gaps.push(daysBetween(distinct[i - 1], distinct[i]));
     const typicalGapDays = gaps.length >= 4 ? median(gaps) : null;
-    const daysSinceLast = distinct.length ? daysBetween(distinct[distinct.length - 1], today) : null;
+    const daysSinceLast = distinct.length ? Math.max(0, daysBetween(distinct[distinct.length - 1], today)) : null;
     const receiptsBySection = {};
     for (const e of yearEntries) {
       const l = Schema.getLine(e.lineId);
@@ -173,14 +214,15 @@
   // ---- recommendations --------------------------------------------------------
 
   function buildRecommendations(ctx) {
-    const { computed, projection, recurrences, yearEntries, entries, habits, today, taxYear } = ctx;
+    const { computed, projected, projection, recurrences, yearEntries, entries, habits, today, taxYear } = ctx;
     const P = computed.params;
     const recs = [];
     const yearStart = `${taxYear}-01-01`, yearEnd = `${taxYear}-12-31`;
+    const closed = today > yearEnd;
 
-    // 1. Recurring payees that look due or overdue
+    // 1. Recurring payees that look due or overdue (a lapsed payee is shown in the table, not nagged about)
     for (const r of recurrences) {
-      if (r.status === 'upcoming' || r.nextDate < yearStart || r.nextDate > yearEnd) continue;
+      if (r.status === 'upcoming' || r.status === 'lapsed' || r.nextDate < yearStart || r.nextDate > yearEnd) continue; // a muted (dismissed) one is still built so it shows under "dismissed"
       const amountText = fmtValue(r.lineId, r.typicalAmount);
       recs.push({
         id: `recur:${r.key}:${r.nextDate}`, kind: 'log',
@@ -262,25 +304,37 @@
       const amounts = amountsByKey.get(keyOf(e));
       if (!amounts || amounts.length < 4) continue;
       const med = median(amounts), amt = Number(e.amount) || 0;
-      if (amt > 3 * med && amt - med > 50) recs.push({
+      // entries with no description are one pool per line, not one payee: demand a much clearer outlier and say so
+      const dk = Classify.keyFor(e.description || '');
+      const undescribed = !dk || dk === Classify.keyFor(Schema.getLine(e.lineId).label);
+      const outlier = undescribed ? (amounts.length >= 6 && amt > 5 * med && amt - med > 50) : (amt > 3 * med && amt - med > 50);
+      if (outlier) recs.push({
         id: `anomaly:${e.id}`, kind: 'check', priority: 45,
         title: `${e.description || Schema.getLine(e.lineId).label} for ${fmtValue(e.lineId, amt)} is far above its usual ${fmtValue(e.lineId, med)}`,
-        body: 'Worth a second look; a missing decimal point is the usual cause. If it is right, dismiss this.',
-        because: `${amounts.length} entries for the same payee`,
+        body: undescribed ? 'Worth a second look against the other entries on this line. If it is right, dismiss this.' : 'Worth a second look; a missing decimal point is the usual cause. If it is right, dismiss this.',
+        because: undescribed ? `${amounts.length} undescribed entries on the ${Schema.getLine(e.lineId).label} line` : `${amounts.length} entries for the same payee`,
         action: { type: 'edit', entryId: e.id },
       });
     }
 
     // 5. The plan for the year: bunch, or stop chasing Schedule A
-    if (yearEntries.length) {
+    if (yearEntries.length && closed) {
+      // the year is over: report what happened instead of planning for a Dec 31 that has passed
+      recs.push(projection.itemize
+        ? { id: `plan:closed:${taxYear}`, kind: 'good', priority: 30, title: `${taxYear}: itemizing won by ${money(projection.projectedTotal - projection.standardDeduction)}`, body: `${money(projection.projectedTotal)} of Schedule A deductions against a ${money(projection.standardDeduction)} standard deduction. Give the preparer the worksheet and the receipts sheet.`, because: 'the year is closed', action: null }
+        : { id: `plan:closed:${taxYear}`, kind: 'plan', priority: 30, title: `${taxYear} fell ${money(projection.gap)} short of itemizing`, body: `${money(projection.projectedTotal)} counted against a ${money(projection.standardDeduction)} standard deduction. Business costs, student loan interest, and any non-itemizer gift deduction still count.`, because: 'the year is closed', action: null });
+    } else if (yearEntries.length && projection.medicalPending && projected.scheduleA.medical.gross > 0) {
+      // never issue a definitive plan on a projection that leaves medical costs out
+      recs.push({ id: `plan:agi:${taxYear}`, kind: 'check', priority: 55, title: 'Enter your AGI to finish the year-end projection', body: `${money(projected.scheduleA.medical.gross)} of medical costs is not counted until an estimated AGI is set, so the comparison with the ${money(projection.standardDeduction)} standard deduction is incomplete.`, because: 'medical expenses waiting on AGI', action: { type: 'settings' } });
+    } else if (yearEntries.length) {
       const std = projection.standardDeduction;
       if (projection.itemize) {
-        recs.push({ id: `plan:itemize:${taxYear}`, kind: 'good', priority: 30, title: `On pace to itemize: about ${money(projection.projectedTotal)} against ${money(std)}`, body: `${money(projection.actual)} counts so far, and recurring items should add about ${money(projection.expectedMore)} by Dec 31. Keep every Schedule A receipt this year.`, because: 'recurring entries projected to year end', action: null });
+        recs.push({ id: `plan:itemize:${taxYear}`, kind: 'good', priority: 30, title: `On pace to itemize: about ${money(projection.projectedTotal)} against ${money(std)}`, body: `${money(projection.actual)} counts so far${projection.expectedMore > 0 ? `, and recurring items should add about ${money(projection.expectedMore)} by Dec 31` : ''}. Keep every Schedule A receipt this year.`, because: 'recurring entries projected to year end', action: null });
       } else {
         const gap = projection.gap;
         const candidates = [];
         for (const r of recurrences) {
-          if (r.unit === 'miles') continue;
+          if (r.unit === 'miles' || r.status === 'lapsed' || r.muted) continue;
           const prepayable = ['taxes', 'charity', 'volunteer'].includes(r.sectionId) || r.lineId === 'med.insurance';
           if (!prepayable) continue;
           if (r.perYear >= 12) { if (r.sectionId === 'charity') candidates.push({ label: `make next year's ${r.description} gifts in December`, amount: Math.round(r.typicalAmount * r.perYear) }); continue; }
@@ -314,7 +368,7 @@
     }
 
     recs.sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
-    return recs.slice(0, 12);
+    return recs; // the caller caps the list after removing dismissed items, so dismissing never hides the rest
   }
 
   // ---- the shareable aggregate ---------------------------------------------
@@ -335,13 +389,14 @@
       agiBand: band(computed.agi),
       sections,
       scheduleATotal: round100(computed.scheduleA.total),
-      standardDeduction: computed.standardDeduction.total,
+      standardDeduction: computed.standardDeduction.base, // the base follows from filing status; the add-ons would reveal age or blindness
+      hasAdditionalStandardDeduction: computed.standardDeduction.additional > 0,
       itemizes: computed.verdict.itemize,
       receiptRate: Math.round(computed.substantiation.coverage * 20) / 20,
       recurringItems: recurrences.length,
       cadences,
       entriesPerWeek: habits.entriesPerWeek,
-      excluded: ['payees', 'descriptions', 'notes', 'dates', 'receipts', 'exact amounts', 'exact income'],
+      excluded: ['payees', 'descriptions', 'notes', 'dates', 'receipts', 'exact amounts', 'exact income', 'age and disability flags'],
     };
   }
 
@@ -358,7 +413,12 @@
     const computed = input.computed || Rules.compute(entries, Object.assign({}, settings, { today }));
     const yearEntries = computed.entries;
     const recurrences = detectRecurrences(entries, { today, taxYear });
-    const projectedEntries = syntheticEntries(recurrences, taxYear);
+    const dismissedAt = settings.advisorDismissed || {};
+    const isDismissed = (id) => { const at = dismissedAt[id]; return !!at && daysBetween(String(at).slice(0, 10), today) < DISMISS_DAYS; };
+    // "If it stopped, dismiss this" also stops the projection for that payee
+    for (const r of recurrences) if (isDismissed(`recur:${r.key}:${r.nextDate}`)) r.muted = true;
+    const closed = today > `${taxYear}-12-31`;
+    const projectedEntries = closed ? [] : syntheticEntries(recurrences, taxYear);
     const projected = Rules.compute(entries.concat(projectedEntries), Object.assign({}, settings, { today }));
     const projection = {
       actual: computed.scheduleA.total,
@@ -382,14 +442,11 @@
     }
     projection.calibration = calib || { factor: 1, n: 0, basis: 'none' };
     const habits = computeHabits(yearEntries, entries, today);
+    projection.closed = closed;
     const all = buildRecommendations({ computed, projected, projection, recurrences, yearEntries, entries, habits, today, taxYear });
-    const dismissedAt = settings.advisorDismissed || {};
     const recommendations = [], dismissed = [];
-    for (const r of all) {
-      const at = dismissedAt[r.id];
-      if (at && daysBetween(String(at).slice(0, 10), today) < DISMISS_DAYS) dismissed.push(r); else recommendations.push(r);
-    }
-    return { recommendations, dismissed, recurrences, projection, habits, aggregate: aggregateProfile(computed, habits, recurrences, today) };
+    for (const r of all) { if (isDismissed(r.id)) dismissed.push(r); else recommendations.push(r); }
+    return { recommendations: recommendations.slice(0, 12), dismissed, recurrences, projection, habits, aggregate: aggregateProfile(computed, habits, recurrences, today) };
   }
 
   return { analyze, detectRecurrences, aggregateProfile, CADENCES, DISMISS_DAYS, VISIT_LINES };

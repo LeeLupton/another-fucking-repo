@@ -1,5 +1,5 @@
 /* Service worker: cache the app shell so Itemizer opens offline and installs to a home screen. */
-const CACHE = 'itemizer-v5';
+const CACHE = 'itemizer-v6';
 const SHELL = [
   './',
   './index.html',

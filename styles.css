@@ -11,7 +11,7 @@
   --surface-3: #dde5df;
   --ink: #14201b;
   --ink-2: #4c5953;
-  --ink-3: #75817a;
+  --ink-3: #626e67; /* 5.3:1 on white, 4.6:1 on surface-2: muted text still passes AA */
   --line: #d9e0db;
   --line-strong: #b7c2bb;
   --accent: #0e6b52;
@@ -49,7 +49,7 @@
     --surface-3: #29332e;
     --ink: #eef2ef;
     --ink-2: #aab5ae;
-    --ink-3: #7f8b84;
+    --ink-3: #8a968f;
     --line: #2a332e;
     --line-strong: #3b4740;
     --accent: #3cb48c;
@@ -76,7 +76,7 @@
   --surface-3: #29332e;
   --ink: #eef2ef;
   --ink-2: #aab5ae;
-  --ink-3: #7f8b84;
+  --ink-3: #8a968f;
   --line: #2a332e;
   --line-strong: #3b4740;
   --accent: #3cb48c;
@@ -150,7 +150,7 @@ img { max-width: 100%; display: block; }
 }
 .tab {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  color: var(--ink-3); text-decoration: none; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.01em;
+  color: var(--ink-3); text-decoration: none; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.01em;
   border-top: 2px solid transparent;
 }
 .tab svg { width: 22px; height: 22px; }
@@ -391,9 +391,10 @@ img { max-width: 100%; display: block; }
 .sheet-section { margin-top: 16px; break-inside: avoid; }
 .sheet-section h3 { font-size: 1.08rem; font-weight: 600; margin-bottom: 4px; }
 .sheet-group { font-size: 0.9rem; margin: 8px 0 2px; font-weight: 600; }
-.sheet-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 6px; font-size: 0.93rem; line-height: 1.55; }
-.sheet-line .lbl { display: flex; align-items: baseline; min-width: 0; }
-.sheet-line .lbl span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 6px; font-size: 0.93rem; line-height: 1.55; }
+.sheet-line .lbl { display: flex; align-items: end; min-width: 0; }
+.sheet-line .lbl span { white-space: normal; overflow-wrap: anywhere; } /* labels and lender details wrap instead of being cut off */
+.sheet-line-wrap .lbl span { white-space: normal; overflow: visible; text-overflow: clip; }
 .sheet-line .leader { flex: 1; min-width: 12px; border-bottom: 1px dotted var(--paper-rule); transform: translateY(-4px); margin: 0 4px 0 6px; }
 .sheet-line .amt { font-family: var(--font-mono); font-size: 0.88rem; min-width: 112px; text-align: right; border-bottom: 1px solid var(--paper-ink); padding: 0 2px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sheet-line .amt.blank { color: transparent; }
@@ -451,7 +452,7 @@ img { max-width: 100%; display: block; }
 .rec-miles { font-size: 2.6rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
 .rec-unit { font-size: 1rem; color: var(--ink-2); }
 .rec-time { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--ink-2); font-weight: 600; }
-.track { width: 100%; height: 200px; display: block; background: var(--surface-2); border-radius: var(--radius-sm); }
+.track { width: 100%; height: auto; aspect-ratio: 640 / 200; display: block; background: var(--surface-2); border-radius: var(--radius-sm); }
 .place-list { display: grid; }
 .place-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--line); }
 .place-row:first-child { border-top: 0; padding-top: 0; }
@@ -508,4 +509,9 @@ img { max-width: 100%; display: block; }
   body.print-receipts .sheet:not(#receiptSheet) { display: none; }
   .receipt-grid { grid-template-columns: repeat(3, 1fr); }
   .receipt-fig img { aspect-ratio: 3 / 4; }
+}
+
+/* narrow screens and paper: leave more room for the wrapped labels */
+@media (max-width: 640px), print {
+  .sheet-line .amt { min-width: 88px; }
 }
