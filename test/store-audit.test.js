@@ -31,20 +31,24 @@ test('backup entries are validated before they are stored', () => {
   assert.equal(DB.sanitizeEntry(null, Schema), null);
 });
 
-test('settings are whitelisted and coerced, and never share objects with the defaults', () => {
-  const s = DB.sanitizeSettings({ taxYear: '<img src=x onerror=alert(1)>', filingStatus: 'bogus', theme: 'neon', agi: 95000, age65: 'yes', evil: true, advisorDismissed: { a: '2026-01-01' }, learned: { cvs: 'med.prescriptions' } });
-  assert.equal(s.taxYear, new Date().getFullYear());
+test('settings are whitelisted and coerced; collections are no longer part of the row', () => {
+  const s = DB.sanitizeSettings({ taxYear: '<img src=x onerror=alert(1)>', filingStatus: 'bogus', theme: 'neon', agi: 95000, age65: 'yes', evil: true, advisorDismissed: { a: '2026-01-01' }, learned: { cvs: 'med.prescriptions' }, experiments: { snapshots: false, nudges: true } });
+  assert.equal(s.taxYear, new Date().getFullYear(), 'a bad year falls back to the default');
   assert.equal(s.filingStatus, 'single');
   assert.equal(s.theme, 'system');
-  assert.equal(s.agi, '95000');
+  assert.equal(s.agi, '95000', 'strings stay strings');
   assert.equal(s.age65, true);
-  assert.equal('evil' in s, false);
-  assert.deepEqual(s.advisorDismissed, { a: '2026-01-01' });
-  assert.deepEqual(s.learned, { cvs: 'med.prescriptions' });
+  assert.equal(s.evil, undefined, 'unknown keys are dropped');
+  assert.equal(s.advisorDismissed, undefined, 'dismissals live in their own store');
+  assert.equal(s.learned, undefined, 'learned payees live in their own store');
+  assert.equal(s.experimentSnapshots, false, 'the old nested switches map onto the flat ones');
+  assert.equal(s.experimentCorrections, true);
+  assert.equal(s.experimentNudges, true);
+  assert.equal(DB.sanitizeSettings({ experiments: { snapshots: false }, experimentSnapshots: true }).experimentSnapshots, true, 'a flat key wins over the old nested one');
   const a = DB.sanitizeSettings(null), b = DB.sanitizeSettings(null);
-  a.advisorDismissed.x = 1;
-  assert.equal(b.advisorDismissed.x, undefined, 'fresh objects each time');
-  assert.equal(DB.DEFAULT_SETTINGS.advisorDismissed.x, undefined);
+  assert.notEqual(a, b); assert.deepEqual(a, b);
+  assert.deepEqual(Object.keys(a).sort(), Object.keys(DB.DEFAULT_SETTINGS).sort());
+  assert.ok(Object.values(DB.DEFAULT_SETTINGS).every((v) => ['string', 'number', 'boolean'].includes(typeof v)), 'the settings row holds scalars only');
 });
 
 test('receipt data URLs are decoded locally and only when they are images', async () => {

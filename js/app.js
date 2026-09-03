@@ -50,7 +50,13 @@
 
   // ---- state ---------------------------------------------------------------
   const state = {
-    settings: null,
+    settings: null, // the scalar settings row
+    learned: {}, // payee key -> lineId (store: learned)
+    weights: {}, // keyword -> multiplier (store: weights)
+    dismissed: {}, // recommendation id -> date (store: dismissals)
+    layouts: {}, // statement signature -> column layout (store: layouts)
+    snapshots: [], // forecast snapshots (store: snapshots)
+    overrides: {}, // taxYear -> nested parameter overrides (store: overrides)
     entries: [],
     computed: null,
     view: 'capture',
@@ -91,43 +97,45 @@
 
   function recompute() {
     const today = P.todayISO();
-    state.computed = R.compute(state.entries, Object.assign({}, state.settings, { today }));
-    const ex = state.settings.experiments || {};
-    const snaps = state.settings.forecastSnapshots || [];
+    state.computed = R.compute(state.entries, Object.assign({}, state.settings, { today, paramOverrides: state.overrides }));
+    const snaps = state.snapshots;
     // Finished years with snapshots get their final figure, so past forecasts can be checked.
     const thisYear = Number(today.slice(0, 4));
     const finals = {};
-    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today })).scheduleA.total;
+    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
     state.validation = EXP.validate(snaps, finals);
-    const calibration = ex.snapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
-    state.advice = ADV.analyze({ entries: state.entries, settings: state.settings, computed: state.computed, today, calibration });
+    const calibration = state.settings.experimentSnapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
+    state.advice = ADV.analyze({ entries: state.entries, settings: state.settings, dismissed: state.dismissed, computed: state.computed, today, calibration });
     maybeSnapshot(today);
   }
   /** Once a month, write down the live year's forecast so it can be checked when the year closes. */
   function maybeSnapshot(today) {
-    const ex = state.settings.experiments || {};
-    if (ex.snapshots === false) return;
+    if (state.settings.experimentSnapshots === false) return;
     const pr = state.advice && state.advice.projection;
     if (!pr || Number(state.settings.taxYear) !== Number(today.slice(0, 4)) || !state.computed.entries.length) return;
     const s = { today, taxYear: state.computed.taxYear, actual: pr.actual, expectedMore: pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore, projectedTotal: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore), standardDeduction: pr.standardDeduction, itemize: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore) > pr.standardDeduction };
-    if (!EXP.changed(state.settings.forecastSnapshots || [], s)) return;
-    state.settings.forecastSnapshots = EXP.snapshot(state.settings.forecastSnapshots || [], s);
-    DB.saveSettings(state.settings).catch(() => {});
+    if (!EXP.changed(state.snapshots, s)) return;
+    state.snapshots = EXP.snapshot(state.snapshots, s);
+    DB.syncSnapshots(state.snapshots).catch(() => {}); // one row per month per year; only the changed month is written
   }
   const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
   /** Learn from which line was chosen versus which was suggested (experiments.js). */
   function learnFromChoice(suggestions, chosenLineId) {
-    const ex = state.settings.experiments || {};
-    if (ex.corrections === false || !suggestions || !suggestions.length || !chosenLineId) return;
+    if (state.settings.experimentCorrections === false || !suggestions || !suggestions.length || !chosenLineId) return;
     const top = suggestions[0];
     const chosen = suggestions.find((x) => x.lineId === chosenLineId);
-    state.settings.keywordWeights = EXP.applyCorrection(state.settings.keywordWeights, top.lineId, (top.because || []).filter(EXP.isKeyword), chosenLineId, chosen ? (chosen.because || []).filter(EXP.isKeyword) : []);
-    DB.saveSettings(state.settings).catch(() => {});
+    state.weights = EXP.applyCorrection(state.weights, top.lineId, (top.because || []).filter(EXP.isKeyword), chosenLineId, chosen ? (chosen.because || []).filter(EXP.isKeyword) : []);
+    DB.syncWeights(state.weights).catch(() => {}); // only the keywords whose weight changed are written
+  }
+  /** Remember which line a payee was filed on: one row per payee key. */
+  function rememberLine(text, lineId) {
+    const key = C.keyFor(text || '');
+    C.learn(state.learned, text, lineId);
+    if (key && state.learned[key] === lineId) DB.putLearned(key, lineId).catch(() => {});
   }
   /** One follow-up right after a save, based only on what was just logged. Nothing is stored. */
   function sessionNudge(entry) {
-    const ex = state.settings.experiments || {};
-    if (ex.nudges === false || !entry) return;
+    if (state.settings.experimentNudges === false || !entry) return;
     const line = S.getLine(entry.lineId); if (!line) return;
     const once = (k) => { if (state.session.nudged.has(k)) return false; state.session.nudged.add(k); return true; };
     const dayMs = 86400000;
@@ -735,7 +743,7 @@
       return;
     }
     state.entries.push(entry); state.trips.push(trip);
-    if (T.purpose.trim()) { C.learn(state.settings.learned, T.purpose, T.lineId); DB.saveSettings(state.settings).catch(() => {}); }
+    if (T.purpose.trim()) rememberLine(T.purpose, T.lineId);
     toast(`Logged ${fmtMiles(trip.miles)} → ${line.label}`);
     const keepFrom = T.fromId;
     state.trip = freshTrip(); state.trip.fromId = keepFrom || state.trip.fromId;
@@ -906,7 +914,7 @@
     I.skipped = norm.skipped;
     // Schedule C lines are pre-ticked only when the ledger already shows self-employment; a coffee is not a business meal by default
     const hasBusiness = !!(state.computed && state.computed.scheduleC && state.computed.scheduleC.hasActivity);
-    I.rows = IMP.review(norm.rows, { learned: state.settings.learned, weights: state.settings.keywordWeights, existingEntries: state.entries, hasBusiness });
+    I.rows = IMP.review(norm.rows, { learned: state.learned, weights: state.weights, existingEntries: state.entries, hasBusiness });
     const headerRow = I.raw[I.map.headerIndex || 0] || I.raw[0] || [];
     I.headers = I.map.headerRow ? headerRow : headerRow.map((_, i) => `Column ${i + 1}`);
   }
@@ -918,7 +926,7 @@
     if (raw.length < 1) { toast('That file has no rows.'); return; }
     const map = IMP.detectColumns(raw);
     const signature = IMP.headerSignature(raw[map.headerIndex || 0]);
-    const remembered = map.headerRow ? (state.settings.importMappings || {})[signature] : null;
+    const remembered = map.headerRow ? state.layouts[signature] : null;
     if (remembered && remembered.map) Object.assign(map, remembered.map);
     state.importer = { fileName: file.name, raw, map, spendIsNegative: remembered ? remembered.spendIsNegative : undefined, headers: [], rows: [], signature, remembered: !!remembered };
     rebuildImport();
@@ -956,13 +964,15 @@
       const entries = chosen.map((r) => ({ id: DB.uid(), date: r.date, taxYear: Number(r.date.slice(0, 4)), lineId: r.lineId, amount: Math.round(r.amount * 100) / 100, description: r.description, note: r.memo ? `Statement category: ${r.memo}` : 'Imported from a statement', hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false, source: 'import' }));
       try { await DB.putEntries(entries); } catch (e) { I.adding = false; toast(`Could not save the rows: ${e && e.message ? e.message : 'storage error'}. Nothing was added.`, 6000); return; }
       state.entries.push(...entries);
-      for (const r of chosen) if (r.description) C.learn(state.settings.learned, r.description, r.lineId);
+      for (const r of chosen) if (r.description) rememberLine(r.description, r.lineId);
       for (const r of chosen) learnFromChoice(r.suggestions, r.lineId);
       if (I.map.headerRow && I.signature) {
-        state.settings.importMappings = state.settings.importMappings || {};
-        state.settings.importMappings[I.signature] = { map: { date: I.map.date, description: I.map.description, amount: I.map.amount, debit: I.map.debit, credit: I.map.credit, type: I.map.type, memo: I.map.memo, headerRow: true, headerIndex: I.map.headerIndex || 0, dayFirst: !!I.map.dayFirst }, spendIsNegative: I.spendIsNegative };
+        // the layout chosen for this statement header: one row per header
+        const layout = { signature: I.signature, map: { date: I.map.date, description: I.map.description, amount: I.map.amount, debit: I.map.debit, credit: I.map.credit, type: I.map.type, memo: I.map.memo, headerRow: true, headerIndex: I.map.headerIndex || 0, dayFirst: !!I.map.dayFirst } };
+        if (typeof I.spendIsNegative === 'boolean') layout.spendIsNegative = I.spendIsNegative;
+        state.layouts[I.signature] = layout;
+        try { await DB.putLayout(layout); } catch (e) { /* the rows are saved; remembering the layout is a convenience */ }
       }
-      await DB.saveSettings(state.settings);
       state.importer = null; state.captureMode = 'expense';
       toast(`Added ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} from the statement.`);
       go('ledger');
@@ -1006,9 +1016,9 @@
     const rec = state.advice && state.advice.recommendations.find((r) => r.id === id);
     if (!rec) return;
     if (act === 'dismiss') {
-      state.settings.advisorDismissed = state.settings.advisorDismissed || {};
-      state.settings.advisorDismissed[id] = P.todayISO();
-      await DB.saveSettings(state.settings);
+      const at = P.todayISO();
+      state.dismissed[id] = at;
+      await DB.putDismissal(id, at); // one row per dismissed recommendation
       toast('Dismissed for 30 days.');
       render();
       return;
@@ -1070,7 +1080,7 @@
   function reclassify() {
     const cap = state.capture;
     const textForClass = [cap.description, cap.parsed && cap.parsed.raw !== cap.description ? cap.text : ''].filter(Boolean).join(' ');
-    const res = C.classify(textForClass, { learned: state.settings.learned, description: cap.description, weights: state.settings.keywordWeights, miles: cap.parsed ? cap.parsed.miles != null : false, limit: 4 });
+    const res = C.classify(textForClass, { learned: state.learned, description: cap.description, weights: state.weights, miles: cap.parsed ? cap.parsed.miles != null : false, limit: 4 });
     cap.suggestions = res.suggestions;
     cap.nonDeductible = res.nonDeductible;
   }
@@ -1163,7 +1173,7 @@
     }
     state.entries.push(...entries);
     learnFromChoice(cap.suggestions, cap.lineId);
-    if (cap.description.trim()) { C.learn(state.settings.learned, cap.description, cap.lineId); DB.saveSettings(state.settings).catch(() => {}); }
+    if (cap.description.trim()) rememberLine(cap.description, cap.lineId);
     const fileYear = entries[0].taxYear;
     const label = isMiles ? fmtMiles(value) : moneyCents(saved);
     toast(`Saved ${label} → ${line.label}${entries.length > 1 ? ` × ${entries.length} months` : ''}${fileYear !== Number(state.settings.taxYear) ? ` (tax year ${fileYear})` : ''}`);
@@ -1458,7 +1468,7 @@
         if (S.isMiles(newLine)) { e.hasReceipt = false; }
         e.updatedAt = new Date().toISOString();
         try { await DB.putEntry(e); } catch (err) { toast(`Could not save: ${err && err.message ? err.message : 'storage error'}.`, 6000); return; }
-        if (desc) { C.learn(state.settings.learned, desc, newLine); DB.saveSettings(state.settings).catch(() => {}); }
+        if (desc) rememberLine(desc, newLine);
         closeModal();
         toast('Saved.');
         render();
@@ -1847,19 +1857,18 @@
     const ls = $('#loadSample'); if (ls) ls.onclick = loadSampleData;
     $('#copyAggregate').onclick = async () => { try { await navigator.clipboard.writeText(JSON.stringify(adv.aggregate, null, 2)); toast('Summary copied.'); } catch (e) { toast('Select the text and copy it.'); } };
     $('#downloadAggregate').onclick = () => downloadText(`itemizer-summary-${R0.taxYear}.json`, JSON.stringify(adv.aggregate, null, 2), 'application/json');
-    const ud = $('#undismiss'); if (ud) ud.onclick = async () => { state.settings.advisorDismissed = {}; await DB.saveSettings(state.settings); render(); toast('All recommendations are visible again.'); };
+    const ud = $('#undismiss'); if (ud) ud.onclick = async () => { state.dismissed = {}; await DB.clearDismissals(); recompute(); render(); toast('All recommendations are visible again.'); };
     const ics = $('#icsBtn'); if (ics) ics.onclick = () => downloadText(`itemizer-due-dates-${R0.taxYear}.ics`, icsText(), 'text/calendar');
   }
 
   function forecastCardHTML() {
-    const ex = state.settings.experiments || {};
-    const snaps = state.settings.forecastSnapshots || [];
+    const snaps = state.snapshots;
     const rows = state.validation || [];
     const calib = (state.advice.projection && state.advice.projection.calibration) || { factor: 1, n: 0 };
     const live = snaps.filter((s) => s.taxYear === state.computed.taxYear);
     const sum = EXP.summary(rows);
     return `<section class="card">
-      <div class="card-head"><h2>Forecast check</h2><span class="muted small">${ex.snapshots === false ? 'snapshots are off' : `${snaps.length} monthly ${snaps.length === 1 ? 'snapshot' : 'snapshots'} on this device`}</span></div>
+      <div class="card-head"><h2>Forecast check</h2><span class="muted small">${state.settings.experimentSnapshots === false ? 'snapshots are off' : `${snaps.length} monthly ${snaps.length === 1 ? 'snapshot' : 'snapshots'} on this device`}</span></div>
       ${rows.length ? `<p class="note">Past forecasts against the finished year${sum ? `: off by ${Math.round(sum.maePct * 100)}% on average, running ${sum.biasPct >= 0 ? 'high' : 'low'} by ${Math.abs(Math.round(sum.biasPct * 100))}%; the itemize call was right ${sum.verdictRight} of ${sum.verdictTotal} times` : ''}.</p>
       <div class="table-wrap"><table class="table-twin"><thead><tr><th>Forecast made</th><th class="num">Projected</th><th class="num">Final</th><th class="num">Off by</th><th>Call</th></tr></thead><tbody>${rows.slice(-12).map((r) => `<tr><td>${esc(r.month)}</td><td class="num">${money(r.projectedTotal)}</td><td class="num">${money(r.final)}</td><td class="num">${r.error > 0 ? '+' : ''}${money(r.error)}</td><td>${r.verdictRight ? '<span class="pill pill-good">right</span>' : '<span class="pill pill-warn">wrong</span>'}</td></tr>`).join('')}</tbody></table></div>
       <p class="note small" style="margin-top:8px">Calibration in use: ${calib.factor === 1 ? 'none' : `×${calib.factor} on the expected-to-come part`} (${esc(calib.basis || '')}).</p>` : `<p class="note">Each month the advisor's year-end forecast is written down here (kept ${EXP.KEEP_MONTHS} months, then dropped). When the year closes, every forecast is checked against the final figure and the advisor calibrates itself. ${live.length ? `${live.length} ${live.length === 1 ? 'snapshot' : 'snapshots'} taken for ${state.computed.taxYear} so far.` : 'Nothing to check yet.'}</p>`}
@@ -1876,12 +1885,12 @@
     const R0 = state.computed;
     const P0 = R0.params;
     const marriedJoint = s.filingStatus === 'mfj'; // a qualifying surviving spouse files alone: no spouse add-on
-    const overrides = (s.paramOverrides && s.paramOverrides[R0.taxYear]) || {};
+    const overrides = state.overrides[R0.taxYear] || {};
     const defaults = R.getParams(R0.taxYear, {});
     const fmtParam = (kind, v) => (kind === 'usd' ? money(v) : kind === 'rate' ? R.pct(v) : R.perMile(v));
     const toInput = (kind, v) => (kind === 'usd' ? String(Math.round(v)) : String(Math.round(v * 1000) / 10));
-    const learnedKeys = Object.keys(s.learned || {}).sort();
-    const dismissedCount = Object.keys(s.advisorDismissed || {}).length;
+    const learnedKeys = Object.keys(state.learned).sort();
+    const dismissedCount = Object.keys(state.dismissed).length;
 
     $('#view-settings').innerHTML = `
       <div class="settings-grid">
@@ -1936,18 +1945,18 @@
           <div class="card-head"><h2>Experiments</h2><span class="muted small">on this device, switchable, expiring</span></div>
           <p class="note">Three ways the app studies its own judgement and checks it later. Nothing here leaves the device.</p>
           <div class="chips" style="margin-top:10px">
-            <label class="check"><input type="checkbox" id="xSnapshots" ${(s.experiments || {}).snapshots === false ? '' : 'checked'}> Monthly forecast snapshots, checked when the year closes</label>
-            <label class="check"><input type="checkbox" id="xCorrections" ${(s.experiments || {}).corrections === false ? '' : 'checked'}> Learn from corrected suggestions</label>
-            <label class="check"><input type="checkbox" id="xNudges" ${(s.experiments || {}).nudges === false ? '' : 'checked'}> A follow-up right after a save</label>
+            <label class="check"><input type="checkbox" id="xSnapshots" ${s.experimentSnapshots === false ? '' : 'checked'}> Monthly forecast snapshots, checked when the year closes</label>
+            <label class="check"><input type="checkbox" id="xCorrections" ${s.experimentCorrections === false ? '' : 'checked'}> Learn from corrected suggestions</label>
+            <label class="check"><input type="checkbox" id="xNudges" ${s.experimentNudges === false ? '' : 'checked'}> A follow-up right after a save</label>
           </div>
-          ${Object.keys(s.keywordWeights || {}).length ? `<div class="learned-list" style="margin-top:10px">${Object.entries(s.keywordWeights).sort((a, b) => a[1] - b[1]).slice(0, 12).map(([k, v]) => `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">${v < 1 ? 'demoted' : 'boosted'} to ×${v}</span></span></div>`).join('')}</div>` : ''}
-          <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="xClearSnapshots" ${(s.forecastSnapshots || []).length ? '' : 'disabled'}>Clear ${(s.forecastSnapshots || []).length} ${(s.forecastSnapshots || []).length === 1 ? 'snapshot' : 'snapshots'}</button><button class="btn btn-sm" type="button" id="xResetWeights" ${Object.keys(s.keywordWeights || {}).length ? '' : 'disabled'}>Reset keyword weights</button></div>
+          ${Object.keys(state.weights).length ? `<div class="learned-list" style="margin-top:10px">${Object.entries(state.weights).sort((a, b) => a[1] - b[1]).slice(0, 12).map(([k, v]) => `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">${v < 1 ? 'demoted' : 'boosted'} to ×${v}</span></span></div>`).join('')}</div>` : ''}
+          <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="xClearSnapshots" ${state.snapshots.length ? '' : 'disabled'}>Clear ${state.snapshots.length} ${state.snapshots.length === 1 ? 'snapshot' : 'snapshots'}</button><button class="btn btn-sm" type="button" id="xResetWeights" ${Object.keys(state.weights).length ? '' : 'disabled'}>Reset keyword weights</button></div>
         </section>
 
         <section class="card">
           <div class="card-head"><h2>Learned categories</h2><span class="muted small">${learnedKeys.length} remembered</span></div>
           <p class="note">When you file something, its description is remembered so the same payee lands on the same line next time. Remove one if it learned wrong.</p>
-          ${learnedKeys.length ? `<div class="learned-list" style="margin-top:10px">${learnedKeys.map((k) => { const l = S.getLine(s.learned[k]); return `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">→ ${esc(l ? l.label : s.learned[k])}</span></span><button class="btn btn-ghost btn-sm" type="button" data-forget="${esc(k)}">Forget</button></div>`; }).join('')}</div><div class="btn-row" style="margin-top:10px"><button class="btn btn-sm" type="button" id="forgetAll">Forget all</button></div>` : ''}
+          ${learnedKeys.length ? `<div class="learned-list" style="margin-top:10px">${learnedKeys.map((k) => { const l = S.getLine(state.learned[k]); return `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">→ ${esc(l ? l.label : state.learned[k])}</span></span><button class="btn btn-ghost btn-sm" type="button" data-forget="${esc(k)}">Forget</button></div>`; }).join('')}</div><div class="btn-row" style="margin-top:10px"><button class="btn btn-sm" type="button" id="forgetAll">Forget all</button></div>` : ''}
         </section>
 
         <section class="card">
@@ -2006,14 +2015,14 @@
     $$('[data-param]').forEach((inp) => inp.addEventListener('change', async () => {
       const path = inp.dataset.param, kind = inp.dataset.kind;
       const raw = inp.value.trim().replace(/[$,%¢]/g, '');
-      if (!s.paramOverrides[R0.taxYear]) s.paramOverrides[R0.taxYear] = {};
-      const ov = s.paramOverrides[R0.taxYear];
+      if (!state.overrides[R0.taxYear]) state.overrides[R0.taxYear] = {};
+      const ov = state.overrides[R0.taxYear];
       if (raw === '' || isNaN(Number(raw))) { unsetPath(ov, path); }
       else { const n = Number(raw); R.setPath(ov, path, kind === 'usd' ? n : n / 100); }
-      if (!Object.keys(ov).length) delete s.paramOverrides[R0.taxYear];
-      await save(); renderSettings();
+      if (!Object.keys(ov).length) delete state.overrides[R0.taxYear];
+      await DB.syncOverrides(R0.taxYear, ov); recompute(); renderSettings(); // one row per overridden parameter
     }));
-    $('#resetParams').onclick = async () => { delete s.paramOverrides[R0.taxYear]; await save(); renderSettings(); toast('Defaults restored.'); };
+    $('#resetParams').onclick = async () => { delete state.overrides[R0.taxYear]; await DB.syncOverrides(R0.taxYear, {}); recompute(); renderSettings(); toast('Defaults restored.'); };
     $$('[data-theme-pick]').forEach((b) => b.onclick = async () => { s.theme = b.dataset.themePick; applyTheme(); await save(); renderSettings(); });
     $('#exportJson').onclick = async () => {
       const btn = $('#exportJson'); btn.disabled = true;
@@ -2028,14 +2037,14 @@
     $('#exportAllCsv').onclick = () => downloadText('itemizer-all-years.csv', DB.toCSV(state.entries, S), 'text/csv');
     const ls = $('#loadSample2'); if (ls) ls.onclick = loadSampleData;
     const rs = $('#removeSamples2'); if (rs) rs.onclick = removeSampleData;
-    $$('[data-forget]').forEach((b) => b.onclick = async () => { C.forget(s.learned, b.dataset.forget); await save(); renderSettings(); });
-    const fa = $('#forgetAll'); if (fa) fa.onclick = async () => { s.learned = {}; await save(); renderSettings(); };
-    for (const [id, key] of [['xSnapshots', 'snapshots'], ['xCorrections', 'corrections'], ['xNudges', 'nudges']]) {
-      const el = $('#' + id); if (el) el.onchange = async () => { s.experiments = Object.assign({ snapshots: true, corrections: true, nudges: true }, s.experiments || {}); s.experiments[key] = el.checked; await save(); };
+    $$('[data-forget]').forEach((b) => b.onclick = async () => { C.forget(state.learned, b.dataset.forget); await DB.deleteLearned(b.dataset.forget); renderSettings(); });
+    const fa = $('#forgetAll'); if (fa) fa.onclick = async () => { state.learned = {}; await DB.clearLearned(); renderSettings(); };
+    for (const [id, key] of [['xSnapshots', 'experimentSnapshots'], ['xCorrections', 'experimentCorrections'], ['xNudges', 'experimentNudges']]) {
+      const el = $('#' + id); if (el) el.onchange = async () => { s[key] = el.checked; await save(); };
     }
-    $('#xClearSnapshots').onclick = async () => { s.forecastSnapshots = []; await save(); renderSettings(); toast("Forecast snapshots cleared. This month's forecast for the live year is written down again."); };
-    $('#xResetWeights').onclick = async () => { s.keywordWeights = {}; await save(); renderSettings(); toast('Keyword weights reset.'); };
-    $('#resetDismissed').onclick = async () => { s.advisorDismissed = {}; await save(); renderSettings(); toast('All recommendations are visible again.'); };
+    $('#xClearSnapshots').onclick = async () => { state.snapshots = []; await DB.clearSnapshots(); recompute(); renderSettings(); toast("Forecast snapshots cleared. This month's forecast for the live year is written down again."); };
+    $('#xResetWeights').onclick = async () => { state.weights = {}; await DB.clearWeights(); renderSettings(); toast('Keyword weights reset.'); };
+    $('#resetDismissed').onclick = async () => { state.dismissed = {}; await DB.clearDismissals(); recompute(); renderSettings(); toast('All recommendations are visible again.'); };
     $('#wipeAll').onclick = async () => {
       if (!(await confirmDialog('Delete everything?', 'All entries, receipts, learned categories, and settings on this device will be removed.', 'Delete all data', true))) return;
       try { await DB.clearAll(); } catch (e) { toast(`Could not delete everything: ${e && e.message ? e.message : 'storage error'}.`, 6000); }
@@ -2045,7 +2054,8 @@
     DB.storageInfo().then((info) => {
       const el = $('#storageNote'); if (!el) return;
       const used = info.estimate && info.estimate.usage ? ` · ${(info.estimate.usage / 1048576).toFixed(1)} MB used` : '';
-      let text = info.mode === 'idb' ? `Stored in this browser's IndexedDB${used}.` : 'This browser has no IndexedDB, so entries are kept in localStorage and receipt photos cannot be stored.';
+      let text = info.mode === 'idb' ? `Stored in this browser's IndexedDB, one table per kind of record${used}.` : info.mode === 'local' ? 'This browser has no IndexedDB, so the same tables are kept in localStorage and receipt photos cannot be stored.' : 'This browser offers neither IndexedDB nor localStorage; nothing is saved between sessions.';
+      if (info.counts) text += ` Rows: ${Object.entries(info.counts).map(([k, n]) => `${k} ${n == null ? '?' : n}`).join(' · ')}.`;
       if (info.persisted === true) text += ' The browser has agreed not to evict this data.';
       else if (info.persisted === false) text += ' The browser may delete this data when disk space runs low (Safari: after 7 days without a visit). Install the app to your home screen and download a backup now and then.';
       if (info.notice) text += ` ${info.notice}`;
@@ -2210,6 +2220,8 @@
     state.receiptURLs.clear();
     discardRecorder();
     state.settings = await DB.getSettings();
+    // the six stores the app reads as maps and lists; every write goes back to its own row
+    [state.learned, state.weights, state.dismissed, state.layouts, state.snapshots, state.overrides] = await Promise.all([DB.getLearned(), DB.getWeights(), DB.getDismissals(), DB.getLayouts(), DB.getSnapshots(), DB.getOverrides()]);
     state.entries = await DB.getEntries();
     for (const e of state.entries) { try { if (!e.taxYear && typeof e.date === 'string') e.taxYear = Number(e.date.slice(0, 4)); } catch (err) { /* a bad row never blocks start-up */ } }
     try { state.places = await DB.getPlaces(); state.trips = await DB.getTrips(); } catch (e) { state.places = []; state.trips = []; }

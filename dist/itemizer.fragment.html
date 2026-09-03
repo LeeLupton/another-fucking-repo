@@ -2188,7 +2188,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const computed = input.computed || Rules.compute(entries, Object.assign({}, settings, { today }));
     const yearEntries = computed.entries;
     const recurrences = detectRecurrences(entries, { today, taxYear });
-    const dismissedAt = settings.advisorDismissed || {};
+    const dismissedAt = input.dismissed || settings.advisorDismissed || {}; // one row per dismissal in the store; the settings shape still works for older callers
     const isDismissed = (id) => { const at = dismissedAt[id]; return !!at && daysBetween(String(at).slice(0, 10), today) < DISMISS_DAYS; };
     // "If it stopped, dismiss this" also stops the projection for that payee
     for (const r of recurrences) if (isDismissed(`recur:${r.key}:${r.nextDate}`)) r.muted = true;
@@ -3106,24 +3106,62 @@ window.ITEMIZER_SINGLE_FILE = true;
 ;
 /* ---- js/store.js ---- */
 /*
- * store.js — local-first persistence.
+ * store.js — local-first persistence: one object store per kind of record.
  *
- * Everything stays on the device: entries, settings, and receipt images live in
- * IndexedDB (receipts are Blobs, so a year of photos fits comfortably). When
- * IndexedDB is unavailable the store falls back to localStorage for entries and
- * settings (receipts then cannot be stored, and the UI says so).
+ * Everything stays on the device. Each kind of record has its own IndexedDB object store with a primary
+ * key, and every change writes or deletes the one row it concerns. Nothing is kept as a document that has
+ * to be rewritten whole; JSON is used only for the backup file.
  *
- * Backups are a single JSON file (receipts embedded as data URLs) that imports
- * back into any browser.
+ *   store        key         row
+ *   entries      id          { id, date, taxYear, lineId, amount, description, note, hasReceipt, receiptId, createdAt, updatedAt, sample, source?, items?, tripId?, fullAmount?, share? }
+ *   receipts     id          { id, entryId, type, createdAt, blob }
+ *   places       id          { id, name, category, address, lat, lon, note, sample, updatedAt }
+ *   trips        id          { id, date, taxYear, fromId, toId, fromLabel, toLabel, purpose, miles, roundTrip, method, lineId, entryId, points, startedAt, endedAt, createdAt }
+ *   settings     key         { key: 'main', value: { scalar configuration only, see DEFAULT_SETTINGS } }
+ *   learned      key         { key, lineId, updatedAt }                       a payee key and the worksheet line it was filed on
+ *   weights      keyword     { keyword, weight, updatedAt }                   a classifier keyword and its learned multiplier
+ *   dismissals   id          { id, dismissedAt }                              an advisor recommendation the user dismissed
+ *   layouts      signature   { signature, map, spendIsNegative, updatedAt }   a statement header and the column layout chosen for it
+ *   snapshots    id          { id: 'taxYear:month', taxYear, month, takenOn, actual, expectedMore, projectedTotal, standardDeduction, itemize }
+ *   overrides    id          { id: 'taxYear:path', taxYear, path, value, updatedAt }   one overridden tax parameter
+ *
+ * Records reference other records by id (lineId, entryId, receiptId, fromId, toId); display labels are looked up
+ * from the schema or the referenced row when shown. The two labels a trip keeps (fromLabel, toLabel) are the
+ * mileage log's own record of where it went, kept so the log survives a deleted place.
+ *
+ * Version 3 of the database split the settings document of versions 1 and 2, which carried six of these
+ * collections inside one JSON value, into the six stores above; the upgrade does that in place and loses nothing.
+ * Without IndexedDB the same layout is kept in localStorage, one key per store; without either (tests), in memory.
  */
 (function (root) {
   'use strict';
 
   const DB_NAME = 'itemizer';
-  const DB_VERSION = 2;
-  const LS_KEY = 'itemizer:fallback';
+  const DB_VERSION = 3;
+  const LS_PREFIX = 'itemizer:store:'; // fallback: one key per store
+  const LS_LEGACY_KEY = 'itemizer:fallback'; // the single document the fallback kept before version 3
   const SETTINGS_KEY = 'main';
 
+  /** Every store, its primary key, and its indexes; the one table drives IndexedDB, the fallback, backups and clears. */
+  const STORES = {
+    entries: { key: 'id', indexes: { taxYear: 'taxYear', date: 'date' } },
+    receipts: { key: 'id' },
+    places: { key: 'id' },
+    trips: { key: 'id', indexes: { date: 'date' } },
+    settings: { key: 'key' },
+    learned: { key: 'key' },
+    weights: { key: 'keyword' },
+    dismissals: { key: 'id' },
+    layouts: { key: 'signature' },
+    snapshots: { key: 'id', indexes: { taxYear: 'taxYear' } },
+    overrides: { key: 'id', indexes: { taxYear: 'taxYear' } },
+  };
+  const STORE_NAMES = Object.keys(STORES);
+  const DATA_STORES = ['entries', 'receipts', 'places', 'trips']; // the ledger itself
+  const ROW_STORES = ['learned', 'weights', 'dismissals', 'layouts', 'snapshots', 'overrides']; // what the settings document used to carry
+  const STAMPED = new Set(['learned', 'weights', 'layouts', 'overrides']); // rows that carry updatedAt
+
+  /** The settings row: scalar configuration only. Collections have their own stores. */
   const DEFAULT_SETTINGS = {
     taxYear: new Date().getFullYear(),
     taxpayerName: '', // the name on the return, printed on the worksheet so the preparer knows whose sheet it is
@@ -3137,85 +3175,175 @@ window.ITEMIZER_SINGLE_FILE = true;
     stateWithholding: '',
     casualtyFederalDisaster: false,
     casualtyQualifiedDisaster: false,
-    paramOverrides: {},
-    learned: {},
     theme: 'system',
-    advisorDismissed: {},
     state: '',
     county: '',
     disasterNumber: '',
-    importMappings: {},
-    experiments: { snapshots: true, corrections: true, nudges: true },
-    forecastSnapshots: [],
-    keywordWeights: {},
+    experimentSnapshots: true,
+    experimentCorrections: true,
+    experimentNudges: true,
   };
+  const LEGACY_EXPERIMENT_FLAGS = { snapshots: 'experimentSnapshots', corrections: 'experimentCorrections', nudges: 'experimentNudges' };
 
   let dbPromise = null;
-  let mode = 'idb';
+  let mode = 'idb'; // 'idb' | 'local' (localStorage, one key per store) | 'memory' (nothing survives the session)
   let notice = null; // a storage condition the UI should mention ("close other tabs")
+
+  const nowISO = () => new Date().toISOString();
+  const str = (v, max) => (v == null ? '' : String(v).slice(0, max));
+  const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+  const MONTH = /^\d{4}-\d{2}$/;
+  const PARAM_PATH = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
+  const yearOf = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 2000 && n <= 2100 ? n : null; };
+  const finite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+  const schemaOf = (opts) => (opts && opts.schema) || root.ItemizerSchema || null;
 
   /** Copy only known settings keys, coerced to the type of the default. Backups and stored records are untrusted input. */
   function sanitizeSettings(raw) {
-    const out = JSON.parse(JSON.stringify(DEFAULT_SETTINGS)); // fresh objects every time: nothing shared with the defaults
+    const out = Object.assign({}, DEFAULT_SETTINGS);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
     for (const k of Object.keys(DEFAULT_SETTINGS)) {
       if (!(k in raw)) continue;
       const def = DEFAULT_SETTINGS[k], v = raw[k];
       if (typeof def === 'boolean') out[k] = !!v;
       else if (typeof def === 'number') { const n = Number(v); if (Number.isFinite(n)) out[k] = n; }
-      else if (typeof def === 'string') out[k] = v == null ? '' : String(v).slice(0, 200);
-      else if (Array.isArray(def)) out[k] = Array.isArray(v) ? v.filter((x) => x && typeof x === 'object').slice(0, 500) : def;
-      else if (def && typeof def === 'object') out[k] = v && typeof v === 'object' && !Array.isArray(v) ? Object.assign({}, v) : {};
+      else out[k] = v == null ? '' : String(v).slice(0, 200);
+    }
+    // the experiment switches used to be one nested object; a flat key wins when both are present
+    if (raw.experiments && typeof raw.experiments === 'object') {
+      for (const [old, flat] of Object.entries(LEGACY_EXPERIMENT_FLAGS)) if (!(flat in raw) && old in raw.experiments) out[flat] = raw.experiments[old] !== false;
     }
     if (!(out.taxYear >= 2000 && out.taxYear <= 2100)) out.taxYear = DEFAULT_SETTINGS.taxYear;
     if (!['single', 'mfj', 'mfs', 'hoh', 'qss'].includes(out.filingStatus)) out.filingStatus = 'single';
     if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
-    out.experiments = Object.assign({}, DEFAULT_SETTINGS.experiments, out.experiments);
     return out;
   }
 
-  /** Once IndexedDB is back, anything an earlier localStorage-only session saved is folded in so no data is orphaned. */
-  async function migrateFallback(db) {
-    let d = null;
-    try { d = typeof localStorage !== 'undefined' && localStorage.getItem(LS_KEY) ? JSON.parse(localStorage.getItem(LS_KEY)) : null; } catch (e) { d = null; }
-    if (!d || typeof d !== 'object') return;
-    try {
-      const have = new Set((await tx(db, 'entries', 'readonly', (os) => os.getAllKeys())) || []);
-      const entries = (d.entries || []).filter((e) => e && typeof e.id === 'string' && !have.has(e.id));
-      if (entries.length) await tx(db, 'entries', 'readwrite', (os) => { entries.forEach((e) => os.put(e)); });
-      for (const store of ['places', 'trips']) {
-        const keys = new Set((await tx(db, store, 'readonly', (os) => os.getAllKeys())) || []);
-        const rows = (d[store] || []).filter((x) => x && typeof x.id === 'string' && !keys.has(x.id));
-        if (rows.length) await tx(db, store, 'readwrite', (os) => { rows.forEach((x) => os.put(x)); });
+  /** A clean row for `store`, or null when the input cannot be trusted. `schema` (ItemizerSchema) validates line ids when given. */
+  function sanitizeRow(store, r, schema) {
+    if (!r || typeof r !== 'object') return null;
+    switch (store) {
+      case 'learned': {
+        const key = str(r.key, 120).trim();
+        if (!key || typeof r.lineId !== 'string' || !r.lineId || r.lineId.length > 40) return null;
+        if (schema && schema.getLine && !schema.getLine(r.lineId)) return null;
+        return { key, lineId: r.lineId, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }
-      const cur = await tx(db, 'settings', 'readonly', (os) => os.get(SETTINGS_KEY));
-      if (!cur && d.settings) await tx(db, 'settings', 'readwrite', (os) => os.put({ key: SETTINGS_KEY, value: sanitizeSettings(d.settings) }));
-      localStorage.removeItem(LS_KEY);
-    } catch (e) { /* leave the fallback data in place for the next start */ }
+      case 'weights': {
+        const keyword = str(r.keyword, 120).trim(), weight = finite(r.weight);
+        if (!keyword || weight == null || weight <= 0 || weight > 10) return null;
+        return { keyword, weight: Math.round(weight * 1000) / 1000, updatedAt: str(r.updatedAt, 40) || nowISO() };
+      }
+      case 'dismissals': {
+        const id = str(r.id, 200).trim(), dismissedAt = str(r.dismissedAt, 10);
+        if (!id || !ISO_DAY.test(dismissedAt)) return null;
+        return { id, dismissedAt };
+      }
+      case 'layouts': {
+        const signature = str(r.signature, 400).trim();
+        if (!signature || !r.map || typeof r.map !== 'object') return null;
+        const map = {};
+        for (const c of ['date', 'description', 'amount', 'debit', 'credit', 'type', 'memo']) { const n = Number(r.map[c]); map[c] = Number.isInteger(n) && n >= -1 && n < 200 ? n : -1; }
+        map.headerRow = r.map.headerRow !== false;
+        const hi = Number(r.map.headerIndex); map.headerIndex = Number.isInteger(hi) && hi >= 0 && hi < 50 ? hi : 0;
+        map.dayFirst = !!r.map.dayFirst;
+        const out = { signature, map, updatedAt: str(r.updatedAt, 40) || nowISO() };
+        if (typeof r.spendIsNegative === 'boolean') out.spendIsNegative = r.spendIsNegative;
+        return out;
+      }
+      case 'snapshots': {
+        const taxYear = yearOf(r.taxYear), month = str(r.month, 7);
+        const nums = ['actual', 'expectedMore', 'projectedTotal', 'standardDeduction'].map((k) => finite(r[k]));
+        if (taxYear == null || !MONTH.test(month) || nums.some((n) => n == null)) return null;
+        const [actual, expectedMore, projectedTotal, standardDeduction] = nums.map((n) => Math.round(n * 100) / 100);
+        return { id: `${taxYear}:${month}`, taxYear, month, takenOn: ISO_DAY.test(str(r.takenOn, 10)) ? str(r.takenOn, 10) : `${month}-01`, actual, expectedMore, projectedTotal, standardDeduction, itemize: !!r.itemize };
+      }
+      case 'overrides': {
+        const taxYear = yearOf(r.taxYear), path = str(r.path, 80), value = finite(r.value);
+        if (taxYear == null || !PARAM_PATH.test(path) || value == null) return null;
+        return { id: `${taxYear}:${path}`, taxYear, path, value, updatedAt: str(r.updatedAt, 40) || nowISO() };
+      }
+      case 'places': return r && typeof r.id === 'string' && r.id && typeof r.name === 'string' ? r : null;
+      case 'trips': return r && typeof r.id === 'string' && r.id && typeof r.date === 'string' && ISO_DAY.test(r.date) ? r : null;
+      case 'settings': return r && typeof r.key === 'string' ? { key: r.key, value: sanitizeSettings(r.value) } : null;
+      default: return r && r[STORES[store].key] != null ? r : null;
+    }
+  }
+
+  // ---- overrides: the tax engine reads them nested by year, the store keeps one row per parameter ----
+  function setPath(obj, path, value) {
+    const keys = path.split('.');
+    let o = obj;
+    for (let i = 0; i < keys.length - 1; i++) { if (typeof o[keys[i]] !== 'object' || o[keys[i]] === null) o[keys[i]] = {}; o = o[keys[i]]; }
+    o[keys[keys.length - 1]] = value;
+    return obj;
+  }
+  /** { mileage: { medical: 0.5 } } for one year → [{ taxYear, path: 'mileage.medical', value: 0.5 }] */
+  function flattenOverrides(taxYear, nested, prefix, out) {
+    out = out || [];
+    if (!nested || typeof nested !== 'object') return out;
+    for (const [k, v] of Object.entries(nested)) {
+      const path = prefix ? `${prefix}.${k}` : k;
+      if (v && typeof v === 'object' && !Array.isArray(v)) flattenOverrides(taxYear, v, path, out);
+      else out.push({ taxYear: Number(taxYear), path, value: v });
+    }
+    return out;
+  }
+  /** rows → { [taxYear]: nested } as rules.getParams expects */
+  function nestOverrides(rows) {
+    const out = {};
+    for (const r of rows || []) { if (!out[r.taxYear]) out[r.taxYear] = {}; setPath(out[r.taxYear], r.path, r.value); }
+    return out;
+  }
+
+  /**
+   * Split a settings document from before version 3 (or a version-2 backup) into the scalar row and the rows of the
+   * six stores it used to carry. Pure; bad rows are dropped, nothing else is changed.
+   */
+  function splitLegacySettings(raw, schema) {
+    const out = { settings: sanitizeSettings(raw), learned: [], weights: [], dismissals: [], layouts: [], snapshots: [], overrides: [] };
+    if (!raw || typeof raw !== 'object') return out;
+    const push = (store, row) => { const clean = sanitizeRow(store, row, schema); if (clean) out[store].push(clean); };
+    const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+    for (const [key, lineId] of Object.entries(obj(raw.learned))) push('learned', { key, lineId });
+    for (const [keyword, weight] of Object.entries(obj(raw.keywordWeights))) push('weights', { keyword, weight });
+    for (const [id, dismissedAt] of Object.entries(obj(raw.advisorDismissed))) push('dismissals', { id, dismissedAt: str(dismissedAt, 10) });
+    for (const [signature, v] of Object.entries(obj(raw.importMappings))) push('layouts', { signature, map: v && v.map, spendIsNegative: v ? v.spendIsNegative : undefined, updatedAt: v && v.savedAt });
+    for (const s of Array.isArray(raw.forecastSnapshots) ? raw.forecastSnapshots : []) push('snapshots', s);
+    for (const [year, nested] of Object.entries(obj(raw.paramOverrides))) for (const r of flattenOverrides(year, nested)) push('overrides', r);
+    return out;
+  }
+  /** True when a settings document still carries the collections of versions 1 and 2. */
+  const isLegacySettings = (s) => !!s && typeof s === 'object' && ['learned', 'keywordWeights', 'advisorDismissed', 'importMappings', 'forecastSnapshots', 'paramOverrides'].some((k) => k in s);
+
+  // ---- IndexedDB ------------------------------------------------------------
+
+  /** v1/v2 → v3: the settings document is split into rows inside the upgrade transaction, so no data is ever in two places. */
+  function migrateSettingsDocument(t) {
+    const req = t.objectStore('settings').get(SETTINGS_KEY);
+    req.onsuccess = () => {
+      const rec = req.result;
+      if (!rec || !rec.value || !isLegacySettings(rec.value)) return;
+      const split = splitLegacySettings(rec.value, root.ItemizerSchema || null);
+      t.objectStore('settings').put({ key: SETTINGS_KEY, value: split.settings });
+      for (const store of ROW_STORES) for (const row of split[store]) t.objectStore(store).put(row);
+    };
   }
 
   function openDB() {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
       // localStorage is only for browsers with no IndexedDB at all; a blocked or failing open must not fork the data
-      if (typeof indexedDB === 'undefined') { mode = 'local'; resolve(null); return; }
+      if (typeof indexedDB === 'undefined') { mode = storageArea() === memoryArea ? 'memory' : 'local'; migrateLegacyLocal(); resolve(null); return; }
       let req;
-      try { req = indexedDB.open(DB_NAME, DB_VERSION); } catch (e) { mode = 'local'; resolve(null); return; }
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains('entries')) {
-          const es = db.createObjectStore('entries', { keyPath: 'id' });
-          es.createIndex('taxYear', 'taxYear');
-          es.createIndex('date', 'date');
+      try { req = indexedDB.open(DB_NAME, DB_VERSION); } catch (e) { mode = storageArea() === memoryArea ? 'memory' : 'local'; migrateLegacyLocal(); resolve(null); return; }
+      req.onupgradeneeded = (ev) => {
+        const db = req.result, t = req.transaction;
+        for (const [name, def] of Object.entries(STORES)) {
+          const os = db.objectStoreNames.contains(name) ? t.objectStore(name) : db.createObjectStore(name, { keyPath: def.key });
+          for (const [idx, path] of Object.entries(def.indexes || {})) if (!os.indexNames.contains(idx)) os.createIndex(idx, path);
         }
-        if (!db.objectStoreNames.contains('receipts')) db.createObjectStore('receipts', { keyPath: 'id' });
-        if (!db.objectStoreNames.contains('settings')) db.createObjectStore('settings', { keyPath: 'key' });
-        // v2: saved places and the mileage log
-        if (!db.objectStoreNames.contains('places')) db.createObjectStore('places', { keyPath: 'id' });
-        if (!db.objectStoreNames.contains('trips')) {
-          const ts = db.createObjectStore('trips', { keyPath: 'id' });
-          ts.createIndex('date', 'date');
-        }
+        if (ev.oldVersion > 0 && ev.oldVersion < 3) migrateSettingsDocument(t);
       };
       req.onsuccess = () => {
         const db = req.result;
@@ -3247,52 +3375,139 @@ window.ITEMIZER_SINGLE_FILE = true;
       t.onabort = () => reject(t.error || new Error('transaction aborted'));
     });
   }
-  function reqToPromise(req) {
-    return new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+
+  // ---- fallback: the same stores as keys in localStorage, or in memory when there is no localStorage either ----
+  const memoryArea = (() => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); } }; })();
+  function storageArea() {
+    try { if (typeof localStorage !== 'undefined' && localStorage) return localStorage; } catch (e) { /* access denied: memory */ }
+    return memoryArea;
+  }
+  const LS = {
+    read(store) { try { const o = JSON.parse(storageArea().getItem(LS_PREFIX + store) || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } },
+    write(store, obj) { try { storageArea().setItem(LS_PREFIX + store, JSON.stringify(obj)); } catch (e) { throw new Error('Storage is full or unavailable; nothing was saved. Download a backup and free some space.'); } },
+    all(store) { return Object.values(this.read(store)); },
+    get(store, key) { const o = this.read(store); return o[key] === undefined ? null : o[key]; },
+    put(store, row) { const o = this.read(store); o[row[STORES[store].key]] = row; this.write(store, o); },
+    putMany(store, rows) { const o = this.read(store); for (const r of rows) o[r[STORES[store].key]] = r; this.write(store, o); },
+    del(store, key) { const o = this.read(store); if (key in o) { delete o[key]; this.write(store, o); } },
+    delMany(store, keys) { const o = this.read(store); let hit = false; for (const k of keys) if (k in o) { delete o[k]; hit = true; } if (hit) this.write(store, o); },
+    clear(store) { try { storageArea().removeItem(LS_PREFIX + store); } catch (e) { /* nothing to clear */ } },
+    count(store) { return Object.keys(this.read(store)).length; },
+  };
+  /** The fallback's pre-v3 single document becomes one key per store. */
+  function migrateLegacyLocal() {
+    const area = storageArea();
+    let legacy = null;
+    try { legacy = JSON.parse(area.getItem(LS_LEGACY_KEY) || 'null'); } catch (e) { legacy = null; }
+    if (!legacy || typeof legacy !== 'object') return;
+    try {
+      for (const s of ['entries', 'places', 'trips']) LS.putMany(s, (Array.isArray(legacy[s]) ? legacy[s] : []).filter((r) => r && typeof r.id === 'string' && LS.get(s, r.id) == null));
+      if (legacy.settings) {
+        const split = splitLegacySettings(legacy.settings, root.ItemizerSchema || null);
+        if (!LS.get('settings', SETTINGS_KEY)) LS.put('settings', { key: SETTINGS_KEY, value: split.settings });
+        for (const s of ROW_STORES) LS.putMany(s, split[s].filter((r) => LS.get(s, r[STORES[s].key]) == null));
+      }
+      area.removeItem(LS_LEGACY_KEY);
+    } catch (e) { /* leave the document in place for the next start */ }
+  }
+  /** Once IndexedDB is back, anything a localStorage-only session saved (either fallback layout) is folded in so no data is orphaned. */
+  async function migrateFallback(db) {
+    const area = storageArea();
+    if (area === memoryArea) return;
+    const pending = {};
+    const add = (s, rows) => { if (rows && rows.length) pending[s] = (pending[s] || []).concat(rows); };
+    let legacy = null;
+    try { legacy = JSON.parse(area.getItem(LS_LEGACY_KEY) || 'null'); } catch (e) { legacy = null; }
+    if (legacy && typeof legacy === 'object') {
+      for (const s of ['entries', 'places', 'trips']) add(s, (Array.isArray(legacy[s]) ? legacy[s] : []).filter((r) => r && typeof r.id === 'string'));
+      if (legacy.settings) { const split = splitLegacySettings(legacy.settings, root.ItemizerSchema || null); add('settings', [{ key: SETTINGS_KEY, value: split.settings }]); for (const s of ROW_STORES) add(s, split[s]); }
+    }
+    for (const s of STORE_NAMES) add(s, LS.all(s));
+    if (!Object.keys(pending).length) return;
+    try {
+      for (const [s, rows] of Object.entries(pending)) {
+        const keyName = STORES[s].key;
+        const have = new Set((await tx(db, s, 'readonly', (os) => os.getAllKeys())) || []);
+        const fresh = rows.filter((r) => r && r[keyName] != null && !have.has(r[keyName]));
+        if (fresh.length) await tx(db, s, 'readwrite', (os) => { fresh.forEach((r) => os.put(r)); });
+      }
+      area.removeItem(LS_LEGACY_KEY);
+      for (const s of STORE_NAMES) area.removeItem(LS_PREFIX + s);
+    } catch (e) { /* leave the fallback data in place for the next start */ }
   }
 
-  // ---- localStorage fallback ------------------------------------------------
-  function lsRead() {
-    try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (e) { return {}; }
-  }
-  function lsWrite(data) {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); return true; } catch (e) { throw new Error('Storage is full or unavailable; nothing was saved. Download a backup and free some space.'); }
-  }
+  // ---- the row layer: every store, one interface ----------------------------------
 
-  // ---- public API -----------------------------------------------------------
-
-  async function getEntries() {
+  async function allRows(store) {
     const db = await openDB();
-    if (!db) return (lsRead().entries || []);
-    const all = await tx(db, 'entries', 'readonly', (os) => os.getAll());
-    return all || [];
+    if (!db) return LS.all(store);
+    return (await tx(db, store, 'readonly', (os) => os.getAll())) || [];
   }
-
-  async function putEntry(entry) {
+  async function getRow(store, key) {
     const db = await openDB();
-    if (!db) { const d = lsRead(); d.entries = (d.entries || []).filter((e) => e.id !== entry.id).concat([entry]); lsWrite(d); return entry; }
-    await tx(db, 'entries', 'readwrite', (os) => os.put(entry));
-    return entry;
+    if (!db) return LS.get(store, key);
+    return (await tx(db, store, 'readonly', (os) => os.get(key))) || null;
   }
-
-  async function putEntries(entries) {
+  async function putRow(store, row) {
     const db = await openDB();
-    if (!db) { const d = lsRead(); const ids = new Set(entries.map((e) => e.id)); d.entries = (d.entries || []).filter((e) => !ids.has(e.id)).concat(entries); lsWrite(d); return entries; }
-    await tx(db, 'entries', 'readwrite', (os) => { entries.forEach((e) => os.put(e)); });
-    return entries;
+    if (!db) { LS.put(store, row); return row; }
+    await tx(db, store, 'readwrite', (os) => os.put(row));
+    return row;
+  }
+  async function putRows(store, rows) {
+    if (!rows.length) return rows;
+    const db = await openDB();
+    if (!db) { LS.putMany(store, rows); return rows; }
+    await tx(db, store, 'readwrite', (os) => { rows.forEach((r) => os.put(r)); });
+    return rows;
+  }
+  async function deleteRow(store, key) {
+    const db = await openDB();
+    if (!db) { LS.del(store, key); return; }
+    await tx(db, store, 'readwrite', (os) => os.delete(key));
+  }
+  async function clearStore(store) {
+    const db = await openDB();
+    if (!db) { LS.clear(store); return; }
+    await tx(db, store, 'readwrite', (os) => os.clear());
+  }
+  async function countRows(store) {
+    const db = await openDB();
+    if (!db) return LS.count(store);
+    return (await tx(db, store, 'readonly', (os) => os.count())) || 0;
+  }
+  const withoutStamp = (r) => { const c = Object.assign({}, r); delete c.updatedAt; return JSON.stringify(c, Object.keys(c).sort()); };
+  /**
+   * Make the store hold exactly `rows` (within `scope`, when given: only existing rows that match it may be deleted).
+   * Unchanged rows are left alone; new and changed rows are written and stamped; rows no longer wanted are deleted.
+   * Returns { put, deleted }.
+   */
+  async function syncRows(store, rows, scope) {
+    const keyName = STORES[store].key;
+    const existing = (await allRows(store)).filter(scope || (() => true));
+    const have = new Map(existing.map((r) => [r[keyName], r]));
+    const want = new Map(rows.map((r) => [r[keyName], r]));
+    const deleted = existing.filter((r) => !want.has(r[keyName])).map((r) => r[keyName]);
+    const stamp = STAMPED.has(store) ? nowISO() : null;
+    const put = rows.filter((r) => { const cur = have.get(r[keyName]); return !cur || withoutStamp(cur) !== withoutStamp(r); }).map((r) => (stamp ? Object.assign({}, r, { updatedAt: stamp }) : r));
+    if (!deleted.length && !put.length) return { put: 0, deleted: 0 };
+    const db = await openDB();
+    if (!db) { LS.delMany(store, deleted); LS.putMany(store, put); return { put: put.length, deleted: deleted.length }; }
+    await tx(db, store, 'readwrite', (os) => { deleted.forEach((k) => os.delete(k)); put.forEach((r) => os.put(r)); });
+    return { put: put.length, deleted: deleted.length };
   }
 
+  // ---- the ledger ---------------------------------------------------------------
+
+  const getEntries = () => allRows('entries');
+  const putEntry = (entry) => putRow('entries', entry);
+  const putEntries = (entries) => putRows('entries', entries);
   async function deleteEntry(id) {
-    const db = await openDB();
-    if (!db) { const d = lsRead(); d.entries = (d.entries || []).filter((e) => e.id !== id); lsWrite(d); return; }
-    const entry = await tx(db, 'entries', 'readonly', (os) => os.get(id));
-    await tx(db, 'entries', 'readwrite', (os) => os.delete(id));
+    const entry = await getRow('entries', id);
+    await deleteRow('entries', id);
     if (entry && entry.receiptId) await deleteReceipt(entry.receiptId);
   }
-
-  async function deleteEntries(ids) {
-    for (const id of ids) await deleteEntry(id);
-  }
+  async function deleteEntries(ids) { for (const id of ids) await deleteEntry(id); }
 
   async function putReceipt(receipt) {
     const db = await openDB();
@@ -3300,60 +3515,64 @@ window.ITEMIZER_SINGLE_FILE = true;
     await tx(db, 'receipts', 'readwrite', (os) => os.put(receipt));
     return receipt;
   }
-  async function getReceipt(id) {
-    const db = await openDB();
-    if (!db || !id) return null;
-    return (await tx(db, 'receipts', 'readonly', (os) => os.get(id))) || null;
-  }
-  async function deleteReceipt(id) {
-    const db = await openDB();
-    if (!db || !id) return;
-    await tx(db, 'receipts', 'readwrite', (os) => os.delete(id));
-  }
-  async function getAllReceipts() {
-    const db = await openDB();
-    if (!db) return [];
-    return (await tx(db, 'receipts', 'readonly', (os) => os.getAll())) || [];
-  }
+  async function getReceipt(id) { if (!id) return null; const db = await openDB(); if (!db) return null; return (await tx(db, 'receipts', 'readonly', (os) => os.get(id))) || null; }
+  async function deleteReceipt(id) { if (!id) return; const db = await openDB(); if (!db) return; await tx(db, 'receipts', 'readwrite', (os) => os.delete(id)); }
+  async function getAllReceipts() { const db = await openDB(); if (!db) return []; return (await tx(db, 'receipts', 'readonly', (os) => os.getAll())) || []; }
 
-  // ---- places and trips (the mileage log) ----------------------------------------
-  async function getAllFrom(store) {
-    const db = await openDB();
-    if (!db) return lsRead()[store] || [];
-    return (await tx(db, store, 'readonly', (os) => os.getAll())) || [];
-  }
-  async function putInto(store, obj) {
-    const db = await openDB();
-    if (!db) { const d = lsRead(); d[store] = (d[store] || []).filter((x) => x.id !== obj.id).concat([obj]); lsWrite(d); return obj; }
-    await tx(db, store, 'readwrite', (os) => os.put(obj));
-    return obj;
-  }
-  async function deleteFrom(store, id) {
-    const db = await openDB();
-    if (!db) { const d = lsRead(); d[store] = (d[store] || []).filter((x) => x.id !== id); lsWrite(d); return; }
-    await tx(db, store, 'readwrite', (os) => os.delete(id));
-  }
-  const getPlaces = () => getAllFrom('places');
-  const putPlace = (place) => putInto('places', place);
-  const deletePlace = (id) => deleteFrom('places', id);
-  const getTrips = () => getAllFrom('trips');
-  const putTrip = (trip) => putInto('trips', trip);
-  const deleteTrip = (id) => deleteFrom('trips', id);
+  const getPlaces = () => allRows('places');
+  const putPlace = (place) => putRow('places', place);
+  const deletePlace = (id) => deleteRow('places', id);
+  const getTrips = () => allRows('trips');
+  const putTrip = (trip) => putRow('trips', trip);
+  const deleteTrip = (id) => deleteRow('trips', id);
+
+  // ---- settings: one row of scalars ----------------------------------------------
 
   async function getSettings() {
-    const db = await openDB();
-    let saved = null;
-    if (!db) saved = lsRead().settings || null;
-    else { const rec = await tx(db, 'settings', 'readonly', (os) => os.get(SETTINGS_KEY)); saved = rec ? rec.value : null; }
-    return sanitizeSettings(saved);
+    const rec = await getRow('settings', SETTINGS_KEY);
+    return sanitizeSettings(rec ? rec.value : null);
   }
   async function saveSettings(settings) {
-    const db = await openDB();
     const value = sanitizeSettings(settings);
-    if (!db) { const d = lsRead(); d.settings = value; lsWrite(d); return value; }
-    await tx(db, 'settings', 'readwrite', (os) => os.put({ key: SETTINGS_KEY, value }));
+    await putRow('settings', { key: SETTINGS_KEY, value });
     return value;
   }
+
+  // ---- the six stores the app reads as maps and lists ----------------------------------
+
+  const mapOf = (rows, k, v) => { const o = {}; for (const r of rows) o[r[k]] = v ? r[v] : r; return o; };
+
+  /** { payeeKey: lineId } */
+  const getLearned = async () => mapOf(await allRows('learned'), 'key', 'lineId');
+  const putLearned = (key, lineId) => putRow('learned', { key, lineId, updatedAt: nowISO() });
+  const deleteLearned = (key) => deleteRow('learned', key);
+  const clearLearned = () => clearStore('learned');
+
+  /** { keyword: weight } */
+  const getWeights = async () => mapOf(await allRows('weights'), 'keyword', 'weight');
+  const syncWeights = (map) => syncRows('weights', Object.entries(map || {}).map(([keyword, weight]) => sanitizeRow('weights', { keyword, weight })).filter(Boolean));
+  const clearWeights = () => clearStore('weights');
+
+  /** { recommendationId: 'YYYY-MM-DD' } */
+  const getDismissals = async () => mapOf(await allRows('dismissals'), 'id', 'dismissedAt');
+  const putDismissal = (id, dismissedAt) => putRow('dismissals', { id, dismissedAt });
+  const clearDismissals = () => clearStore('dismissals');
+
+  /** { signature: { map, spendIsNegative, updatedAt } } */
+  const getLayouts = async () => mapOf(await allRows('layouts'), 'signature');
+  const putLayout = async (layout) => { const row = sanitizeRow('layouts', Object.assign({}, layout, { updatedAt: nowISO() })); if (!row) throw new Error('Not a statement layout.'); return putRow('layouts', row); };
+  const clearLayouts = () => clearStore('layouts');
+
+  /** snapshots, oldest month first */
+  const getSnapshots = async () => (await allRows('snapshots')).sort((a, b) => a.month.localeCompare(b.month) || a.taxYear - b.taxYear);
+  const syncSnapshots = (list) => syncRows('snapshots', (list || []).map((s) => sanitizeRow('snapshots', s)).filter(Boolean));
+  const clearSnapshots = () => clearStore('snapshots');
+
+  /** { taxYear: nested overrides } as rules.getParams reads them */
+  const getOverrides = async () => nestOverrides(await allRows('overrides'));
+  /** Make one year's overrides exactly `nested` (an empty object removes them all); other years are untouched. */
+  const syncOverrides = (taxYear, nested) => syncRows('overrides', flattenOverrides(taxYear, nested).map((r) => sanitizeRow('overrides', r)).filter(Boolean), (r) => Number(r.taxYear) === Number(taxYear));
+  const clearOverrides = () => clearStore('overrides');
 
   // ---- backup / restore -------------------------------------------------------
 
@@ -3374,14 +3593,13 @@ window.ITEMIZER_SINGLE_FILE = true;
     return new Blob([bytes], { type: m[1].toLowerCase().replace('jpg', 'jpeg') });
   }
 
-  /** The backup without receipts; the receipt images are added as separate Blob parts by exportBackup so no giant string is built. */
+  /** The backup without receipts: the settings row, then every other store as an array of rows. Receipts are appended by exportBackup. */
   async function exportJSON(opts) {
     opts = opts || {};
-    const [entries, settings, places, trips] = await Promise.all([getEntries(), getSettings(), getPlaces(), getTrips()]);
-    const out = { app: 'itemizer', version: 2, exportedAt: new Date().toISOString(), settings, entries, places, trips, receipts: [] };
+    const [settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips] = await Promise.all([getSettings(), ...ROW_STORES.map(allRows), getEntries(), getPlaces(), getTrips()]);
+    const out = { app: 'itemizer', version: 3, exportedAt: nowISO(), settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips, receipts: [] };
     if (opts.includeReceipts !== false) {
-      const receipts = await getAllReceipts();
-      for (const r of receipts) {
+      for (const r of await getAllReceipts()) {
         try { out.receipts.push({ id: r.id, entryId: r.entryId, type: r.type, createdAt: r.createdAt, dataURL: await blobToDataURL(r.blob) }); } catch (e) { /* skip unreadable */ }
       }
     }
@@ -3410,30 +3628,33 @@ window.ITEMIZER_SINGLE_FILE = true;
     return { blob: new Blob(parts, { type: 'application/json' }), receipts: count, failed };
   }
 
-  const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
   /** An entry from a backup, or null when it cannot be trusted. `schema` (ItemizerSchema) validates the line id when given. */
   function sanitizeEntry(e, schema) {
     if (!e || typeof e !== 'object' || typeof e.id !== 'string' || !e.id || typeof e.lineId !== 'string' || typeof e.date !== 'string' || !ISO_DAY.test(e.date)) return null;
     if (schema && schema.getLine && !schema.getLine(e.lineId)) return null;
     const amount = Number(e.amount);
     if (!Number.isFinite(amount) || amount < 0) return null;
-    const str = (v, max) => (v == null ? '' : String(v).slice(0, max));
     const out = {
       id: e.id.slice(0, 64), date: e.date, taxYear: Number(e.taxYear) || Number(e.date.slice(0, 4)), lineId: e.lineId, amount: Math.round(amount * 100) / 100,
       description: str(e.description, 300), note: str(e.note, 4000), hasReceipt: !!e.hasReceipt, receiptId: typeof e.receiptId === 'string' ? e.receiptId.slice(0, 64) : null,
-      createdAt: str(e.createdAt, 40) || new Date().toISOString(), updatedAt: str(e.updatedAt, 40) || new Date().toISOString(), sample: !!e.sample,
+      createdAt: str(e.createdAt, 40) || nowISO(), updatedAt: str(e.updatedAt, 40) || nowISO(), sample: !!e.sample,
     };
     if (typeof e.source === 'string') out.source = e.source.slice(0, 40);
     if (Array.isArray(e.items)) out.items = e.items.filter((x) => x && typeof x === 'object').slice(0, 200);
     if (typeof e.tripId === 'string') out.tripId = e.tripId.slice(0, 64);
+    if (e.fullAmount != null && Number.isFinite(Number(e.fullAmount))) out.fullAmount = Number(e.fullAmount);
+    if (e.share != null && Number.isFinite(Number(e.share))) out.share = Number(e.share);
     return out;
   }
 
-  /** Merge a backup in. Existing entries with the same id are replaced. Returns counts, including rows that were rejected. */
+  /**
+   * Merge a backup in. Existing rows with the same key are replaced; version-2 backups (collections inside `settings`)
+   * are split into rows on the way in. Returns counts, including rows that were rejected.
+   */
   async function importJSON(data, opts) {
     opts = opts || {};
     if (!data || typeof data !== 'object' || Array.isArray(data) || data.app !== 'itemizer' || !Array.isArray(data.entries)) throw new Error('That file is not an Itemizer backup.');
-    const schema = opts.schema || root.ItemizerSchema || null;
+    const schema = schemaOf(opts);
     if (opts.replace) await clearAll({ keepSettings: true });
     const entries = data.entries.map((e) => sanitizeEntry(e, schema)).filter(Boolean);
     const skipped = data.entries.length - entries.length;
@@ -3441,30 +3662,30 @@ window.ITEMIZER_SINGLE_FILE = true;
     let receipts = 0, badReceipts = 0;
     for (const r of data.receipts || []) {
       if (!r || typeof r.id !== 'string' || !r.dataURL) { badReceipts++; continue; }
-      try { await putReceipt({ id: r.id.slice(0, 64), entryId: typeof r.entryId === 'string' ? r.entryId : null, type: /^image\//.test(r.type) ? r.type : 'image/jpeg', createdAt: typeof r.createdAt === 'string' ? r.createdAt : new Date().toISOString(), blob: await dataURLToBlob(r.dataURL) }); receipts++; } catch (e) { badReceipts++; }
+      try { await putReceipt({ id: r.id.slice(0, 64), entryId: typeof r.entryId === 'string' ? r.entryId : null, type: /^image\//.test(r.type) ? r.type : 'image/jpeg', createdAt: typeof r.createdAt === 'string' ? r.createdAt : nowISO(), blob: await dataURLToBlob(r.dataURL) }); receipts++; } catch (e) { badReceipts++; }
     }
-    for (const p of data.places || []) if (p && typeof p.id === 'string' && typeof p.name === 'string') await putPlace(p);
-    for (const t of data.trips || []) if (t && typeof t.id === 'string' && typeof t.date === 'string' && ISO_DAY.test(t.date)) await putTrip(t);
+    await putRows('places', (Array.isArray(data.places) ? data.places : []).map((p) => sanitizeRow('places', p)).filter(Boolean));
+    await putRows('trips', (Array.isArray(data.trips) ? data.trips : []).map((t) => sanitizeRow('trips', t)).filter(Boolean));
+    // the six memory stores: rows in a version-3 file, or split out of the settings document of an older one
+    const rows = {};
+    const legacy = isLegacySettings(data.settings) ? splitLegacySettings(data.settings, schema) : null;
+    for (const store of ROW_STORES) {
+      const incoming = Array.isArray(data[store]) ? data[store].map((r) => sanitizeRow(store, r, schema)).filter(Boolean) : [];
+      rows[store] = legacy ? legacy[store].concat(incoming) : incoming;
+      await putRows(store, rows[store]);
+    }
     if (data.settings && typeof data.settings === 'object' && opts.settings !== false) {
       const cur = await getSettings();
-      const incoming = sanitizeSettings(data.settings);
-      const next = Object.assign({}, cur, incoming);
-      next.learned = Object.assign({}, cur.learned, incoming.learned || {});
-      next.paramOverrides = Object.assign({}, cur.paramOverrides, incoming.paramOverrides || {});
-      await saveSettings(next);
+      await saveSettings(Object.assign({}, cur, sanitizeSettings(data.settings)));
     }
-    return { entries: entries.length, skipped, receipts, badReceipts };
+    const counts = {}; for (const store of ROW_STORES) counts[store] = rows[store].length;
+    return { entries: entries.length, skipped, receipts, badReceipts, rows: counts };
   }
 
+  /** Remove everything; with keepSettings, only the ledger (entries, receipts, places, trips) goes and what the app has learned stays. */
   async function clearAll(opts) {
     opts = opts || {};
-    const db = await openDB();
-    if (!db) { const d = lsRead(); lsWrite(opts.keepSettings ? { settings: d.settings } : {}); return; }
-    await tx(db, 'entries', 'readwrite', (os) => os.clear());
-    await tx(db, 'receipts', 'readwrite', (os) => os.clear());
-    await tx(db, 'places', 'readwrite', (os) => os.clear());
-    await tx(db, 'trips', 'readwrite', (os) => os.clear());
-    if (!opts.keepSettings) await tx(db, 'settings', 'readwrite', (os) => os.clear());
+    for (const store of opts.keepSettings ? DATA_STORES : STORE_NAMES) await clearStore(store);
   }
 
   function csvEscape(v) {
@@ -3498,12 +3719,19 @@ window.ITEMIZER_SINGLE_FILE = true;
     return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   }
 
+  /** How many rows each store holds. */
+  async function counts() {
+    const out = {};
+    for (const store of STORE_NAMES) { try { out[store] = await countRows(store); } catch (e) { out[store] = null; } }
+    return out;
+  }
   async function storageInfo() {
     let estimate = null, persisted = null;
     try { if (navigator.storage && navigator.storage.estimate) estimate = await navigator.storage.estimate(); } catch (e) { /* ignore */ }
     try { if (navigator.storage && navigator.storage.persisted) persisted = await navigator.storage.persisted(); } catch (e) { /* ignore */ }
-    try { await openDB(); } catch (e) { /* reported by the caller */ }
-    return { mode, estimate, persisted, notice };
+    let rows = null;
+    try { await openDB(); rows = await counts(); } catch (e) { /* reported by the caller */ }
+    return { mode, estimate, persisted, notice, version: DB_VERSION, stores: STORE_NAMES.slice(), counts: rows };
   }
   /** Ask the browser not to evict this origin's data. Call from a user gesture; resolves to the browser's answer or null. */
   async function requestPersistence() {
@@ -3511,7 +3739,17 @@ window.ITEMIZER_SINGLE_FILE = true;
     return null;
   }
 
-  root.ItemizerStore = { DEFAULT_SETTINGS, sanitizeSettings, sanitizeEntry, openDB, getEntries, putEntry, putEntries, deleteEntry, deleteEntries, putReceipt, getReceipt, deleteReceipt, getAllReceipts, getPlaces, putPlace, deletePlace, getTrips, putTrip, deleteTrip, getSettings, saveSettings, exportJSON, exportBackup, importJSON, clearAll, toCSV, csvEscape, csvText, dataURLToBlob, uid, storageInfo, requestPersistence, get mode() { return mode; }, get notice() { return notice; } };
+  root.ItemizerStore = {
+    DB_VERSION, STORES, STORE_NAMES, DATA_STORES, ROW_STORES, DEFAULT_SETTINGS,
+    sanitizeSettings, sanitizeRow, sanitizeEntry, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides,
+    openDB, allRows, getRow, putRow, putRows, deleteRow, clearStore, syncRows, countRows, counts,
+    getEntries, putEntry, putEntries, deleteEntry, deleteEntries, putReceipt, getReceipt, deleteReceipt, getAllReceipts,
+    getPlaces, putPlace, deletePlace, getTrips, putTrip, deleteTrip, getSettings, saveSettings,
+    getLearned, putLearned, deleteLearned, clearLearned, getWeights, syncWeights, clearWeights, getDismissals, putDismissal, clearDismissals,
+    getLayouts, putLayout, clearLayouts, getSnapshots, syncSnapshots, clearSnapshots, getOverrides, syncOverrides, clearOverrides,
+    exportJSON, exportBackup, importJSON, clearAll, toCSV, csvEscape, csvText, dataURLToBlob, uid, storageInfo, requestPersistence,
+    get mode() { return mode; }, get notice() { return notice; },
+  };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 ;
@@ -3568,7 +3806,13 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   // ---- state ---------------------------------------------------------------
   const state = {
-    settings: null,
+    settings: null, // the scalar settings row
+    learned: {}, // payee key -> lineId (store: learned)
+    weights: {}, // keyword -> multiplier (store: weights)
+    dismissed: {}, // recommendation id -> date (store: dismissals)
+    layouts: {}, // statement signature -> column layout (store: layouts)
+    snapshots: [], // forecast snapshots (store: snapshots)
+    overrides: {}, // taxYear -> nested parameter overrides (store: overrides)
     entries: [],
     computed: null,
     view: 'capture',
@@ -3609,43 +3853,45 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   function recompute() {
     const today = P.todayISO();
-    state.computed = R.compute(state.entries, Object.assign({}, state.settings, { today }));
-    const ex = state.settings.experiments || {};
-    const snaps = state.settings.forecastSnapshots || [];
+    state.computed = R.compute(state.entries, Object.assign({}, state.settings, { today, paramOverrides: state.overrides }));
+    const snaps = state.snapshots;
     // Finished years with snapshots get their final figure, so past forecasts can be checked.
     const thisYear = Number(today.slice(0, 4));
     const finals = {};
-    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today })).scheduleA.total;
+    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
     state.validation = EXP.validate(snaps, finals);
-    const calibration = ex.snapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
-    state.advice = ADV.analyze({ entries: state.entries, settings: state.settings, computed: state.computed, today, calibration });
+    const calibration = state.settings.experimentSnapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
+    state.advice = ADV.analyze({ entries: state.entries, settings: state.settings, dismissed: state.dismissed, computed: state.computed, today, calibration });
     maybeSnapshot(today);
   }
   /** Once a month, write down the live year's forecast so it can be checked when the year closes. */
   function maybeSnapshot(today) {
-    const ex = state.settings.experiments || {};
-    if (ex.snapshots === false) return;
+    if (state.settings.experimentSnapshots === false) return;
     const pr = state.advice && state.advice.projection;
     if (!pr || Number(state.settings.taxYear) !== Number(today.slice(0, 4)) || !state.computed.entries.length) return;
     const s = { today, taxYear: state.computed.taxYear, actual: pr.actual, expectedMore: pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore, projectedTotal: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore), standardDeduction: pr.standardDeduction, itemize: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore) > pr.standardDeduction };
-    if (!EXP.changed(state.settings.forecastSnapshots || [], s)) return;
-    state.settings.forecastSnapshots = EXP.snapshot(state.settings.forecastSnapshots || [], s);
-    DB.saveSettings(state.settings).catch(() => {});
+    if (!EXP.changed(state.snapshots, s)) return;
+    state.snapshots = EXP.snapshot(state.snapshots, s);
+    DB.syncSnapshots(state.snapshots).catch(() => {}); // one row per month per year; only the changed month is written
   }
   const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
   /** Learn from which line was chosen versus which was suggested (experiments.js). */
   function learnFromChoice(suggestions, chosenLineId) {
-    const ex = state.settings.experiments || {};
-    if (ex.corrections === false || !suggestions || !suggestions.length || !chosenLineId) return;
+    if (state.settings.experimentCorrections === false || !suggestions || !suggestions.length || !chosenLineId) return;
     const top = suggestions[0];
     const chosen = suggestions.find((x) => x.lineId === chosenLineId);
-    state.settings.keywordWeights = EXP.applyCorrection(state.settings.keywordWeights, top.lineId, (top.because || []).filter(EXP.isKeyword), chosenLineId, chosen ? (chosen.because || []).filter(EXP.isKeyword) : []);
-    DB.saveSettings(state.settings).catch(() => {});
+    state.weights = EXP.applyCorrection(state.weights, top.lineId, (top.because || []).filter(EXP.isKeyword), chosenLineId, chosen ? (chosen.because || []).filter(EXP.isKeyword) : []);
+    DB.syncWeights(state.weights).catch(() => {}); // only the keywords whose weight changed are written
+  }
+  /** Remember which line a payee was filed on: one row per payee key. */
+  function rememberLine(text, lineId) {
+    const key = C.keyFor(text || '');
+    C.learn(state.learned, text, lineId);
+    if (key && state.learned[key] === lineId) DB.putLearned(key, lineId).catch(() => {});
   }
   /** One follow-up right after a save, based only on what was just logged. Nothing is stored. */
   function sessionNudge(entry) {
-    const ex = state.settings.experiments || {};
-    if (ex.nudges === false || !entry) return;
+    if (state.settings.experimentNudges === false || !entry) return;
     const line = S.getLine(entry.lineId); if (!line) return;
     const once = (k) => { if (state.session.nudged.has(k)) return false; state.session.nudged.add(k); return true; };
     const dayMs = 86400000;
@@ -4253,7 +4499,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       return;
     }
     state.entries.push(entry); state.trips.push(trip);
-    if (T.purpose.trim()) { C.learn(state.settings.learned, T.purpose, T.lineId); DB.saveSettings(state.settings).catch(() => {}); }
+    if (T.purpose.trim()) rememberLine(T.purpose, T.lineId);
     toast(`Logged ${fmtMiles(trip.miles)} → ${line.label}`);
     const keepFrom = T.fromId;
     state.trip = freshTrip(); state.trip.fromId = keepFrom || state.trip.fromId;
@@ -4424,7 +4670,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     I.skipped = norm.skipped;
     // Schedule C lines are pre-ticked only when the ledger already shows self-employment; a coffee is not a business meal by default
     const hasBusiness = !!(state.computed && state.computed.scheduleC && state.computed.scheduleC.hasActivity);
-    I.rows = IMP.review(norm.rows, { learned: state.settings.learned, weights: state.settings.keywordWeights, existingEntries: state.entries, hasBusiness });
+    I.rows = IMP.review(norm.rows, { learned: state.learned, weights: state.weights, existingEntries: state.entries, hasBusiness });
     const headerRow = I.raw[I.map.headerIndex || 0] || I.raw[0] || [];
     I.headers = I.map.headerRow ? headerRow : headerRow.map((_, i) => `Column ${i + 1}`);
   }
@@ -4436,7 +4682,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (raw.length < 1) { toast('That file has no rows.'); return; }
     const map = IMP.detectColumns(raw);
     const signature = IMP.headerSignature(raw[map.headerIndex || 0]);
-    const remembered = map.headerRow ? (state.settings.importMappings || {})[signature] : null;
+    const remembered = map.headerRow ? state.layouts[signature] : null;
     if (remembered && remembered.map) Object.assign(map, remembered.map);
     state.importer = { fileName: file.name, raw, map, spendIsNegative: remembered ? remembered.spendIsNegative : undefined, headers: [], rows: [], signature, remembered: !!remembered };
     rebuildImport();
@@ -4474,13 +4720,15 @@ window.ITEMIZER_SINGLE_FILE = true;
       const entries = chosen.map((r) => ({ id: DB.uid(), date: r.date, taxYear: Number(r.date.slice(0, 4)), lineId: r.lineId, amount: Math.round(r.amount * 100) / 100, description: r.description, note: r.memo ? `Statement category: ${r.memo}` : 'Imported from a statement', hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false, source: 'import' }));
       try { await DB.putEntries(entries); } catch (e) { I.adding = false; toast(`Could not save the rows: ${e && e.message ? e.message : 'storage error'}. Nothing was added.`, 6000); return; }
       state.entries.push(...entries);
-      for (const r of chosen) if (r.description) C.learn(state.settings.learned, r.description, r.lineId);
+      for (const r of chosen) if (r.description) rememberLine(r.description, r.lineId);
       for (const r of chosen) learnFromChoice(r.suggestions, r.lineId);
       if (I.map.headerRow && I.signature) {
-        state.settings.importMappings = state.settings.importMappings || {};
-        state.settings.importMappings[I.signature] = { map: { date: I.map.date, description: I.map.description, amount: I.map.amount, debit: I.map.debit, credit: I.map.credit, type: I.map.type, memo: I.map.memo, headerRow: true, headerIndex: I.map.headerIndex || 0, dayFirst: !!I.map.dayFirst }, spendIsNegative: I.spendIsNegative };
+        // the layout chosen for this statement header: one row per header
+        const layout = { signature: I.signature, map: { date: I.map.date, description: I.map.description, amount: I.map.amount, debit: I.map.debit, credit: I.map.credit, type: I.map.type, memo: I.map.memo, headerRow: true, headerIndex: I.map.headerIndex || 0, dayFirst: !!I.map.dayFirst } };
+        if (typeof I.spendIsNegative === 'boolean') layout.spendIsNegative = I.spendIsNegative;
+        state.layouts[I.signature] = layout;
+        try { await DB.putLayout(layout); } catch (e) { /* the rows are saved; remembering the layout is a convenience */ }
       }
-      await DB.saveSettings(state.settings);
       state.importer = null; state.captureMode = 'expense';
       toast(`Added ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} from the statement.`);
       go('ledger');
@@ -4524,9 +4772,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     const rec = state.advice && state.advice.recommendations.find((r) => r.id === id);
     if (!rec) return;
     if (act === 'dismiss') {
-      state.settings.advisorDismissed = state.settings.advisorDismissed || {};
-      state.settings.advisorDismissed[id] = P.todayISO();
-      await DB.saveSettings(state.settings);
+      const at = P.todayISO();
+      state.dismissed[id] = at;
+      await DB.putDismissal(id, at); // one row per dismissed recommendation
       toast('Dismissed for 30 days.');
       render();
       return;
@@ -4588,7 +4836,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   function reclassify() {
     const cap = state.capture;
     const textForClass = [cap.description, cap.parsed && cap.parsed.raw !== cap.description ? cap.text : ''].filter(Boolean).join(' ');
-    const res = C.classify(textForClass, { learned: state.settings.learned, description: cap.description, weights: state.settings.keywordWeights, miles: cap.parsed ? cap.parsed.miles != null : false, limit: 4 });
+    const res = C.classify(textForClass, { learned: state.learned, description: cap.description, weights: state.weights, miles: cap.parsed ? cap.parsed.miles != null : false, limit: 4 });
     cap.suggestions = res.suggestions;
     cap.nonDeductible = res.nonDeductible;
   }
@@ -4681,7 +4929,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     }
     state.entries.push(...entries);
     learnFromChoice(cap.suggestions, cap.lineId);
-    if (cap.description.trim()) { C.learn(state.settings.learned, cap.description, cap.lineId); DB.saveSettings(state.settings).catch(() => {}); }
+    if (cap.description.trim()) rememberLine(cap.description, cap.lineId);
     const fileYear = entries[0].taxYear;
     const label = isMiles ? fmtMiles(value) : moneyCents(saved);
     toast(`Saved ${label} → ${line.label}${entries.length > 1 ? ` × ${entries.length} months` : ''}${fileYear !== Number(state.settings.taxYear) ? ` (tax year ${fileYear})` : ''}`);
@@ -4976,7 +5224,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         if (S.isMiles(newLine)) { e.hasReceipt = false; }
         e.updatedAt = new Date().toISOString();
         try { await DB.putEntry(e); } catch (err) { toast(`Could not save: ${err && err.message ? err.message : 'storage error'}.`, 6000); return; }
-        if (desc) { C.learn(state.settings.learned, desc, newLine); DB.saveSettings(state.settings).catch(() => {}); }
+        if (desc) rememberLine(desc, newLine);
         closeModal();
         toast('Saved.');
         render();
@@ -5365,19 +5613,18 @@ window.ITEMIZER_SINGLE_FILE = true;
     const ls = $('#loadSample'); if (ls) ls.onclick = loadSampleData;
     $('#copyAggregate').onclick = async () => { try { await navigator.clipboard.writeText(JSON.stringify(adv.aggregate, null, 2)); toast('Summary copied.'); } catch (e) { toast('Select the text and copy it.'); } };
     $('#downloadAggregate').onclick = () => downloadText(`itemizer-summary-${R0.taxYear}.json`, JSON.stringify(adv.aggregate, null, 2), 'application/json');
-    const ud = $('#undismiss'); if (ud) ud.onclick = async () => { state.settings.advisorDismissed = {}; await DB.saveSettings(state.settings); render(); toast('All recommendations are visible again.'); };
+    const ud = $('#undismiss'); if (ud) ud.onclick = async () => { state.dismissed = {}; await DB.clearDismissals(); recompute(); render(); toast('All recommendations are visible again.'); };
     const ics = $('#icsBtn'); if (ics) ics.onclick = () => downloadText(`itemizer-due-dates-${R0.taxYear}.ics`, icsText(), 'text/calendar');
   }
 
   function forecastCardHTML() {
-    const ex = state.settings.experiments || {};
-    const snaps = state.settings.forecastSnapshots || [];
+    const snaps = state.snapshots;
     const rows = state.validation || [];
     const calib = (state.advice.projection && state.advice.projection.calibration) || { factor: 1, n: 0 };
     const live = snaps.filter((s) => s.taxYear === state.computed.taxYear);
     const sum = EXP.summary(rows);
     return `<section class="card">
-      <div class="card-head"><h2>Forecast check</h2><span class="muted small">${ex.snapshots === false ? 'snapshots are off' : `${snaps.length} monthly ${snaps.length === 1 ? 'snapshot' : 'snapshots'} on this device`}</span></div>
+      <div class="card-head"><h2>Forecast check</h2><span class="muted small">${state.settings.experimentSnapshots === false ? 'snapshots are off' : `${snaps.length} monthly ${snaps.length === 1 ? 'snapshot' : 'snapshots'} on this device`}</span></div>
       ${rows.length ? `<p class="note">Past forecasts against the finished year${sum ? `: off by ${Math.round(sum.maePct * 100)}% on average, running ${sum.biasPct >= 0 ? 'high' : 'low'} by ${Math.abs(Math.round(sum.biasPct * 100))}%; the itemize call was right ${sum.verdictRight} of ${sum.verdictTotal} times` : ''}.</p>
       <div class="table-wrap"><table class="table-twin"><thead><tr><th>Forecast made</th><th class="num">Projected</th><th class="num">Final</th><th class="num">Off by</th><th>Call</th></tr></thead><tbody>${rows.slice(-12).map((r) => `<tr><td>${esc(r.month)}</td><td class="num">${money(r.projectedTotal)}</td><td class="num">${money(r.final)}</td><td class="num">${r.error > 0 ? '+' : ''}${money(r.error)}</td><td>${r.verdictRight ? '<span class="pill pill-good">right</span>' : '<span class="pill pill-warn">wrong</span>'}</td></tr>`).join('')}</tbody></table></div>
       <p class="note small" style="margin-top:8px">Calibration in use: ${calib.factor === 1 ? 'none' : `×${calib.factor} on the expected-to-come part`} (${esc(calib.basis || '')}).</p>` : `<p class="note">Each month the advisor's year-end forecast is written down here (kept ${EXP.KEEP_MONTHS} months, then dropped). When the year closes, every forecast is checked against the final figure and the advisor calibrates itself. ${live.length ? `${live.length} ${live.length === 1 ? 'snapshot' : 'snapshots'} taken for ${state.computed.taxYear} so far.` : 'Nothing to check yet.'}</p>`}
@@ -5394,12 +5641,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     const R0 = state.computed;
     const P0 = R0.params;
     const marriedJoint = s.filingStatus === 'mfj'; // a qualifying surviving spouse files alone: no spouse add-on
-    const overrides = (s.paramOverrides && s.paramOverrides[R0.taxYear]) || {};
+    const overrides = state.overrides[R0.taxYear] || {};
     const defaults = R.getParams(R0.taxYear, {});
     const fmtParam = (kind, v) => (kind === 'usd' ? money(v) : kind === 'rate' ? R.pct(v) : R.perMile(v));
     const toInput = (kind, v) => (kind === 'usd' ? String(Math.round(v)) : String(Math.round(v * 1000) / 10));
-    const learnedKeys = Object.keys(s.learned || {}).sort();
-    const dismissedCount = Object.keys(s.advisorDismissed || {}).length;
+    const learnedKeys = Object.keys(state.learned).sort();
+    const dismissedCount = Object.keys(state.dismissed).length;
 
     $('#view-settings').innerHTML = `
       <div class="settings-grid">
@@ -5454,18 +5701,18 @@ window.ITEMIZER_SINGLE_FILE = true;
           <div class="card-head"><h2>Experiments</h2><span class="muted small">on this device, switchable, expiring</span></div>
           <p class="note">Three ways the app studies its own judgement and checks it later. Nothing here leaves the device.</p>
           <div class="chips" style="margin-top:10px">
-            <label class="check"><input type="checkbox" id="xSnapshots" ${(s.experiments || {}).snapshots === false ? '' : 'checked'}> Monthly forecast snapshots, checked when the year closes</label>
-            <label class="check"><input type="checkbox" id="xCorrections" ${(s.experiments || {}).corrections === false ? '' : 'checked'}> Learn from corrected suggestions</label>
-            <label class="check"><input type="checkbox" id="xNudges" ${(s.experiments || {}).nudges === false ? '' : 'checked'}> A follow-up right after a save</label>
+            <label class="check"><input type="checkbox" id="xSnapshots" ${s.experimentSnapshots === false ? '' : 'checked'}> Monthly forecast snapshots, checked when the year closes</label>
+            <label class="check"><input type="checkbox" id="xCorrections" ${s.experimentCorrections === false ? '' : 'checked'}> Learn from corrected suggestions</label>
+            <label class="check"><input type="checkbox" id="xNudges" ${s.experimentNudges === false ? '' : 'checked'}> A follow-up right after a save</label>
           </div>
-          ${Object.keys(s.keywordWeights || {}).length ? `<div class="learned-list" style="margin-top:10px">${Object.entries(s.keywordWeights).sort((a, b) => a[1] - b[1]).slice(0, 12).map(([k, v]) => `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">${v < 1 ? 'demoted' : 'boosted'} to ×${v}</span></span></div>`).join('')}</div>` : ''}
-          <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="xClearSnapshots" ${(s.forecastSnapshots || []).length ? '' : 'disabled'}>Clear ${(s.forecastSnapshots || []).length} ${(s.forecastSnapshots || []).length === 1 ? 'snapshot' : 'snapshots'}</button><button class="btn btn-sm" type="button" id="xResetWeights" ${Object.keys(s.keywordWeights || {}).length ? '' : 'disabled'}>Reset keyword weights</button></div>
+          ${Object.keys(state.weights).length ? `<div class="learned-list" style="margin-top:10px">${Object.entries(state.weights).sort((a, b) => a[1] - b[1]).slice(0, 12).map(([k, v]) => `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">${v < 1 ? 'demoted' : 'boosted'} to ×${v}</span></span></div>`).join('')}</div>` : ''}
+          <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="xClearSnapshots" ${state.snapshots.length ? '' : 'disabled'}>Clear ${state.snapshots.length} ${state.snapshots.length === 1 ? 'snapshot' : 'snapshots'}</button><button class="btn btn-sm" type="button" id="xResetWeights" ${Object.keys(state.weights).length ? '' : 'disabled'}>Reset keyword weights</button></div>
         </section>
 
         <section class="card">
           <div class="card-head"><h2>Learned categories</h2><span class="muted small">${learnedKeys.length} remembered</span></div>
           <p class="note">When you file something, its description is remembered so the same payee lands on the same line next time. Remove one if it learned wrong.</p>
-          ${learnedKeys.length ? `<div class="learned-list" style="margin-top:10px">${learnedKeys.map((k) => { const l = S.getLine(s.learned[k]); return `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">→ ${esc(l ? l.label : s.learned[k])}</span></span><button class="btn btn-ghost btn-sm" type="button" data-forget="${esc(k)}">Forget</button></div>`; }).join('')}</div><div class="btn-row" style="margin-top:10px"><button class="btn btn-sm" type="button" id="forgetAll">Forget all</button></div>` : ''}
+          ${learnedKeys.length ? `<div class="learned-list" style="margin-top:10px">${learnedKeys.map((k) => { const l = S.getLine(state.learned[k]); return `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">→ ${esc(l ? l.label : state.learned[k])}</span></span><button class="btn btn-ghost btn-sm" type="button" data-forget="${esc(k)}">Forget</button></div>`; }).join('')}</div><div class="btn-row" style="margin-top:10px"><button class="btn btn-sm" type="button" id="forgetAll">Forget all</button></div>` : ''}
         </section>
 
         <section class="card">
@@ -5524,14 +5771,14 @@ window.ITEMIZER_SINGLE_FILE = true;
     $$('[data-param]').forEach((inp) => inp.addEventListener('change', async () => {
       const path = inp.dataset.param, kind = inp.dataset.kind;
       const raw = inp.value.trim().replace(/[$,%¢]/g, '');
-      if (!s.paramOverrides[R0.taxYear]) s.paramOverrides[R0.taxYear] = {};
-      const ov = s.paramOverrides[R0.taxYear];
+      if (!state.overrides[R0.taxYear]) state.overrides[R0.taxYear] = {};
+      const ov = state.overrides[R0.taxYear];
       if (raw === '' || isNaN(Number(raw))) { unsetPath(ov, path); }
       else { const n = Number(raw); R.setPath(ov, path, kind === 'usd' ? n : n / 100); }
-      if (!Object.keys(ov).length) delete s.paramOverrides[R0.taxYear];
-      await save(); renderSettings();
+      if (!Object.keys(ov).length) delete state.overrides[R0.taxYear];
+      await DB.syncOverrides(R0.taxYear, ov); recompute(); renderSettings(); // one row per overridden parameter
     }));
-    $('#resetParams').onclick = async () => { delete s.paramOverrides[R0.taxYear]; await save(); renderSettings(); toast('Defaults restored.'); };
+    $('#resetParams').onclick = async () => { delete state.overrides[R0.taxYear]; await DB.syncOverrides(R0.taxYear, {}); recompute(); renderSettings(); toast('Defaults restored.'); };
     $$('[data-theme-pick]').forEach((b) => b.onclick = async () => { s.theme = b.dataset.themePick; applyTheme(); await save(); renderSettings(); });
     $('#exportJson').onclick = async () => {
       const btn = $('#exportJson'); btn.disabled = true;
@@ -5546,14 +5793,14 @@ window.ITEMIZER_SINGLE_FILE = true;
     $('#exportAllCsv').onclick = () => downloadText('itemizer-all-years.csv', DB.toCSV(state.entries, S), 'text/csv');
     const ls = $('#loadSample2'); if (ls) ls.onclick = loadSampleData;
     const rs = $('#removeSamples2'); if (rs) rs.onclick = removeSampleData;
-    $$('[data-forget]').forEach((b) => b.onclick = async () => { C.forget(s.learned, b.dataset.forget); await save(); renderSettings(); });
-    const fa = $('#forgetAll'); if (fa) fa.onclick = async () => { s.learned = {}; await save(); renderSettings(); };
-    for (const [id, key] of [['xSnapshots', 'snapshots'], ['xCorrections', 'corrections'], ['xNudges', 'nudges']]) {
-      const el = $('#' + id); if (el) el.onchange = async () => { s.experiments = Object.assign({ snapshots: true, corrections: true, nudges: true }, s.experiments || {}); s.experiments[key] = el.checked; await save(); };
+    $$('[data-forget]').forEach((b) => b.onclick = async () => { C.forget(state.learned, b.dataset.forget); await DB.deleteLearned(b.dataset.forget); renderSettings(); });
+    const fa = $('#forgetAll'); if (fa) fa.onclick = async () => { state.learned = {}; await DB.clearLearned(); renderSettings(); };
+    for (const [id, key] of [['xSnapshots', 'experimentSnapshots'], ['xCorrections', 'experimentCorrections'], ['xNudges', 'experimentNudges']]) {
+      const el = $('#' + id); if (el) el.onchange = async () => { s[key] = el.checked; await save(); };
     }
-    $('#xClearSnapshots').onclick = async () => { s.forecastSnapshots = []; await save(); renderSettings(); toast("Forecast snapshots cleared. This month's forecast for the live year is written down again."); };
-    $('#xResetWeights').onclick = async () => { s.keywordWeights = {}; await save(); renderSettings(); toast('Keyword weights reset.'); };
-    $('#resetDismissed').onclick = async () => { s.advisorDismissed = {}; await save(); renderSettings(); toast('All recommendations are visible again.'); };
+    $('#xClearSnapshots').onclick = async () => { state.snapshots = []; await DB.clearSnapshots(); recompute(); renderSettings(); toast("Forecast snapshots cleared. This month's forecast for the live year is written down again."); };
+    $('#xResetWeights').onclick = async () => { state.weights = {}; await DB.clearWeights(); renderSettings(); toast('Keyword weights reset.'); };
+    $('#resetDismissed').onclick = async () => { state.dismissed = {}; await DB.clearDismissals(); recompute(); renderSettings(); toast('All recommendations are visible again.'); };
     $('#wipeAll').onclick = async () => {
       if (!(await confirmDialog('Delete everything?', 'All entries, receipts, learned categories, and settings on this device will be removed.', 'Delete all data', true))) return;
       try { await DB.clearAll(); } catch (e) { toast(`Could not delete everything: ${e && e.message ? e.message : 'storage error'}.`, 6000); }
@@ -5563,7 +5810,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     DB.storageInfo().then((info) => {
       const el = $('#storageNote'); if (!el) return;
       const used = info.estimate && info.estimate.usage ? ` · ${(info.estimate.usage / 1048576).toFixed(1)} MB used` : '';
-      let text = info.mode === 'idb' ? `Stored in this browser's IndexedDB${used}.` : 'This browser has no IndexedDB, so entries are kept in localStorage and receipt photos cannot be stored.';
+      let text = info.mode === 'idb' ? `Stored in this browser's IndexedDB, one table per kind of record${used}.` : info.mode === 'local' ? 'This browser has no IndexedDB, so the same tables are kept in localStorage and receipt photos cannot be stored.' : 'This browser offers neither IndexedDB nor localStorage; nothing is saved between sessions.';
+      if (info.counts) text += ` Rows: ${Object.entries(info.counts).map(([k, n]) => `${k} ${n == null ? '?' : n}`).join(' · ')}.`;
       if (info.persisted === true) text += ' The browser has agreed not to evict this data.';
       else if (info.persisted === false) text += ' The browser may delete this data when disk space runs low (Safari: after 7 days without a visit). Install the app to your home screen and download a backup now and then.';
       if (info.notice) text += ` ${info.notice}`;
@@ -5728,6 +5976,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     state.receiptURLs.clear();
     discardRecorder();
     state.settings = await DB.getSettings();
+    // the six stores the app reads as maps and lists; every write goes back to its own row
+    [state.learned, state.weights, state.dismissed, state.layouts, state.snapshots, state.overrides] = await Promise.all([DB.getLearned(), DB.getWeights(), DB.getDismissals(), DB.getLayouts(), DB.getSnapshots(), DB.getOverrides()]);
     state.entries = await DB.getEntries();
     for (const e of state.entries) { try { if (!e.taxYear && typeof e.date === 'string') e.taxYear = Number(e.date.slice(0, 4)); } catch (err) { /* a bad row never blocks start-up */ } }
     try { state.places = await DB.getPlaces(); state.trips = await DB.getTrips(); } catch (e) { state.places = []; state.trips = []; }
