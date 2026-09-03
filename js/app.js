@@ -168,7 +168,7 @@
     toastTimer = setTimeout(hideToast, ms || (action ? 7000 : 2600));
   }
   // The modal is a real dialog: the page behind it is inert, Tab stays inside, and focus returns to the opener on close.
-  let modalOpener = null, modalOnCancel = null;
+  let modalOpener = null, modalOnCancel = null, modalScrollY = 0;
   const behindModal = () => ['.topbar', '#main', '.tabbar'].map((sel) => document.querySelector(sel)).filter(Boolean);
   const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
   function trapTab(ev) {
@@ -190,12 +190,17 @@
     if (heading) { if (!heading.id) heading.id = 'modalTitle'; panel.setAttribute('aria-labelledby', heading.id); panel.removeAttribute('aria-label'); }
     else { panel.removeAttribute('aria-labelledby'); panel.setAttribute('aria-label', 'Dialog'); }
     m.hidden = false;
+    // iOS ignores overflow:hidden for touch scrolling, so the page is pinned in place and put back on close
+    modalScrollY = window.scrollY || 0;
     document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed'; document.body.style.top = `-${modalScrollY}px`; document.body.style.width = '100%';
     for (const el of behindModal()) { el.inert = true; el.setAttribute('aria-hidden', 'true'); }
     panel.addEventListener('keydown', trapTab);
     if (onOpen) onOpen(panel);
+    // a keyboard opening over the lower half of the sheet helps nobody on a phone: focus the sheet itself there
+    const finePointer = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches;
     const first = panel.querySelector('input, select, textarea, button');
-    if (first) first.focus(); else panel.focus();
+    if (first && finePointer) first.focus(); else panel.focus();
   }
   function closeModal() {
     const m = $('#modal'), panel = $('#modalPanel');
@@ -204,6 +209,8 @@
     panel.removeEventListener('keydown', trapTab);
     panel.innerHTML = '';
     document.body.style.overflow = '';
+    document.body.style.position = ''; document.body.style.top = ''; document.body.style.width = '';
+    window.scrollTo(0, modalScrollY);
     for (const el of behindModal()) { el.inert = false; el.removeAttribute('aria-hidden'); }
     const opener = modalOpener; modalOpener = null; modalOnCancel = null;
     if (opener && opener.isConnected && typeof opener.focus === 'function' && opener !== document.body) opener.focus({ preventScroll: true });
@@ -334,14 +341,14 @@
       return `<label class="row row-select">
       <span class="row-check"><input type="checkbox" data-sel="${esc(e.id)}" ${opts.selected.has(e.id) ? 'checked' : ''} aria-label="Select ${esc(e.description || line.label)}"></span>
       <span class="row-date">${esc(P.formatDate(e.date, false))}</span>
-      <span class="row-main"><span class="row-desc">${esc(e.description || line.label)}${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
+      <span class="row-main"><span class="row-desc"><span class="row-text">${esc(e.description || line.label)}</span>${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
       <span class="row-amt">${esc(fmtAmount(e))}</span>
       ${receiptIcon(e)}
     </label>`;
     }
     return `<button class="row" data-edit="${esc(e.id)}" type="button">
       <span class="row-date">${esc(P.formatDate(e.date, false))}</span>
-      <span class="row-main"><span class="row-desc">${esc(e.description || line.label)}${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}${dupe ? ' <span class="dupe-mark" title="Possible duplicate"><span aria-hidden="true">⧉</span><span class="sr-only">Possible duplicate</span></span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
+      <span class="row-main"><span class="row-desc"><span class="row-text">${esc(e.description || line.label)}</span>${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}${dupe ? ' <span class="dupe-mark" title="Possible duplicate"><span aria-hidden="true">⧉</span><span class="sr-only">Possible duplicate</span></span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
       <span class="row-amt">${esc(fmtAmount(e))}${line.unit === 'miles' && line.treatment !== 'info' ? `<small>${esc(money(Number(e.amount) * (state.computed.params.mileage[line.rate] || 0)))}</small>` : ''}</span>
       ${receiptIcon(e)}
     </button>`;
@@ -468,7 +475,7 @@
     quick.addEventListener('input', () => { cap.text = quick.value; onQuickChange(); });
     $('#quickForm').addEventListener('submit', (ev) => { ev.preventDefault(); saveCapture(); });
     $('#snapBtn').onclick = () => { state.pendingReceiptTarget = 'capture'; $('#receiptInput').click(); };
-    const attach = $('#attachBtn'); if (attach) attach.onclick = () => { state.pendingReceiptTarget = 'capture'; $('#receiptInput').click(); };
+    const attach = $('#attachBtn'); if (attach) attach.onclick = () => { state.pendingReceiptTarget = 'capture'; $('#receiptPick').click(); };
     const drop = $('#dropReceipt'); if (drop) drop.onclick = () => { if (cap.receiptURL) URL.revokeObjectURL(cap.receiptURL); cap.receiptBlob = null; cap.receiptURL = null; renderCapture(); };
     const thumb = $('#capThumb'); if (thumb) thumb.onclick = () => viewReceipt(cap.receiptURL, 'Receipt preview');
     $('#clearBtn').onclick = () => { if (cap.receiptURL) URL.revokeObjectURL(cap.receiptURL); state.capture = freshCapture(); state.capture.date = todayInYear(); renderCapture(); $('#quickInput').focus(); };
@@ -494,7 +501,7 @@
 
   // ---- capture modes ----------------------------------------------------------
   function modeBarHTML(mode) {
-    const tabs = [['expense', 'Expense'], ['trip', 'Trip'], ['import', 'Import statement']];
+    const tabs = [['expense', 'Expense'], ['trip', 'Trip'], ['import', 'Import']];
     return `<div class="mode-bar" role="group" aria-label="Ways to log">${tabs.map(([id, label]) => `<button class="mode-tab" type="button" aria-pressed="${mode === id}" data-mode="${id}">${label}</button>`).join('')}</div>`;
   }
   function bindModeBar() {
@@ -1244,6 +1251,7 @@
           ${F.samples.length ? chip('samples', 'Examples', F.samples.length) : ''}
           <button class="chip" type="button" id="ledgerSelectToggle" aria-pressed="${L.selectMode}">${L.selectMode ? 'Done selecting' : 'Select'}</button>
         </div>
+        <p class="icon-legend muted small"><span>${ICON.check} photo attached</span><span>${ICON.paper} paper receipt</span><span>${ICON.alert} no receipt</span><span><span class="dupe-mark" aria-hidden="true">⧉</span> possible duplicate</span></p>
       </div>
       <div id="ledgerBody" aria-live="polite"></div>`;
 
@@ -1404,7 +1412,7 @@
     const isMiles = S.isMiles(e.lineId);
     const url = await receiptURL(e.receiptId);
     openModal(`
-      <div class="card-head"><h2>Edit entry</h2><span class="pill pill-accent">${esc(line.sectionTitle)}</span></div>
+      <div class="card-head"><h2>Edit entry</h2><span class="pill-row"><span class="pill pill-accent">${esc(line.sectionTitle)}</span>${!isMiles && !e.hasReceipt && !e.receiptId && (Number(e.amount) || 0) >= state.computed.params.receiptThreshold ? '<span class="pill pill-act">No receipt</span>' : ''}${state.computed.duplicates.some(([a, b]) => a.id === e.id || b.id === e.id) ? '<span class="pill pill-warn">Possible duplicate</span>' : ''}</span></div>
       <div class="grid-2">
         <label class="field"><span id="eAmountLabel">${isMiles ? 'Miles' : 'Amount ($)'}</span><input id="eAmount" inputmode="decimal" value="${esc(e.amount)}"></label>
         <label class="field"><span>Date</span><input id="eDate" type="date" value="${esc(e.date)}"></label>
@@ -1428,7 +1436,7 @@
       lineSel.onchange = () => { const m = S.isMiles(lineSel.value); panel.querySelector('#eAmountLabel').textContent = m ? 'Miles' : 'Amount ($)'; panel.querySelector('#eReceiptRow').hidden = m; panel.querySelector('#eHint').innerHTML = lineHintHTML(lineSel.value); };
       const thumb = panel.querySelector('#eThumb'); if (thumb) thumb.onclick = () => viewReceipt(url, e.description || line.label);
       const attach = panel.querySelector('#eAttach') || panel.querySelector('#eReplace');
-      if (attach) attach.onclick = () => { state.pendingReceiptTarget = e.id; closeModal(); $('#receiptInput').click(); };
+      if (attach) attach.onclick = () => { state.pendingReceiptTarget = e.id; closeModal(); $('#receiptPick').click(); };
       const rm = panel.querySelector('#eRemovePhoto');
       if (rm) rm.onclick = async () => { await DB.deleteReceipt(e.receiptId); dropReceiptURL(e.receiptId); e.receiptId = null; e.hasReceipt = false; e.updatedAt = new Date().toISOString(); await DB.putEntry(e); toast('Photo removed.'); openEdit(e.id); };
       panel.querySelector('#eDelete').onclick = async () => {
@@ -1501,7 +1509,7 @@
 
       ${sectionRows.length ? `<section class="card">
         <div class="card-head"><h2>By section</h2><span class="muted small">entered vs. counts on the return</span></div>
-        <div class="bars">${sectionRows.map((r) => `<div class="bar-row"><div class="bar-label">${esc(r.title)}<small>${r.counts != null ? money(r.counts) + ' counts · ' : ''}${esc(r.note)}</small></div><div class="bar-track" data-tip="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" role="img" aria-label="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" tabindex="0"><div class="bar-gross" style="width:${(r.gross / maxGross * 100).toFixed(1)}%"></div>${r.counts != null ? `<div class="bar-counts" style="width:${(Math.min(r.counts, r.gross) / maxGross * 100).toFixed(1)}%"></div>` : ''}<div class="bar-value" style="left:${(r.gross / maxGross * 100).toFixed(1)}%">${money(r.gross)}</div></div></div>`).join('')}</div>
+        <div class="bars">${sectionRows.map((r) => `<div class="bar-row"><div class="bar-label">${esc(r.title)}<small>${r.counts != null ? money(r.counts) + ' counts · ' : ''}${esc(r.note)}</small></div><div class="bar-track" data-tip="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" role="img" aria-label="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" tabindex="0"><div class="bar-gross" style="width:${(r.gross / maxGross * 100).toFixed(1)}%"></div>${r.counts != null ? `<div class="bar-counts" style="width:${(Math.min(r.counts, r.gross) / maxGross * 100).toFixed(1)}%"></div>` : ''}<div class="bar-value" style="left:min(${(r.gross / maxGross * 100).toFixed(1)}%, calc(100% - 84px))">${money(r.gross)}</div></div></div>`).join('')}</div>
         <div class="bar-legend"><span><span class="legend-dot" style="background:var(--accent)"></span>Counts on the return</span><span><span class="legend-dot" style="background:var(--accent-soft)"></span>Entered on the worksheet</span></div>
       </section>` : ''}
 
@@ -1794,7 +1802,7 @@
           ${kpi('Logging day', H.busiestWeekday == null ? '—' : WEEKDAYS[H.busiestWeekday], 'when you log most')}
           ${kpi('Receipts', `${Math.round(R0.substantiation.coverage * 100)}%`, 'of dollar entries')}
         </div>
-        ${receiptRows.length ? `<div class="bars" style="margin-top:14px">${receiptRows.map((s) => { const p = s.withReceipt / s.count * 100; return `<div class="bar-row"><div class="bar-label">${esc(s.title)}<small>${s.withReceipt} of ${s.count} with receipts</small></div><div class="bar-track" data-tip="${esc(`${Math.round(p)}% with receipts`)}" role="img" aria-label="${esc(`${Math.round(p)}% with receipts`)}"><div class="bar-gross" style="width:100%"></div><div class="bar-counts" style="width:${p.toFixed(1)}%"></div><div class="bar-value" style="left:${p.toFixed(1)}%">${Math.round(p)}%</div></div></div>`; }).join('')}</div>` : ''}
+        ${receiptRows.length ? `<div class="bars" style="margin-top:14px">${receiptRows.map((s) => { const p = s.withReceipt / s.count * 100; return `<div class="bar-row"><div class="bar-label">${esc(s.title)}<small>${s.withReceipt} of ${s.count} with receipts</small></div><div class="bar-track" data-tip="${esc(`${Math.round(p)}% with receipts`)}" role="img" aria-label="${esc(`${Math.round(p)}% with receipts`)}"><div class="bar-gross" style="width:100%"></div><div class="bar-counts" style="width:${p.toFixed(1)}%"></div><div class="bar-value" style="left:min(${p.toFixed(1)}%, calc(100% - 48px))">${Math.round(p)}%</div></div></div>`; }).join('')}</div>` : ''}
       </section>
 
       <section class="card">
@@ -2192,6 +2200,7 @@
       render();
     };
     $('#receiptInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
+    $('#receiptPick').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
     $('#importInput').onchange = importBackup;
     $('#csvInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onCSVFile(f); };
     $('#modal').addEventListener('click', (ev) => { if (ev.target.classList.contains('modal-backdrop')) cancelModal(); });
