@@ -40,6 +40,17 @@ const style = (html.match(/<style>[\s\S]*?<\/style>/) || [''])[0];
 const body = (html.match(/<body>([\s\S]*?)<\/body>/) || ['', ''])[1];
 fs.writeFileSync(path.join(root, 'dist/itemizer.fragment.html'), `${title}\n${fonts}\n${style}\n${body.trim()}\n`);
 
+// Stamp the service worker with a hash of the shell it caches, so every change to the app is a new cache
+// version whether the site is deployed by the Actions workflow or straight from the branch.
+const crypto = require('crypto');
+const SHELL_FILES = ['index.html', 'styles.css', 'manifest.webmanifest', ...SCRIPTS];
+const stamp = crypto.createHash('sha256').update(SHELL_FILES.map((p) => read(p)).join('\u0000')).digest('hex').slice(0, 12);
+const swPath = path.join(root, 'sw.js');
+const sw = fs.readFileSync(swPath, 'utf8');
+const stamped = sw.replace(/const STAMP = '[^']*';/, `const STAMP = '${stamp}';`);
+if (stamped !== sw) fs.writeFileSync(swPath, stamped);
+console.log(`sw.js cache version         ${stamp}`);
+
 const kb = (p) => (fs.statSync(path.join(root, p)).size / 1024).toFixed(1) + ' KB';
 console.log(`dist/itemizer.html           ${kb('dist/itemizer.html')}`);
 console.log(`dist/itemizer.fragment.html  ${kb('dist/itemizer.fragment.html')}`);
