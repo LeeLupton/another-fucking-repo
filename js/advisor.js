@@ -417,7 +417,7 @@
     const computed = input.computed || Rules.compute(entries, Object.assign({}, settings, { today }));
     const yearEntries = computed.entries;
     const recurrences = detectRecurrences(entries, { today, taxYear });
-    const dismissedAt = settings.advisorDismissed || {};
+    const dismissedAt = input.dismissed || settings.advisorDismissed || {}; // one row per dismissal in the store; the settings shape still works for older callers
     const isDismissed = (id) => { const at = dismissedAt[id]; return !!at && daysBetween(String(at).slice(0, 10), today) < DISMISS_DAYS; };
     // "If it stopped, dismiss this" also stops the projection for that payee
     for (const r of recurrences) if (isDismissed(`recur:${r.key}:${r.nextDate}`)) r.muted = true;

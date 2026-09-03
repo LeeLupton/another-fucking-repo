@@ -42,7 +42,7 @@ A multi-lens review (tax rules, parser, classifier, advisor, importer, geo, stor
 - **Advisor.** Payees that stopped are marked lapsed and no longer projected; dismissing a recurrence also stops its projection; a re-spelled payee still satisfies an expected date; state estimated payments follow the IRS calendar; every-four-weeks payees are recognised; month-end anchors never drift; no "stop chasing receipts" advice while medical costs wait on AGI; a closed year gets a past-tense summary; the shareable aggregate no longer reveals age or blindness.
 - **Import.** Debit/credit indicator columns set each row's sign; day-first dates are detected and can be forced; a header below a preamble is found; semicolon and tab exports and European decimals parse; the amount column is chosen by its cells rather than position; only strong matches are pre-ticked, and Schedule C lines only when the ledger already shows a business; duplicates require the payee to match.
 - **Trips.** GPS jitter while parked no longer accumulates miles, a stale first fix is re-anchored, a pause breaks the track, the wake lock is re-acquired when the screen returns, a denied permission stops the recorder, lookup errors say what went wrong, and the FEMA lookup filters by county on the server and matches county names exactly.
-- **Storage.** A blocked or failing IndexedDB open no longer forks data into localStorage; backups are validated before they are stored and receipts are decoded locally; a failed save is reported and leaves the form intact; the browser is asked to protect the data from eviction; backups are built as a Blob; CSV exports defuse spreadsheet formulas in free text.
+- **Storage.** One object store per kind of record with row-level writes (see Storage above); a blocked or failing IndexedDB open no longer forks data into localStorage; backups are validated before they are stored and receipts are decoded locally; a failed save is reported and leaves the form intact; the browser is asked to protect the data from eviction; backups are built as a Blob; CSV exports defuse spreadsheet formulas in free text.
 - **Accessibility and mobile.** Dialogs trap focus, make the page behind them inert, and return focus on close; the ledger search keeps its caret; selects and icons have names; muted text meets AA contrast; worksheet labels wrap instead of being cut off.
 - **Tests.** The follow-up lenses added regression tests for what the first pass left untested: the GPS trip recorder's state machine and permission denial, FEMA lookups against a stubbed fetch, the advisor's co-occurrence and receipt-habit rules, weekly through yearly cadences with same-day merging and a tolerated miss, the year plan's three outcomes, the Schedule C mileage guards, the date-gated year-end checklist, the appraisal, escrow, casualty and tuition insights, the CSV export, withdrawal/deposit and type-column statements with the sign override, relative-date aliases and date sources, and the classifier's limit and key; three assertions that could pass by accident were tightened.
 - **Worksheet.** The sheet names the taxpayer (Settings → About you); Self-Employed continues at the foot of the right column as on paper, so a full sheet fits one page; the lender's Name and Address lines are always printed; mileage rows show the rate applied; the Education section has no total (its lines go to different forms); totals and notes never split across a page; the text copy carries the lender lines and the full preparer notes.
@@ -59,6 +59,26 @@ npm run build               # dist/itemizer.html, the whole app in one file
 
 Opening `index.html` straight from disk also works in Chromium-based browsers. The service worker and the install prompt need http(s).
 
+## Storage
+
+Everything is on the device, in the browser's IndexedDB, as a small database rather than a document: one object store per kind of record, each row under its own key, and every change writes or deletes just the row it concerns.
+
+| store | key | one row is |
+|---|---|---|
+| `entries` | `id` | a ledger entry, referencing its worksheet line by `lineId` |
+| `receipts` | `id` | a receipt photo (Blob) |
+| `places` | `id` | a saved place |
+| `trips` | `id` | a mileage-log row, referencing its places and entry by id |
+| `settings` | `key` | the one row of scalar configuration (`main`) |
+| `learned` | `key` | a payee key and the line it was filed on |
+| `weights` | `keyword` | a classifier keyword and its learned multiplier |
+| `dismissals` | `id` | a dismissed recommendation and the date |
+| `layouts` | `signature` | a statement header and the column layout chosen for it |
+| `snapshots` | `taxYear:month` | one month's year-end forecast |
+| `overrides` | `taxYear:path` | one overridden tax parameter |
+
+Rows carry ids, not display labels: a line is `med.doctor`, never "Doctor"; labels come from the schema when shown. Database version 3 split the old settings document, which carried the last six collections as one JSON value, into those stores; the upgrade runs in place and keeps every row. JSON is used only for the backup file (version 3: the settings row plus each store as an array of rows; version 2 files still import). Without IndexedDB the same stores are kept in localStorage, one key per store.
+
 ## How it's put together
 
 ```
@@ -72,7 +92,7 @@ js/advisor.js         the recommender: recurrences, projection, gaps, anomalies,
 js/geo.js             distances, GPS trip recorder, track sketch, geocoding/routing/FEMA lookups
 js/importer.js        CSV statement parsing, column detection, dedupe, line suggestions
 js/valuation.js       donated-goods catalog, condition-based values, itemized record
-js/store.js           IndexedDB persistence (entries, receipts, places, trips, settings), backup, CSV
+js/store.js           IndexedDB, one object store per kind of record; row-level writes; backup, CSV
 js/app.js             the UI
 sw.js                 offline cache for the app shell
 manifest.webmanifest  installable web app metadata
