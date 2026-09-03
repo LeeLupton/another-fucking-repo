@@ -19,6 +19,7 @@
 
   const DEFAULT_SETTINGS = {
     taxYear: new Date().getFullYear(),
+    taxpayerName: '', // the name on the return, printed on the worksheet so the preparer knows whose sheet it is
     filingStatus: 'single',
     agi: '',
     age65: false,

@@ -398,6 +398,9 @@ img { max-width: 100%; display: block; }
 .sheet-line .lbl { display: flex; align-items: end; min-width: 0; }
 .sheet-line .lbl span { white-space: normal; overflow-wrap: anywhere; } /* labels and lender details wrap instead of being cut off */
 .sheet-line-wrap .lbl span { white-space: normal; overflow: visible; text-overflow: clip; }
+.sheet-line-full { grid-template-columns: 1fr; } /* the lender's Name and Address are write-in lines with no amount, as on paper */
+.sheet-cont { font-weight: 400; font-size: 0.85em; color: #555; }
+.fill-blank { display: inline-block; width: 180px; height: 1em; border-bottom: 1px solid var(--paper-ink); vertical-align: baseline; }
 .sheet-line .leader { flex: 1; min-width: 12px; border-bottom: 1px dotted var(--paper-rule); transform: translateY(-4px); margin: 0 4px 0 6px; }
 .sheet-line .amt { font-family: var(--font-mono); font-size: 0.88rem; min-width: 112px; text-align: right; border-bottom: 1px solid var(--paper-ink); padding: 0 2px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sheet-line .amt.blank { color: transparent; }
@@ -513,6 +516,7 @@ img { max-width: 100%; display: block; }
   .sheet-line { font-size: 11.5px; line-height: 1.45; }
   .sheet-line .amt { font-size: 11px; }
   .sheet-section h3 { font-size: 13.5px; }
+  .sheet-meta, .sheet-totals, .sheet-notes { break-inside: avoid; page-break-inside: avoid; } /* the comparison and the notes stay with their figures across a page break */
   .sheet-bar { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   #receiptSheet { display: none; }
   body.print-receipts #receiptSheet { display: block; margin-top: 0; }
