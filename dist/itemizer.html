@@ -13,7 +13,7 @@
 <link rel="icon" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20512%20512%22%20width%3D%22512%22%20height%3D%22512%22%3E%0A%20%20%3Crect%20width%3D%22512%22%20height%3D%22512%22%20rx%3D%2296%22%20fill%3D%22%230e6b52%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M136%20176h240M136%20256h150M136%20336h190%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%2238%22%20stroke-linecap%3D%22round%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%22368%22%20cy%3D%22328%22%20r%3D%2254%22%20fill%3D%22%23ffffff%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M347%20328l15%2015%2030-32%22%20stroke%3D%22%230e6b52%22%20stroke-width%3D%2216%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20fill%3D%22none%22%2F%3E%0A%3C%2Fsvg%3E%0A" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" crossorigin href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 /* Itemizer — styles
    Tokens first (light on :root, dark under both the OS media query and the explicit toggle),
@@ -5602,7 +5602,22 @@ window.ITEMIZER_SINGLE_FILE = true;
   function registerSW() {
     if (globalThis.ITEMIZER_SINGLE_FILE) return;
     if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
-    navigator.serviceWorker.register('sw.js').catch(() => { /* offline install is a bonus, not a requirement */ });
+    let askedToReload = false;
+    // A new version waits until the user chooses to reload, so the cache is never swapped under a half-typed form.
+    const offerUpdate = (worker) => {
+      if (!worker || !navigator.serviceWorker.controller) return; // first install: nothing is running on the old version
+      toast('A new version of Itemizer is ready.', 60000, { label: 'Reload', onClick: () => { askedToReload = true; worker.postMessage({ type: 'SKIP_WAITING' }); } });
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (askedToReload) location.reload(); });
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      if (reg.waiting) offerUpdate(reg.waiting);
+      reg.addEventListener('updatefound', () => {
+        const w = reg.installing; if (!w) return;
+        w.addEventListener('statechange', () => { if (w.state === 'installed') offerUpdate(reg.waiting || w); });
+      });
+      // an installed app that lives in the app switcher for weeks checks for a new version whenever it comes back
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(() => { /* offline install is a bonus, not a requirement */ });
   }
 
   /** Load (or reload) everything from storage; used at start, after "Delete all data", and after a restore. */

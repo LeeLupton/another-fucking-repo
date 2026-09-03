@@ -2115,7 +2115,22 @@
   function registerSW() {
     if (globalThis.ITEMIZER_SINGLE_FILE) return;
     if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
-    navigator.serviceWorker.register('sw.js').catch(() => { /* offline install is a bonus, not a requirement */ });
+    let askedToReload = false;
+    // A new version waits until the user chooses to reload, so the cache is never swapped under a half-typed form.
+    const offerUpdate = (worker) => {
+      if (!worker || !navigator.serviceWorker.controller) return; // first install: nothing is running on the old version
+      toast('A new version of Itemizer is ready.', 60000, { label: 'Reload', onClick: () => { askedToReload = true; worker.postMessage({ type: 'SKIP_WAITING' }); } });
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (askedToReload) location.reload(); });
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      if (reg.waiting) offerUpdate(reg.waiting);
+      reg.addEventListener('updatefound', () => {
+        const w = reg.installing; if (!w) return;
+        w.addEventListener('statechange', () => { if (w.state === 'installed') offerUpdate(reg.waiting || w); });
+      });
+      // an installed app that lives in the app switcher for weeks checks for a new version whenever it comes back
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(() => { /* offline install is a bonus, not a requirement */ });
   }
 
   /** Load (or reload) everything from storage; used at start, after "Delete all data", and after a restore. */
