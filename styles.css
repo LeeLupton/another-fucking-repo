@@ -13,7 +13,7 @@
   --ink-2: #4c5953;
   --ink-3: #626e67; /* 5.3:1 on white, 4.6:1 on surface-2: muted text still passes AA */
   --line: #d9e0db;
-  --line-strong: #b7c2bb;
+  --line-strong: #8a968f; /* 3.1:1 on white, so fields and buttons can be found without focus */
   --accent: #0e6b52;
   --accent-ink: #ffffff;
   --accent-soft: #cfe6db;
@@ -51,7 +51,7 @@
     --ink-2: #aab5ae;
     --ink-3: #8a968f;
     --line: #2a332e;
-    --line-strong: #3b4740;
+    --line-strong: #6e7a73;
     --accent: #3cb48c;
     --accent-ink: #06201a;
     --accent-soft: #1d4536;
@@ -78,7 +78,7 @@
   --ink-2: #aab5ae;
   --ink-3: #8a968f;
   --line: #2a332e;
-  --line-strong: #3b4740;
+  --line-strong: #6e7a73;
   --accent: #3cb48c;
   --accent-ink: #06201a;
   --accent-soft: #1d4536;
@@ -192,7 +192,8 @@ img { max-width: 100%; display: block; }
 .input, .field input:not([type="checkbox"]):not([type="radio"]), .field select, .field textarea {
   width: 100%; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); min-height: 42px;
 }
-.field input:focus, .field select:focus, .input:focus { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); outline-offset: 0; }
+.field input:focus, .field select:focus, .input:focus { border-color: var(--accent); }
+.field input:focus-visible, .field select:focus-visible, .input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; } /* a solid ring that passes 3:1 */
 .field textarea { min-height: 72px; resize: vertical; }
 .check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .check input { width: 18px; height: 18px; accent-color: var(--accent); }
@@ -447,7 +448,7 @@ img { max-width: 100%; display: block; }
 /* ---- capture modes, trips, places, import ---- */
 .mode-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; background: var(--surface-2); border-radius: var(--radius-sm); }
 .mode-tab { padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); font-weight: 600; font-size: 0.9rem; }
-.mode-tab[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); }
+.mode-tab[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); }
 .rec-readout { display: flex; align-items: baseline; gap: 8px; margin: 10px 0; }
 .rec-miles { font-size: 2.6rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
 .rec-unit { font-size: 1rem; color: var(--ink-2); }
@@ -474,6 +475,12 @@ img { max-width: 100%; display: block; }
 /* ---- tax-time toolkit: toast actions, bulk select, donation tool, receipts sheet, year over year ---- */
 .toast { display: inline-flex; align-items: center; gap: 14px; }
 .toast-action { border: 0; background: transparent; color: inherit; font-weight: 700; text-decoration: underline; padding: 0; cursor: pointer; }
+/* the toast is a permanent live region: invisible when empty, shown by a class, never display:none */
+.toast { opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+.toast.is-on { opacity: 1; pointer-events: auto; }
+.toast:empty { padding: 0; }
+.thumb-btn { padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: var(--radius-sm); line-height: 0; }
+.btn.is-disabled { opacity: 0.55; }
 .row-select { grid-template-columns: 28px 58px 1fr auto 28px; cursor: pointer; }
 .row-check { display: grid; place-items: center; }
 .row-check input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }

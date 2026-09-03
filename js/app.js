@@ -147,18 +147,25 @@
 
   // ---- toast / modal ---------------------------------------------------------
   let toastTimer = null;
+  function hideToast() { const el = $('#toast'); if (!el) return; el.classList.remove('is-on'); el.textContent = ''; }
   function toast(msg, ms, action) {
     const el = $('#toast');
-    el.textContent = msg;
-    if (action && action.label) {
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'toast-action'; b.textContent = action.label;
-      b.onclick = () => { el.hidden = true; clearTimeout(toastTimer); action.onClick(); };
-      el.appendChild(b);
-    }
-    el.hidden = false;
+    el.hidden = false; // the live region is always in the accessibility tree; showing and hiding is a class
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, ms || (action ? 7000 : 2600));
+    // cleared first, filled a frame later: a repeated message is a fresh change that screen readers announce
+    el.textContent = ''; el.classList.remove('is-on');
+    const show = () => {
+      el.textContent = msg;
+      if (action && action.label) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'toast-action'; b.textContent = action.label;
+        b.onclick = () => { clearTimeout(toastTimer); hideToast(); action.onClick(); };
+        el.appendChild(b);
+      }
+      el.classList.add('is-on');
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(show); else show();
+    toastTimer = setTimeout(hideToast, ms || (action ? 7000 : 2600));
   }
   // The modal is a real dialog: the page behind it is inert, Tab stays inside, and focus returns to the opener on close.
   let modalOpener = null, modalOnCancel = null;
@@ -363,7 +370,7 @@
     const recent = ye.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || b.date.localeCompare(a.date)).slice(0, 6);
     const verdict = R0.verdict.itemize ? `<span class="pill pill-good">Itemizing wins by ${money(R0.verdict.difference)}</span>` : `<span class="pill pill-info">${money(-R0.verdict.difference)} to itemizing</span>`;
     const filing = R.FILING_STATUSES.find((f) => f.id === state.settings.filingStatus);
-    const strip = `<a class="year-strip" href="#insights" aria-label="Open insights">
+    const strip = `<a class="year-strip" href="#insights"><span class="sr-only">Open insights: </span>
         <div class="strip-top"><div class="strip-title">${R0.taxYear} · ${esc(filing ? filing.label : '')}</div><div class="strip-verdict">${verdict}</div></div>
         <div class="strip-sub">${money(R0.scheduleA.grossEntered)} on the worksheet · ${money(R0.scheduleA.total)} counts after floors and caps${R0.scheduleC.hasActivity ? ` · ${money(R0.scheduleC.total)} Schedule C` : ''}</div>
         ${meterHTML('mini-meter')}
@@ -407,7 +414,7 @@
         </div>
         <div class="nd-warn" id="ndWarn" ${cap.nonDeductible.length ? '' : 'hidden'}>${cap.nonDeductible.map((n) => `<div><b>Probably not deductible.</b> ${esc(n.reason)}</div>`).join('')}</div>
         <div class="receipt-row" id="receiptRow" ${cap.lineId && S.isMiles(cap.lineId) ? 'hidden' : ''}>
-          ${cap.receiptURL ? `<img class="receipt-thumb" id="capThumb" src="${cap.receiptURL}" alt="Receipt preview"><button class="btn btn-ghost btn-sm" type="button" id="dropReceipt">Remove photo</button>` : `<button class="btn" type="button" id="attachBtn">${ICON.camera} Attach receipt</button>`}
+          ${cap.receiptURL ? `<button type="button" class="thumb-btn" id="capThumb" aria-label="View the receipt full size"><img class="receipt-thumb" src="${cap.receiptURL}" alt=""></button><button class="btn btn-ghost btn-sm" type="button" id="dropReceipt">Remove photo</button>` : `<button class="btn" type="button" id="attachBtn">${ICON.camera} Attach receipt</button>`}
           <label class="check"><input type="checkbox" id="fPaper" ${cap.paper ? 'checked' : ''}> Paper receipt filed</label>
         </div>
         <details class="more" ${cap.note || cap.repeat > 1 ? 'open' : ''}>
@@ -419,7 +426,7 @@
             <p class="note span-2">Repeat is for premiums or a monthly pledge: one entry per month from this date. The share is for bills that are partly business, like a phone or internet: only that share is logged, and the full amount goes in the note.</p>
           </div>
         </details>
-        <div class="actions"><button class="btn btn-primary" type="button" id="saveBtn">Save</button><span class="muted small" id="saveHint"></span></div>
+        <div class="actions"><button class="btn btn-primary" type="button" id="saveBtn" aria-describedby="saveHint">Save</button><span class="muted small" id="saveHint" role="status" aria-live="polite"></span></div>
       </div>
 
       ${calculatorsHTML()}
@@ -488,10 +495,10 @@
   // ---- capture modes ----------------------------------------------------------
   function modeBarHTML(mode) {
     const tabs = [['expense', 'Expense'], ['trip', 'Trip'], ['import', 'Import statement']];
-    return `<div class="mode-bar" role="tablist" aria-label="Ways to log">${tabs.map(([id, label]) => `<button class="mode-tab" role="tab" type="button" aria-selected="${mode === id}" data-mode="${id}">${label}</button>`).join('')}</div>`;
+    return `<div class="mode-bar" role="group" aria-label="Ways to log">${tabs.map(([id, label]) => `<button class="mode-tab" type="button" aria-pressed="${mode === id}" data-mode="${id}">${label}</button>`).join('')}</div>`;
   }
   function bindModeBar() {
-    $$('#view-capture [data-mode]').forEach((b) => { b.onclick = () => { state.captureMode = b.dataset.mode; renderCapture(); }; });
+    $$('#view-capture [data-mode]').forEach((b) => { b.onclick = () => { state.captureMode = b.dataset.mode; renderCapture(); const nb = $(`#view-capture [data-mode="${state.captureMode}"]`); if (nb) nb.focus({ preventScroll: true }); }; });
   }
 
   // ---- calculators ----------------------------------------------------------------
@@ -499,7 +506,7 @@
     return `<details class="card calc"><summary><b>Calculators</b> <span class="muted small">home office</span></summary>
       <div class="grid-2" style="margin-top:12px">
         <label class="field"><span>Home office, simplified method (sq ft, up to 300)</span><input id="calcSqft" inputmode="numeric" placeholder="e.g. 120"></label>
-        <div class="field"><span>Deduction at $5 per square foot</span><div class="calc-out" id="calcHomeOut">$0</div></div>
+        <div class="field"><span>Deduction at $5 per square foot</span><div class="calc-out" id="calcHomeOut" role="status" aria-live="polite">$0</div></div>
       </div>
       <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" type="button" id="calcHomeLog" disabled>Log it on Schedule C</button></div>
       <p class="note small" style="margin-top:8px">The space must be used regularly and exclusively for the business. The simplified rate is $5 per square foot, capped at 300 square feet ($1,500). For a share of a bill that is partly business, use "Business-use share" under Note &amp; repeat when you log the bill.</p>
@@ -605,7 +612,7 @@
           <label class="check"><input type="checkbox" id="tripRound" ${T.roundTrip ? 'checked' : ''}> Round trip</label>
           <button class="btn btn-sm" type="button" id="tripMeasure">Measure distance</button>
         </div>
-        <p class="note" id="tripResult" style="margin-top:8px">${esc(T.result || '')}</p>
+        <p class="note" id="tripResult" role="status" aria-live="polite" style="margin-top:8px">${esc(T.result || '')}</p>
         <div class="grid-2" style="margin-top:8px">
           <label class="field"><span>Miles, total</span><input id="tripMiles" inputmode="decimal" value="${esc(T.miles)}" placeholder="0.0"></label>
           <label class="field"><span>Worksheet line</span><select id="tripLine" class="input">${MILES_LINES.map((id) => `<option value="${id}" ${T.lineId === id ? 'selected' : ''}>${esc(S.getLine(id).label)} · ${esc(S.getLine(id).sectionTitle)}</option>`).join('')}</select></label>
@@ -623,7 +630,7 @@
           <button class="btn" type="button" id="recPause" ${recState === 'recording' ? '' : 'disabled'}>Pause</button>
           <button class="btn btn-danger" type="button" id="recStop" ${recState === 'idle' ? 'disabled' : ''}>Stop and use</button>
         </div>
-        <p class="note small" id="recError" style="margin-top:8px">${esc(rec && rec.error ? rec.error : (G.hasGeolocation() ? '' : 'This device does not offer location; measure between saved places or enter miles by hand.'))}</p>
+        <p class="note small" id="recError" role="status" aria-live="polite" style="margin-top:8px">${esc(rec && rec.error ? rec.error : (G.hasGeolocation() ? '' : 'This device does not offer location; measure between saved places or enter miles by hand.'))}</p>
       </section>
 
       <section class="card">
@@ -785,7 +792,7 @@
         <label class="field"><span>Category</span><select id="plCat" class="input">${G.PLACE_CATEGORIES.map((c) => `<option value="${c.id}" ${p.category === c.id ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select></label>
         <label class="field span-2"><span>Address</span><input id="plAddr" value="${esc(p.address)}" placeholder="Street, city, state"></label>
         <div class="span-2 btn-row"><button class="btn btn-sm" type="button" id="plFind">Find address</button><button class="btn btn-sm" type="button" id="plHere">Use current location</button></div>
-        <div class="span-2 geo-candidates" id="plCands"></div>
+        <div class="span-2 geo-candidates" id="plCands" role="status" aria-live="polite"></div>
         <label class="field"><span>Latitude</span><input id="plLat" inputmode="decimal" value="${esc(p.lat)}"></label>
         <label class="field"><span>Longitude</span><input id="plLon" inputmode="decimal" value="${esc(p.lon)}"></label>
       </div>
@@ -1094,7 +1101,9 @@
     const hint = $('#saveHint'); if (!hint) return;
     const problems = captureProblems();
     const btn = $('#saveBtn');
-    btn.disabled = problems.length > 0;
+    // aria-disabled keeps the button reachable by keyboard; pressing it explains what is missing (saveCapture toasts the problems)
+    btn.setAttribute('aria-disabled', String(problems.length > 0));
+    btn.classList.toggle('is-disabled', problems.length > 0);
     if (problems.length) hint.textContent = 'To save: ' + problems.join(', ') + '.';
     else {
       const cap = state.capture;
@@ -1405,7 +1414,7 @@
         ${e.items && e.items.length ? `<div class="field span-2"><span>Itemized donation record</span><div class="note small" style="white-space:pre-line">${esc(VAL.recordText(e.items, String(e.description || '').split(' — ')[0], e.date))}</div></div>` : ''}
       </div>
       <div class="receipt-row" id="eReceiptRow" ${isMiles ? 'hidden' : ''}>
-        ${url ? `<img class="receipt-thumb" id="eThumb" src="${url}" alt="Receipt"><button class="btn btn-sm" type="button" id="eReplace">Replace photo</button><button class="btn btn-ghost btn-sm" type="button" id="eRemovePhoto">Remove photo</button>` : `<button class="btn" type="button" id="eAttach">${ICON.camera} Attach receipt</button>`}
+        ${url ? `<button type="button" class="thumb-btn" id="eThumb" aria-label="View the receipt full size"><img class="receipt-thumb" src="${url}" alt=""></button><button class="btn btn-sm" type="button" id="eReplace">Replace photo</button><button class="btn btn-ghost btn-sm" type="button" id="eRemovePhoto">Remove photo</button>` : `<button class="btn" type="button" id="eAttach">${ICON.camera} Attach receipt</button>`}
         <label class="check"><input type="checkbox" id="ePaper" ${e.hasReceipt && !e.receiptId ? 'checked' : ''} ${e.receiptId ? 'disabled' : ''}> Paper receipt filed</label>
       </div>
       <div class="modal-actions">
@@ -1492,7 +1501,7 @@
 
       ${sectionRows.length ? `<section class="card">
         <div class="card-head"><h2>By section</h2><span class="muted small">entered vs. counts on the return</span></div>
-        <div class="bars">${sectionRows.map((r) => `<div class="bar-row"><div class="bar-label">${esc(r.title)}<small>${esc(r.note)}</small></div><div class="bar-track" data-tip="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" tabindex="0"><div class="bar-gross" style="width:${(r.gross / maxGross * 100).toFixed(1)}%"></div>${r.counts != null ? `<div class="bar-counts" style="width:${(Math.min(r.counts, r.gross) / maxGross * 100).toFixed(1)}%"></div>` : ''}<div class="bar-value" style="left:${(r.gross / maxGross * 100).toFixed(1)}%">${money(r.gross)}</div></div></div>`).join('')}</div>
+        <div class="bars">${sectionRows.map((r) => `<div class="bar-row"><div class="bar-label">${esc(r.title)}<small>${r.counts != null ? money(r.counts) + ' counts · ' : ''}${esc(r.note)}</small></div><div class="bar-track" data-tip="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" role="img" aria-label="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" tabindex="0"><div class="bar-gross" style="width:${(r.gross / maxGross * 100).toFixed(1)}%"></div>${r.counts != null ? `<div class="bar-counts" style="width:${(Math.min(r.counts, r.gross) / maxGross * 100).toFixed(1)}%"></div>` : ''}<div class="bar-value" style="left:${(r.gross / maxGross * 100).toFixed(1)}%">${money(r.gross)}</div></div></div>`).join('')}</div>
         <div class="bar-legend"><span><span class="legend-dot" style="background:var(--accent)"></span>Counts on the return</span><span><span class="legend-dot" style="background:var(--accent-soft)"></span>Entered on the worksheet</span></div>
       </section>` : ''}
 
@@ -1610,7 +1619,7 @@
         if (l.unit === 'miles') amt = `<span class="mi">${esc(fmtMiles(L.total))}</span>${l.treatment === 'info' ? '' : esc(moneyCents(L.total * (P0.mileage[l.rate] || 0)))}`;
         else amt = esc(moneyCents(L.total));
       }
-      return `<div class="sheet-line ${has ? '' : 'is-zero'}"><div class="lbl"><span>${esc(l.label)}</span><span class="leader"></span></div><span class="amt ${has ? '' : 'blank'}">${amt}</span></div>`;
+      return `<div class="sheet-line ${has ? '' : 'is-zero'}"><div class="lbl"><span>${esc(l.label)}</span><span class="leader"></span></div><span class="amt ${has ? '' : 'blank'}"${has ? '' : ' aria-hidden="true"'}>${amt}</span></div>`;
     };
     const sectionHTML = (sec) => {
       const lines = S.linesForSection(sec.id);
@@ -1785,7 +1794,7 @@
           ${kpi('Logging day', H.busiestWeekday == null ? '—' : WEEKDAYS[H.busiestWeekday], 'when you log most')}
           ${kpi('Receipts', `${Math.round(R0.substantiation.coverage * 100)}%`, 'of dollar entries')}
         </div>
-        ${receiptRows.length ? `<div class="bars" style="margin-top:14px">${receiptRows.map((s) => { const p = s.withReceipt / s.count * 100; return `<div class="bar-row"><div class="bar-label">${esc(s.title)}<small>${s.withReceipt} of ${s.count} with receipts</small></div><div class="bar-track" data-tip="${esc(`${Math.round(p)}% with receipts`)}" tabindex="0"><div class="bar-gross" style="width:100%"></div><div class="bar-counts" style="width:${p.toFixed(1)}%"></div><div class="bar-value" style="left:${p.toFixed(1)}%">${Math.round(p)}%</div></div></div>`; }).join('')}</div>` : ''}
+        ${receiptRows.length ? `<div class="bars" style="margin-top:14px">${receiptRows.map((s) => { const p = s.withReceipt / s.count * 100; return `<div class="bar-row"><div class="bar-label">${esc(s.title)}<small>${s.withReceipt} of ${s.count} with receipts</small></div><div class="bar-track" data-tip="${esc(`${Math.round(p)}% with receipts`)}" role="img" aria-label="${esc(`${Math.round(p)}% with receipts`)}"><div class="bar-gross" style="width:100%"></div><div class="bar-counts" style="width:${p.toFixed(1)}%"></div><div class="bar-value" style="left:${p.toFixed(1)}%">${Math.round(p)}%</div></div></div>`; }).join('')}</div>` : ''}
       </section>
 
       <section class="card">
@@ -1852,7 +1861,7 @@
             <div class="field span-2"><span>Location</span><div class="btn-row"><button class="btn btn-sm" type="button" id="sLocate">Use my location to fill in state and county</button></div></div>
             <div class="field span-2"><span>Casualty losses</span>
               <div class="chips"><label class="check"><input type="checkbox" id="sDisaster" ${s.casualtyFederalDisaster ? 'checked' : ''}> From a ${R0.taxYear >= 2026 ? 'federally or state-declared' : 'federally declared'} disaster</label><label class="check" ${s.casualtyFederalDisaster ? '' : 'hidden'}><input type="checkbox" id="sQualifiedDisaster" ${s.casualtyQualifiedDisaster ? 'checked' : ''}> Qualified disaster loss ($500 floor, no AGI reduction, counts without itemizing)</label><input id="sDisasterNumber" class="input" style="max-width:220px" value="${esc(s.disasterNumber || '')}" placeholder="FEMA declaration number" aria-label="FEMA declaration number"><button class="btn btn-sm" type="button" id="femaLookup">Look up declarations for ${esc(s.state || 'my state')}</button></div>
-              <div id="femaPanel"></div>
+              <div id="femaPanel" role="status" aria-live="polite"></div>
             </div>
           </div>
           <p class="note" style="margin-top:12px">AGI is adjusted gross income — roughly wages plus other income, minus adjustments like retirement contributions and student loan interest. Last year's Form 1040 line 11 is a good estimate.</p>
