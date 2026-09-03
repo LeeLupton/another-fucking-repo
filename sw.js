@@ -8,7 +8,7 @@
  * A new worker waits until the page asks it to take over (see registerSW in js/app.js), so a version
  * change never swaps the cache under a running session; the page offers a reload instead.
  */
-const STAMP = '__ITEMIZER_VERSION__';
+const STAMP = '61fe3e7ba375'; // written by build.js (a hash of the shell) and by the deploy (the commit)
 const VERSION = STAMP.startsWith('__') ? 'v7' : STAMP;
 const CACHE = 'itemizer-' + VERSION;
 const SHELL = [

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Itemizer</title>
 <meta name="description" content="Keep track of deductible expenses through the year, know the moment itemizing beats the standard deduction, and hand your preparer a filled-in worksheet.">
 <meta name="theme-color" content="#0e6b52" media="(prefers-color-scheme: light)">
@@ -69,14 +69,15 @@
     </a>
   </nav>
 
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="modal" class="modal" hidden>
     <div class="modal-backdrop" data-close="1"></div>
     <div class="modal-panel" role="dialog" aria-modal="true" id="modalPanel"></div>
   </div>
   <input type="file" id="receiptInput" accept="image/*" capture="environment" hidden>
+  <input type="file" id="receiptPick" accept="image/*" hidden>
   <input type="file" id="importInput" accept="application/json,.json" hidden>
-  <input type="file" id="csvInput" accept=".csv,text/csv,text/plain" hidden>
+  <input type="file" id="csvInput" accept=".csv,.txt,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel,application/octet-stream" hidden>
 </div>
 
 <script src="js/schema.js"></script>
