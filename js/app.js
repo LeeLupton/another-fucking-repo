@@ -35,6 +35,8 @@
   const money = R.money, moneyCents = R.moneyCents;
   const fmtMiles = (n) => `${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })} mi`;
   const fmtAmount = (entry) => (S.isMiles(entry.lineId) ? fmtMiles(entry.amount) : moneyCents(entry.amount));
+  const rateShort = (r) => R.perMile(r || 0).replace('/mile', '/mi'); // "70¢/mi" beside converted miles on the worksheet, so the preparer can check the figure
+  const mixedTreatments = (lines) => new Set(lines.filter((l) => l.treatment !== 'info').map((l) => l.treatment)).size > 1; // Education mixes a credit with an adjustment: no single total lands anywhere on the return
   const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const LEVEL_LABEL = { act: 'To do', warn: 'Heads up', good: 'Good news', info: 'Note' };
 
@@ -1613,6 +1615,25 @@
   // =====================================================================
   // WORKSHEET — a filled-in replica of the paper organizer
   // =====================================================================
+  /** The notes under the sheet, shared by the printed sheet and the text copy so the preparer gets the same information either way. */
+  function preparerNotes(R0) {
+    const notes = [];
+    for (const i of R0.insights.filter((x) => x.level === 'act' || x.level === 'warn')) notes.push(`${i.title}. ${i.body.split(/(?<=\.)\s/)[0]}`);
+    if (R0.scheduleA.other.gamblingLosses) notes.push(`Gambling winnings reported by taxpayer: ${money(R0.scheduleA.other.gamblingWinnings)}.`);
+    if (R0.scheduleA.casualty.gross) notes.push(`Casualty loss ${R0.scheduleA.casualty.federalDisaster ? 'IS' : 'is NOT'} marked as a declared disaster${state.settings.disasterNumber ? ` (FEMA ${state.settings.disasterNumber})` : ''}${R0.scheduleA.casualty.qualified ? '; taxpayer marked it a qualified disaster loss ($500 floor, no AGI reduction)' : ''}.`);
+    if (R0.scheduleA.taxes.withheld) notes.push(`State and local income tax withheld per W-2 (boxes 17 and 19), as entered by taxpayer: ${money(R0.scheduleA.taxes.withheld)} — included in the state-and-local total above the cap.`);
+    if (R0.scheduleA.charity.carryforward) notes.push(`Charitable gifts exceed the AGI limit by ${money(R0.scheduleA.charity.carryforward)}; carry the excess forward.`);
+    const tripCount = state.trips.filter((t) => Number(t.taxYear) === R0.taxYear).length;
+    if (tripCount) notes.push(`Mileage log: ${tripCount} ${tripCount === 1 ? 'trip' : 'trips'} with date, destination, purpose, and miles (export from Capture → Trip).`);
+    if (R0.scheduleC.hasActivity && R0.scheduleC.vehicle.totalMiles) notes.push(`Vehicle: ${fmtMiles(R0.scheduleC.vehicle.miles)} business of ${fmtMiles(R0.scheduleC.vehicle.totalMiles)} total (${Math.round((R0.scheduleC.vehicle.businessUseShare || 0) * 100)}% business use).`);
+    return notes;
+  }
+  /** The lender's name and address under Home Mortgage to Individual: Schedule A line 8b needs both, so the paper always prints the two lines. */
+  function lenderDetails(R0) {
+    const L = R0.lines['int.individual'];
+    const uniq = (f) => [...new Set(L.entries.map((e) => String(f(e) || '').trim()).filter(Boolean))];
+    return { names: uniq((e) => e.description), addresses: uniq((e) => e.note) };
+  }
   function renderWorksheet() {
     const R0 = state.computed;
     const P0 = R0.params;
@@ -1624,50 +1645,52 @@
       const has = L.count > 0;
       let amt = '$';
       if (has) {
-        if (l.unit === 'miles') amt = `<span class="mi">${esc(fmtMiles(L.total))}</span>${l.treatment === 'info' ? '' : esc(moneyCents(L.total * (P0.mileage[l.rate] || 0)))}`;
+        if (l.unit === 'miles') amt = `<span class="mi">${esc(fmtMiles(L.total))}${l.treatment === 'info' ? '' : ' @ ' + esc(rateShort(P0.mileage[l.rate]))}</span>${l.treatment === 'info' ? '' : esc(moneyCents(L.total * (P0.mileage[l.rate] || 0)))}`;
         else amt = esc(moneyCents(L.total));
       }
       return `<div class="sheet-line ${has ? '' : 'is-zero'}"><div class="lbl"><span>${esc(l.label)}</span><span class="leader"></span></div><span class="amt ${has ? '' : 'blank'}"${has ? '' : ' aria-hidden="true"'}>${amt}</span></div>`;
     };
-    const sectionHTML = (sec) => {
-      const lines = S.linesForSection(sec.id);
-      let html = `<div class="sheet-section"><h3>${esc(sec.title)}</h3>`;
+    const lenderRows = () => {
+      const D = lenderDetails(R0);
+      const row = (label, vals) => `<div class="sheet-line sheet-line-full ${vals.length ? '' : 'is-zero'}"><div class="lbl"><span>${label}${vals.length ? ': ' + esc(vals.join('; ')) : ''}</span><span class="leader"></span></div></div>`;
+      return row('Name', D.names) + row('Address', D.addresses);
+    };
+    // a section renders the lines that sit in the given column; the paper carries Self-Employed over to the foot of the right column
+    const sectionHTML = (sec, col) => {
+      const all = S.linesForSection(sec.id);
+      const lines = all.filter((l) => l.column === col);
+      if (!lines.length) return '';
+      const continued = lines[0] !== all[0];
+      let html = `<div class="sheet-section"><h3>${esc(sec.title)}${continued ? ' <span class="sheet-cont">(continued)</span>' : ''}</h3>`;
       let group = null;
       for (const l of lines) {
         if (l.group !== group) { group = l.group; if (group) html += `<div class="sheet-group">${esc(group)}</div>`; }
         html += lineRow(l);
-        if (l.id === 'int.individual' && R0.lines[l.id].count) {
-          for (const e of R0.lines[l.id].entries) html += `<div class="sheet-line sheet-line-wrap"><div class="lbl"><span>Name / Address: ${esc(e.description || '—')}${e.note ? '<br>' + esc(e.note) : ''}</span></div><span></span></div>`;
-        }
+        if (l.id === 'int.individual') html += lenderRows();
       }
       const secTotal = R0.sections[sec.id];
-      if (secTotal.count) html += `<div class="sheet-line"><div class="lbl"><span><i>Section total</i></span><span class="leader"></span></div><span class="amt"><b>${esc(moneyCents(secTotal.value))}</b></span></div>`;
+      if (secTotal.count && lines.includes(all[all.length - 1]) && !mixedTreatments(all)) html += `<div class="sheet-line"><div class="lbl"><span><i>Section total</i></span><span class="leader"></span></div><span class="amt"><b>${esc(moneyCents(secTotal.value))}</b></span></div>`;
       html += '</div>';
       return html;
     };
-    const left = S.SECTIONS.filter((s) => s.column === 'left').map(sectionHTML).join('');
-    const right = S.SECTIONS.filter((s) => s.column === 'right').map(sectionHTML).join('');
+    const columnHTML = (col) => S.SECTIONS.filter((x) => x.column === col).concat(S.SECTIONS.filter((x) => x.column !== col)).map((x) => sectionHTML(x, col)).join('');
+    const left = columnHTML('left');
+    const right = columnHTML('right');
+    const name = (state.settings.taxpayerName || '').trim();
 
-    const notes = [];
-    for (const i of R0.insights.filter((x) => x.level === 'act' || x.level === 'warn')) notes.push(`${i.title}. ${i.body.split(/(?<=\.)\s/)[0]}`);
-    if (R0.scheduleA.other.gamblingLosses) notes.push(`Gambling winnings reported by taxpayer: ${money(R0.scheduleA.other.gamblingWinnings)}.`);
-    if (R0.scheduleA.casualty.gross) notes.push(`Casualty loss ${R0.scheduleA.casualty.federalDisaster ? 'IS' : 'is NOT'} marked as a declared disaster${state.settings.disasterNumber ? ` (FEMA ${state.settings.disasterNumber})` : ''}${R0.scheduleA.casualty.qualified ? '; taxpayer marked it a qualified disaster loss ($500 floor, no AGI reduction)' : ''}.`);
-    if (R0.scheduleA.taxes.withheld) notes.push(`State and local income tax withheld per W-2 (boxes 17 and 19), as entered by taxpayer: ${money(R0.scheduleA.taxes.withheld)} — included in the state-and-local total above the cap.`);
-    if (R0.scheduleA.charity.carryforward) notes.push(`Charitable gifts exceed the AGI limit by ${money(R0.scheduleA.charity.carryforward)}; carry the excess forward.`);
-    const tripCount = state.trips.filter((t) => Number(t.taxYear) === R0.taxYear).length;
-    if (tripCount) notes.push(`Mileage log: ${tripCount} ${tripCount === 1 ? 'trip' : 'trips'} with date, destination, purpose, and miles (export from Capture → Trip).`);
-    if (R0.scheduleC.hasActivity && R0.scheduleC.vehicle.totalMiles) notes.push(`Vehicle: ${fmtMiles(R0.scheduleC.vehicle.miles)} business of ${fmtMiles(R0.scheduleC.vehicle.totalMiles)} total (${Math.round((R0.scheduleC.vehicle.businessUseShare || 0) * 100)}% business use).`);
+    const notes = preparerNotes(R0);
     const SUB = R0.substantiation;
 
     $('#view-worksheet').innerHTML = `
       <div class="sheet-tools">
-        <p class="note">This is the organizer sheet, filled in from your ledger. Print it or save it as a PDF for your preparer.</p>
+        <p class="note">This is the organizer sheet, filled in from your ledger. Print it or save it as a PDF for your preparer.${name ? '' : ' Add the name on your return under Settings → About you so the preparer knows whose sheet this is.'}</p>
         <div class="btn-row"><button class="btn" type="button" id="copySummary">Copy as text</button><button class="btn" type="button" id="receiptsToggle" aria-pressed="${state.showReceiptSheet}">${state.showReceiptSheet ? 'Hide receipts' : 'Receipts sheet'}</button>${state.showReceiptSheet ? `<button class="btn" type="button" id="printReceipts">${ICON.print} Print receipts</button>` : ''}<button class="btn btn-primary" type="button" id="printBtn">${ICON.print} Print / Save PDF</button></div>
       </div>
       <article class="sheet" id="sheet">
         <div class="sheet-bar">Keep track of your expenses</div>
         <p class="sheet-sub">List amounts for items you have. Save receipts for your deductions.</p>
         <div class="sheet-meta">
+          <span><b>Taxpayer</b> ${name ? esc(name) : '<span class="fill-blank"><span class="sr-only">not entered</span></span>'}</span>
           <span><b>Tax year</b> ${R0.taxYear}</span>
           <span><b>Filing status</b> ${esc(filing ? filing.label : '')}</span>
           <span><b>Est. AGI</b> ${R0.agi == null ? 'not provided' : money(R0.agi)}</span>
@@ -1712,7 +1735,7 @@
     const prepared = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
     return `<article class="sheet receipt-sheet" id="receiptSheet">
       <div class="sheet-bar">Receipts — tax year ${R0.taxYear}</div>
-      <p class="sheet-sub">${withPhoto.length} receipt ${withPhoto.length === 1 ? 'photo' : 'photos'} attached to entries and ${paper.length} paper ${paper.length === 1 ? 'receipt' : 'receipts'} on file. Prepared ${esc(prepared)}.</p>
+      <p class="sheet-sub">${state.settings.taxpayerName ? esc(state.settings.taxpayerName.trim()) + ' · ' : ''}${withPhoto.length} receipt ${withPhoto.length === 1 ? 'photo' : 'photos'} attached to entries and ${paper.length} paper ${paper.length === 1 ? 'receipt' : 'receipts'} on file. Prepared ${esc(prepared)}.</p>
       ${[...groups.entries()].map(([title, list]) => `<h3 class="receipt-group">${esc(title)}</h3><div class="receipt-grid">${list.map((e) => `<figure class="receipt-fig"><img data-receipt="${esc(e.receiptId)}" alt="Receipt for ${esc(e.description || S.getLine(e.lineId).label)}"><figcaption><b>${esc(P.formatDate(e.date))}</b> · ${esc(moneyCents(e.amount))}<br>${esc(e.description || '')}<br><span class="muted">${esc(S.getLine(e.lineId).label)}</span></figcaption></figure>`).join('')}</div>`).join('')}
       ${paper.length ? `<h3 class="receipt-group">Paper receipts on file</h3><table class="table-twin"><thead><tr><th>Date</th><th>Payee</th><th>Line</th><th class="num">Amount</th></tr></thead><tbody>${paper.map((e) => `<tr><td>${esc(P.formatDate(e.date, false))}</td><td>${esc(e.description || '')}</td><td>${esc(S.getLine(e.lineId).label)}</td><td class="num">${esc(moneyCents(e.amount))}</td></tr>`).join('')}</tbody></table>` : ''}
       ${!withPhoto.length && !paper.length ? '<p class="note">No receipts yet. Attach photos from Capture or the ledger, or tick "paper receipt filed" on an entry.</p>' : ''}
@@ -1726,17 +1749,24 @@
     const R0 = state.computed, P0 = R0.params;
     const filing = R.FILING_STATUSES.find((f) => f.id === R0.filingStatus);
     const pad = (a, b, w) => { const dots = Math.max(2, w - a.length - b.length); return a + ' ' + '.'.repeat(dots) + ' ' + b; };
-    const out = [`KEEP TRACK OF YOUR EXPENSES — tax year ${R0.taxYear}`, `Filing: ${filing ? filing.label : ''} · Est. AGI: ${R0.agi == null ? 'n/a' : money(R0.agi)} · Prepared ${P.formatDate(P.todayISO())}`, ''];
+    const name = (state.settings.taxpayerName || '').trim();
+    const out = [`KEEP TRACK OF YOUR EXPENSES — tax year ${R0.taxYear}`, `Taxpayer: ${name || '________________'} · Filing: ${filing ? filing.label : ''} · Est. AGI: ${R0.agi == null ? 'n/a' : money(R0.agi)} · Prepared ${P.formatDate(P.todayISO())}`, ''];
     for (const sec of S.SECTIONS) {
-      const lines = S.linesForSection(sec.id).filter((l) => R0.lines[l.id].count);
+      const all = S.linesForSection(sec.id);
+      const lines = all.filter((l) => R0.lines[l.id].count);
       if (!lines.length) continue;
       out.push(sec.title.toUpperCase());
       for (const l of lines) {
         const L = R0.lines[l.id];
-        const v = l.unit === 'miles' ? `${fmtMiles(L.total)}${l.treatment === 'info' ? '' : ' = ' + moneyCents(L.total * (P0.mileage[l.rate] || 0))}` : moneyCents(L.total);
+        const v = l.unit === 'miles' ? `${fmtMiles(L.total)}${l.treatment === 'info' ? '' : ` @ ${rateShort(P0.mileage[l.rate])} = ` + moneyCents(L.total * (P0.mileage[l.rate] || 0))}` : moneyCents(L.total);
         out.push('  ' + pad(l.label, v, 58));
+        if (l.id === 'int.individual') {
+          const D = lenderDetails(R0);
+          out.push(`    Name: ${D.names.join('; ') || '(not recorded)'}`, `    Address: ${D.addresses.join('; ') || "(not recorded — Schedule A needs the lender's address and SSN or EIN)"}`);
+        }
       }
-      out.push('  ' + pad('Section total', moneyCents(R0.sections[sec.id].value), 58), '');
+      if (!mixedTreatments(all)) out.push('  ' + pad('Section total', moneyCents(R0.sections[sec.id].value), 58));
+      out.push('');
     }
     out.push(pad('Schedule A entered', moneyCents(R0.scheduleA.grossEntered), 60));
     out.push(pad('Counts after floors and caps', moneyCents(R0.scheduleA.total), 60));
@@ -1744,8 +1774,8 @@
     out.push(pad(R0.verdict.itemize ? 'Itemizing wins by' : 'Standard deduction wins by', moneyCents(Math.abs(R0.verdict.difference)), 60));
     if (R0.scheduleC.hasActivity) out.push(pad('Schedule C expenses', moneyCents(R0.scheduleC.total), 60));
     if (R0.adjustments.studentLoanInterest.paid) out.push(pad('Student loan interest (adjustment)', moneyCents(R0.adjustments.studentLoanInterest.deductible), 60));
-    const flags = R0.insights.filter((i) => i.level === 'act' || i.level === 'warn');
-    if (flags.length) { out.push('', 'NOTES FOR THE PREPARER'); flags.forEach((i) => out.push('  • ' + i.title)); }
+    const notes = preparerNotes(R0);
+    if (notes.length) { out.push('', 'NOTES FOR THE PREPARER'); notes.forEach((n) => out.push('  • ' + n)); }
     return out.join('\n');
   }
 
@@ -1858,6 +1888,7 @@
         <section class="card">
           <div class="card-head"><h2>About you</h2><span class="muted small">drives the standard deduction and floors</span></div>
           <div class="grid-2">
+            <label class="field"><span>Name on the return</span><input id="sName" value="${esc(s.taxpayerName || '')}" placeholder="printed on the worksheet" autocomplete="name" maxlength="120"></label>
             <label class="field"><span>Filing status</span><select id="sFiling" class="input">${R.FILING_STATUSES.map((f) => `<option value="${f.id}" ${s.filingStatus === f.id ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}</select></label>
             <label class="field"><span>Estimated AGI for ${R0.taxYear} ($)</span><input id="sAgi" inputmode="numeric" value="${esc(s.agi)}" placeholder="e.g. 95000"></label>
             <div class="field"><span>Age &amp; vision</span><div class="chips"><label class="check"><input type="checkbox" id="sAge65" ${s.age65 ? 'checked' : ''}> I'm 65 or older</label><label class="check"><input type="checkbox" id="sBlind" ${s.blind ? 'checked' : ''}> I'm blind</label></div></div>
@@ -1940,6 +1971,7 @@
 
     const save = async () => { await DB.saveSettings(state.settings); recompute(); };
     $('#sFiling').onchange = async (ev) => { s.filingStatus = ev.target.value; await save(); renderSettings(); };
+    $('#sName').addEventListener('change', async (ev) => { s.taxpayerName = ev.target.value.trim().slice(0, 120); ev.target.value = s.taxpayerName; await save(); });
     $('#sAgi').addEventListener('change', async (ev) => { s.agi = ev.target.value.replace(/[^0-9.]/g, ''); ev.target.value = s.agi; await save(); });
     for (const [id, key] of [['sAge65', 'age65'], ['sBlind', 'blind'], ['sSpouseAge65', 'spouseAge65'], ['sSpouseBlind', 'spouseBlind'], ['sDisaster', 'casualtyFederalDisaster'], ['sQualifiedDisaster', 'casualtyQualifiedDisaster']]) {
       const el = $('#' + id); if (el) el.onchange = async () => { s[key] = el.checked; await save(); if (key === 'casualtyFederalDisaster') renderSettings(); };
