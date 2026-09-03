@@ -23,6 +23,14 @@
   const VIEWS = ['capture', 'ledger', 'advisor', 'insights', 'worksheet', 'settings'];
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+  /** Attach one delegated handler per event type to a long-lived element; a re-render replaces it instead of stacking another. */
+  function listen(el, type, fn) {
+    if (!el) return;
+    el.__handlers = el.__handlers || {};
+    if (el.__handlers[type]) el.removeEventListener(type, el.__handlers[type]);
+    el.__handlers[type] = fn;
+    el.addEventListener(type, fn);
+  }
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const money = R.money, moneyCents = R.moneyCents;
   const fmtMiles = (n) => `${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })} mi`;
@@ -467,7 +475,7 @@
     $('#fNote').addEventListener('input', (ev) => { cap.note = ev.target.value; cap.dirty = true; });
     $('#fRepeat').addEventListener('change', (ev) => { cap.repeat = Number(ev.target.value) || 1; });
     $('#fShare').addEventListener('input', (ev) => { cap.share = ev.target.value.replace(/[^0-9]/g, ''); cap.dirty = true; });
-    root.addEventListener('click', (ev) => {
+    listen(root, 'click', (ev) => {
       const b = ev.target.closest('[data-edit]'); if (b) { openEdit(b.dataset.edit); return; }
       const r = ev.target.closest('[data-rec-act]'); if (r) handleRecAction(r);
     });
@@ -647,7 +655,7 @@
     $('#recStop').onclick = stopRecording;
     $('#addPlace').onclick = () => openPlaceModal(null);
     $('#exportTrips').onclick = exportMileageLog;
-    root.addEventListener('click', (ev) => { const b = ev.target.closest('[data-place-edit]'); if (b) openPlaceModal(state.places.find((p) => p.id === b.dataset.placeEdit)); });
+    listen(root, 'click', (ev) => { const b = ev.target.closest('[data-place-edit]'); if (b) openPlaceModal(state.places.find((p) => p.id === b.dataset.placeEdit)); });
     drawTrack();
   }
 
@@ -698,12 +706,15 @@
       note: `${T.roundTrip ? 'Round trip, ' : ''}${METHOD_LABEL[T.method] || T.method}.`, hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false,
     };
     const trip = { id: DB.uid(), date: T.date, taxYear: entry.taxYear, fromId: T.fromId, toId: T.toId, fromLabel, toLabel, purpose: T.purpose.trim(), miles: G.roundMiles(miles), roundTrip: !!T.roundTrip, method: T.method, lineId: T.lineId, entryId: entry.id, points: T.points || null, startedAt: T.startedAt, endedAt: T.endedAt, createdAt: now };
+    if (T.saving) return;
+    T.saving = true;
     try {
       DB.requestPersistence();
       await DB.putEntry(entry);
       await DB.putTrip(trip);
     } catch (e) {
       await DB.deleteEntry(entry.id).catch(() => {});
+      T.saving = false;
       toast(`Could not log the trip: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
       return;
     }
@@ -720,6 +731,11 @@
   function trackColors() {
     const cs = getComputedStyle(document.documentElement);
     return { line: cs.getPropertyValue('--accent').trim() || '#0e6b52', start: cs.getPropertyValue('--accent').trim() || '#0e6b52', end: cs.getPropertyValue('--warn-fill').trim() || '#d03b3b', ink: cs.getPropertyValue('--ink-3').trim() || '#75817a' };
+  }
+  /** Stop a live recorder (GPS watch, wake lock, timer) and forget it; used wherever the trip form is thrown away. */
+  function discardRecorder() {
+    if (state.recorder && state.recorder.state !== 'idle') { try { state.recorder.stop(); } catch (e) { /* nothing to release */ } }
+    clearInterval(state.recorderTimer); state.recorderTimer = null; state.recorder = null;
   }
   function drawTrack() {
     const canvas = $('#trackCanvas'); if (!canvas) return;
@@ -911,16 +927,18 @@
     $('#impSelectSuggested').onclick = () => { I.rows.forEach((r) => { r.selected = !!r.lineId && !r.refund && !r.duplicate; }); renderCapture(); };
     $('#impClear').onclick = () => { I.rows.forEach((r) => { r.selected = false; }); renderCapture(); };
     const root = $('#view-capture');
-    root.addEventListener('change', (ev) => {
+    listen(root, 'change', (ev) => {
       const sel = ev.target.closest('[data-imp-sel]'); if (sel) { I.rows[Number(sel.dataset.impSel)].selected = sel.checked; const btn = $('#impAdd'); const n = I.rows.filter((r) => r.selected).length; btn.disabled = !n; btn.textContent = `Add ${n} ${n === 1 ? 'entry' : 'entries'}`; return; }
       const line = ev.target.closest('[data-imp-line]'); if (line) { const r = I.rows[Number(line.dataset.impLine)]; r.lineId = line.value; if (r.lineId && !r.selected) { r.selected = true; const cb = root.querySelector(`[data-imp-sel="${line.dataset.impLine}"]`); if (cb) cb.checked = true; const btn = $('#impAdd'); const n = I.rows.filter((x) => x.selected).length; btn.disabled = !n; btn.textContent = `Add ${n} ${n === 1 ? 'entry' : 'entries'}`; } }
     });
     $('#impAdd').onclick = async () => {
       const chosen = I.rows.filter((r) => r.selected && r.lineId && S.getLine(r.lineId) && r.amount > 0);
       if (!chosen.length) { toast('Tick at least one row with a worksheet line.'); return; }
+      if (I.adding) return;
+      I.adding = true;
       const now = new Date().toISOString();
       const entries = chosen.map((r) => ({ id: DB.uid(), date: r.date, taxYear: Number(r.date.slice(0, 4)), lineId: r.lineId, amount: Math.round(r.amount * 100) / 100, description: r.description, note: r.memo ? `Statement category: ${r.memo}` : 'Imported from a statement', hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false, source: 'import' }));
-      try { await DB.putEntries(entries); } catch (e) { toast(`Could not save the rows: ${e && e.message ? e.message : 'storage error'}. Nothing was added.`, 6000); return; }
+      try { await DB.putEntries(entries); } catch (e) { I.adding = false; toast(`Could not save the rows: ${e && e.message ? e.message : 'storage error'}. Nothing was added.`, 6000); return; }
       state.entries.push(...entries);
       for (const r of chosen) if (r.description) C.learn(state.settings.learned, r.description, r.lineId);
       for (const r of chosen) learnFromChoice(r.suggestions, r.lineId);
@@ -983,12 +1001,13 @@
     if (a.type === 'prefill') prefillCapture(a.entry);
     else if (a.type === 'edit') openEdit(a.entryId);
     else if (a.type === 'ledger') { state.ledger.filter = a.filter || 'all'; go('ledger', a.filter ? { filter: a.filter } : null); }
-    else if (a.type === 'capture') { go('capture'); setTimeout(() => { const q = $('#quickInput'); if (q) q.focus(); }, 50); }
+    else if (a.type === 'capture') { state.captureMode = 'expense'; go('capture'); if (state.view === 'capture') renderCapture(); setTimeout(() => { const q = $('#quickInput'); if (q) q.focus(); }, 50); }
     else if (a.type === 'settings') go('settings');
   }
 
   /** Start a capture with the fields already filled; the user reviews and saves. */
   function prefillCapture(entry) {
+    state.captureMode = 'expense'; // the prefilled form lives in expense mode, wherever the user was
     const cap = freshCapture();
     cap.lineId = entry.lineId || null;
     cap.description = entry.description || '';
@@ -1020,7 +1039,6 @@
       cap.lineId = top && top.score >= 0.9 ? top.lineId : (top && cap.suggestions.length === 1 ? top.lineId : null);
       if (!cap.lineId && parsed.miles != null && top) cap.lineId = top.lineId;
     }
-    const wasHidden = $('#understood').hidden;
     if (cap.text.trim()) $('#understood').hidden = false;
     // Update fields in place (don't re-render the input we're typing in).
     const milesMode = cap.lineId && S.isMiles(cap.lineId);
@@ -1031,7 +1049,6 @@
     $('#fLine').value = cap.lineId || '';
     refreshChips();
     $('#receiptRow').hidden = !!milesMode;
-    if (wasHidden && !$('#understood').hidden) { /* first reveal: nothing else */ }
     updateSaveHint();
   }
   function reclassify() {
@@ -1086,18 +1103,15 @@
     }
   }
 
-  function addMonths(isoDate, n) {
-    const [y, m, d] = isoDate.split('-').map(Number);
-    const target = new Date(y, m - 1 + n, 1);
-    const dim = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-    const day = Math.min(d, dim);
-    return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  }
+  const addMonths = ADV.addMonths; // the same end-of-month clamping the advisor uses for expected dates
 
   async function saveCapture() {
     const cap = state.capture;
     const problems = captureProblems();
     if (problems.length) { toast('To save: ' + problems.join(', ') + '.'); return; }
+    if (cap.saving) return; // Enter plus a tap, or a double tap, must not file the entry twice
+    cap.saving = true;
+    const saveBtn = $('#saveBtn'); if (saveBtn) saveBtn.disabled = true;
     const isMiles = S.isMiles(cap.lineId);
     const value = Number(isMiles ? cap.miles : cap.amount);
     const shareIn = Number(cap.share);
@@ -1125,6 +1139,7 @@
       await DB.putEntries(entries);
     } catch (e) {
       if (receiptId) await DB.deleteReceipt(receiptId).catch(() => {});
+      cap.saving = false; if (saveBtn) saveBtn.disabled = false;
       toast(`Could not save: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
       return;
     }
@@ -1521,7 +1536,7 @@
       </div>`;
 
     const tg = $('#toggleMonthsTable'); if (tg) tg.onclick = () => { state.showMonthsTable = !state.showMonthsTable; renderInsights(); };
-    $('#view-insights').addEventListener('click', (ev) => {
+    listen($('#view-insights'), 'click', (ev) => {
       const go1 = ev.target.closest('[data-go]');
       if (go1) { ev.preventDefault(); const [view, filter] = go1.dataset.go.split(':'); if (filter) state.ledger.filter = filter; go(view, filter ? { filter } : null); }
     });
@@ -1781,7 +1796,7 @@
       </section>`;
 
     const root = $('#view-advisor');
-    root.addEventListener('click', (ev) => { const b = ev.target.closest('[data-rec-act]'); if (b) handleRecAction(b); });
+    listen(root, 'click', (ev) => { const b = ev.target.closest('[data-rec-act]'); if (b) handleRecAction(b); });
     const ls = $('#loadSample'); if (ls) ls.onclick = loadSampleData;
     $('#copyAggregate').onclick = async () => { try { await navigator.clipboard.writeText(JSON.stringify(adv.aggregate, null, 2)); toast('Summary copied.'); } catch (e) { toast('Select the text and copy it.'); } };
     $('#downloadAggregate').onclick = () => downloadText(`itemizer-summary-${R0.taxYear}.json`, JSON.stringify(adv.aggregate, null, 2), 'application/json');
@@ -2079,7 +2094,13 @@
       mk('Rivera studio', 'business', 35.7325, -78.8503, 'Cary, NC'),
     ];
   }
+  let loadingSample = false;
   async function loadSampleData() {
+    if (loadingSample) return; // three buttons lead here; a double tap must not load the set twice
+    loadingSample = true;
+    try { await loadSampleDataNow(); } finally { loadingSample = false; }
+  }
+  async function loadSampleDataNow() {
     const year = Number(state.settings.taxYear);
     const entries = sampleEntries(year);
     await DB.putEntries(entries);
@@ -2106,6 +2127,7 @@
     state.places = state.places.filter((x) => !x.sample);
     for (const t of state.trips.filter((x) => x.sample)) await DB.deleteTrip(t.id);
     state.trips = state.trips.filter((x) => !x.sample);
+    discardRecorder();
     state.trip = null;
     toast(`Removed ${ids.length} example entries.`);
     render();
@@ -2115,20 +2137,34 @@
   function registerSW() {
     if (globalThis.ITEMIZER_SINGLE_FILE) return;
     if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
-    navigator.serviceWorker.register('sw.js').catch(() => { /* offline install is a bonus, not a requirement */ });
+    let askedToReload = false;
+    // A new version waits until the user chooses to reload, so the cache is never swapped under a half-typed form.
+    const offerUpdate = (worker) => {
+      if (!worker || !navigator.serviceWorker.controller) return; // first install: nothing is running on the old version
+      toast('A new version of Itemizer is ready.', 60000, { label: 'Reload', onClick: () => { askedToReload = true; worker.postMessage({ type: 'SKIP_WAITING' }); } });
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (askedToReload) location.reload(); });
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      if (reg.waiting) offerUpdate(reg.waiting);
+      reg.addEventListener('updatefound', () => {
+        const w = reg.installing; if (!w) return;
+        w.addEventListener('statechange', () => { if (w.state === 'installed') offerUpdate(reg.waiting || w); });
+      });
+      // an installed app that lives in the app switcher for weeks checks for a new version whenever it comes back
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(() => { /* offline install is a bonus, not a requirement */ });
   }
 
   /** Load (or reload) everything from storage; used at start, after "Delete all data", and after a restore. */
   async function reloadState() {
     for (const u of state.receiptURLs.values()) URL.revokeObjectURL(u);
     state.receiptURLs.clear();
-    if (state.recorder && state.recorder.state !== 'idle') { try { state.recorder.stop(); } catch (e) { /* nothing to release */ } }
-    clearInterval(state.recorderTimer); state.recorderTimer = null; state.recorder = null;
+    discardRecorder();
     state.settings = await DB.getSettings();
     state.entries = await DB.getEntries();
     for (const e of state.entries) { try { if (!e.taxYear && typeof e.date === 'string') e.taxYear = Number(e.date.slice(0, 4)); } catch (err) { /* a bad row never blocks start-up */ } }
     try { state.places = await DB.getPlaces(); state.trips = await DB.getTrips(); } catch (e) { state.places = []; state.trips = []; }
-    state.capture = null; state.trip = null; state.importer = null;
+    state.capture = null; state.trip = null; state.importer = null; state.captureMode = 'expense';
   }
   async function init() {
     try { await reloadState(); }
@@ -2138,7 +2174,14 @@
       toast(`Local storage could not be opened: ${e && e.message ? e.message : 'unknown error'}. Close other Itemizer tabs and reload; nothing will be saved until then.`, 30000);
     }
     applyTheme();
-    $('#yearSelect').onchange = async (ev) => { state.settings.taxYear = Number(ev.target.value); await DB.saveSettings(state.settings); state.capture = null; state.trip = null; render(); };
+    $('#yearSelect').onchange = async (ev) => {
+      state.settings.taxYear = Number(ev.target.value);
+      await DB.saveSettings(state.settings);
+      if (state.capture && state.capture.receiptURL) URL.revokeObjectURL(state.capture.receiptURL);
+      discardRecorder();
+      state.capture = null; state.trip = null;
+      render();
+    };
     $('#receiptInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
     $('#importInput').onchange = importBackup;
     $('#csvInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onCSVFile(f); };

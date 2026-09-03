@@ -32,7 +32,6 @@
     paramOverrides: {},
     learned: {},
     theme: 'system',
-    onboarded: false,
     advisorDismissed: {},
     state: '',
     county: '',

@@ -29,6 +29,8 @@ jobs:
         run: npm test
       - name: Build the single-file download
         run: npm run build
+      - name: Stamp the service worker cache with this commit
+        run: sed -i "s/__ITEMIZER_VERSION__/${GITHUB_SHA::12}/" sw.js && grep -n "const STAMP" sw.js
       - uses: actions/configure-pages@v5
         with:
           enablement: true

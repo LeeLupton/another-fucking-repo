@@ -238,16 +238,20 @@
     const milesEntries = entries.filter((e) => e.lineId === 'med.miles');
     if (milesEntries.length) {
       const overall = median(milesEntries.map((e) => Number(e.amount) || 0));
+      // mileage indexed by date, so each visit costs three lookups instead of a scan of every drive
+      const milesByDate = new Map();
+      for (const m of milesEntries) { if (!milesByDate.has(m.date)) milesByDate.set(m.date, []); milesByDate.get(m.date).push(Number(m.amount) || 0); }
+      const drivesNear = (date) => [addDays(date, -1), date, addDays(date, 1)].flatMap((d) => milesByDate.get(d) || []);
       const byPayee = new Map();
       for (const v of entries.filter((e) => VISIT_LINES.includes(e.lineId))) {
-        const same = milesEntries.filter((m) => Math.abs(daysBetween(v.date, m.date)) <= 1);
+        const same = drivesNear(v.date);
         if (!same.length) continue;
         const k = Classify.keyFor(v.description || '');
         if (!byPayee.has(k)) byPayee.set(k, []);
-        byPayee.get(k).push(...same.map((m) => Number(m.amount) || 0));
+        byPayee.get(k).push(...same);
       }
       const visits = yearEntries
-        .filter((e) => VISIT_LINES.includes(e.lineId) && !milesEntries.some((m) => Math.abs(daysBetween(e.date, m.date)) <= 1))
+        .filter((e) => VISIT_LINES.includes(e.lineId) && !drivesNear(e.date).length)
         .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
       for (const v of visits) {
         const known = byPayee.get(Classify.keyFor(v.description || ''));
@@ -449,5 +453,5 @@
     return { recommendations: recommendations.slice(0, 12), dismissed, recurrences, projection, habits, aggregate: aggregateProfile(computed, habits, recurrences, today) };
   }
 
-  return { analyze, detectRecurrences, aggregateProfile, CADENCES, DISMISS_DAYS, VISIT_LINES };
+  return { analyze, detectRecurrences, aggregateProfile, addMonths, CADENCES, DISMISS_DAYS, VISIT_LINES };
 });
