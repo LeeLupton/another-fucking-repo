@@ -17,6 +17,7 @@
   const ADV = globalThis.ItemizerAdvisor;
   const G = globalThis.ItemizerGeo;
   const IMP = globalThis.ItemizerImporter;
+  const VAL = globalThis.ItemizerValuation;
 
   const VIEWS = ['capture', 'ledger', 'advisor', 'insights', 'worksheet', 'settings'];
   const $ = (sel, root) => (root || document).querySelector(sel);
@@ -42,7 +43,7 @@
     entries: [],
     computed: null,
     view: 'capture',
-    ledger: { q: '', section: '', filter: 'all' },
+    ledger: { q: '', section: '', filter: 'all', from: '', to: '', selectMode: false, selected: new Set() },
     capture: null,
     receiptURLs: new Map(), // receiptId -> object URL
     pendingReceiptTarget: null, // 'capture' | entryId
@@ -54,10 +55,12 @@
     recorder: null,
     recorderTimer: null,
     importer: null,
+    donation: null,
+    showReceiptSheet: false,
   };
 
   function freshCapture() {
-    return { text: '', parsed: null, lineId: null, amount: '', miles: '', date: P.todayISO(), description: '', note: '', share: '', paper: false, receiptBlob: null, receiptURL: null, repeat: 1, suggestions: [], nonDeductible: [], pinned: new Set(), dirty: false };
+    return { text: '', parsed: null, lineId: null, amount: '', miles: '', date: P.todayISO(), description: '', note: '', share: '', items: null, paper: false, receiptBlob: null, receiptURL: null, repeat: 1, suggestions: [], nonDeductible: [], pinned: new Set(), dirty: false };
   }
   function freshTrip() {
     const home = state.places.find((p) => p.category === 'home');
@@ -83,12 +86,18 @@
 
   // ---- toast / modal ---------------------------------------------------------
   let toastTimer = null;
-  function toast(msg, ms) {
+  function toast(msg, ms, action) {
     const el = $('#toast');
     el.textContent = msg;
+    if (action && action.label) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'toast-action'; b.textContent = action.label;
+      b.onclick = () => { el.hidden = true; clearTimeout(toastTimer); action.onClick(); };
+      el.appendChild(b);
+    }
     el.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, ms || 2600);
+    toastTimer = setTimeout(() => { el.hidden = true; }, ms || (action ? 7000 : 2600));
   }
   function openModal(html, onOpen) {
     const m = $('#modal');
@@ -200,6 +209,15 @@
   function entryRow(e, opts) {
     const line = S.getLine(e.lineId);
     const dupe = opts && opts.dupes && opts.dupes.has(e.id);
+    if (opts && opts.select) {
+      return `<label class="row row-select">
+      <span class="row-check"><input type="checkbox" data-sel="${esc(e.id)}" ${opts.selected.has(e.id) ? 'checked' : ''} aria-label="Select ${esc(e.description || line.label)}"></span>
+      <span class="row-date">${esc(P.formatDate(e.date, false))}</span>
+      <span class="row-main"><span class="row-desc">${esc(e.description || line.label)}${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
+      <span class="row-amt">${esc(fmtAmount(e))}</span>
+      ${receiptIcon(e)}
+    </label>`;
+    }
     return `<button class="row" data-edit="${esc(e.id)}" type="button">
       <span class="row-date">${esc(P.formatDate(e.date, false))}</span>
       <span class="row-main"><span class="row-desc">${esc(e.description || line.label)}${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}${dupe ? ' <span class="dupe-mark" title="Possible duplicate">⧉</span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
@@ -281,7 +299,7 @@
         <details class="more" ${cap.note || cap.repeat > 1 ? 'open' : ''}>
           <summary>Note &amp; repeat</summary>
           <div class="grid-2">
-            <label class="field span-2"><span>Note</span><input id="fNote" value="${esc(cap.note)}" placeholder="Who you met, what it was for, lender's name and TIN…"></label>
+            <label class="field span-2"><span>Note</span><textarea id="fNote" rows="${cap.note && cap.note.includes('\n') ? Math.min(8, cap.note.split('\n').length) : 2}" placeholder="Who you met, what it was for, lender's name and TIN…">${esc(cap.note)}</textarea></label>
             <label class="field"><span>Repeat monthly</span><select id="fRepeat">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => `<option value="${n}" ${cap.repeat === n ? 'selected' : ''}>${n === 1 ? 'Just once' : `${n} months`}</option>`).join('')}</select></label>
             <label class="field"><span>Business-use share (%)</span><input id="fShare" inputmode="numeric" value="${esc(cap.share || '')}" placeholder="100"></label>
             <p class="note span-2">Repeat is for premiums or a monthly pledge: one entry per month from this date. The share is for bills that are partly business, like a phone or internet: only that share is logged, and the full amount goes in the note.</p>
@@ -371,6 +389,27 @@
       </div>
       <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" type="button" id="calcHomeLog" disabled>Log it on Schedule C</button></div>
       <p class="note small" style="margin-top:8px">The space must be used regularly and exclusively for the business. The simplified rate is $5 per square foot, capped at 300 square feet ($1,500). For a share of a bill that is partly business, use "Business-use share" under Note &amp; repeat when you log the bill.</p>
+    </details>
+    ${donationToolHTML()}`;
+  }
+  function donationToolHTML() {
+    const D = state.donation || (state.donation = { charity: '', date: todayInYear(), items: [] });
+    const dnTotal = VAL.total(D.items);
+    const th = VAL.thresholds(dnTotal, state.computed.params);
+    return `<details class="card calc" ${D.items.length ? 'open' : ''}><summary><b>Donated goods</b> <span class="muted small">itemized value for the furniture/clothing line</span></summary>
+      <div class="grid-2" style="margin-top:12px">
+        <label class="field"><span>Charity</span><input id="dnCharity" value="${esc(D.charity)}" placeholder="Goodwill, Salvation Army, church rummage sale"></label>
+        <label class="field"><span>Date</span><input id="dnDate" type="date" value="${esc(D.date)}"></label>
+        <label class="field span-2"><span>Item</span><input id="dnItem" list="dnCatalog" placeholder="Start typing: shirt, jeans, sofa, lamp, books…" autocomplete="off"><datalist id="dnCatalog">${VAL.CATALOG.map((c) => `<option value="${esc(c.name)}">${esc(c.category)} · $${c.low} to $${c.high}</option>`).join('')}</datalist></label>
+        <label class="field"><span>Quantity</span><input id="dnQty" inputmode="numeric" value="1"></label>
+        <label class="field"><span>Condition</span><select id="dnCond" class="input">${VAL.CONDITIONS.map((c) => `<option value="${c.id}">${esc(c.label)}</option>`).join('')}</select></label>
+        <label class="field"><span>Value each ($)</span><input id="dnValue" inputmode="decimal" placeholder="suggested from the range"></label>
+        <div class="field"><span>&nbsp;</span><button class="btn" type="button" id="dnAdd">Add item</button></div>
+      </div>
+      <p class="note small" id="dnHint" style="margin-top:8px">Pick an item to see its typical thrift-shop range.</p>
+      ${D.items.length ? `<div class="table-wrap"><table class="table-twin donation"><thead><tr><th>Item</th><th class="num">Qty</th><th>Condition</th><th class="num">Each</th><th class="num">Total</th><th></th></tr></thead><tbody>${D.items.map((it, i) => `<tr><td>${esc(it.name)}</td><td class="num">${it.qty}</td><td>${esc((VAL.CONDITIONS.find((c) => c.id === it.condition) || {}).label || it.condition)}</td><td class="num">${esc(moneyCents(it.value))}</td><td class="num">${esc(moneyCents(VAL.lineTotal(it)))}</td><td><button class="btn btn-ghost btn-sm" type="button" data-dn-remove="${i}" aria-label="Remove item">✕</button></td></tr>`).join('')}</tbody></table></div>` : ''}
+      <div class="actions"><span><b>Total ${esc(moneyCents(dnTotal))}</b> · ${VAL.count(D.items)} ${VAL.count(D.items) === 1 ? 'item' : 'items'}${th.appraisal ? ' · <span class="pill pill-warn">appraisal needed over $5,000</span>' : th.form8283 ? ' · <span class="pill pill-act">Form 8283 over $500</span>' : ''}</span><button class="btn btn-primary btn-sm" type="button" id="dnLog" ${D.items.length ? '' : 'disabled'}>Log donation</button></div>
+      <p class="note small" style="margin-top:8px">Values are typical thrift-shop ranges, the kind Goodwill and The Salvation Army publish, for items in good used condition or better, which is the IRS minimum for clothing and household goods. You set each value; the itemized list is saved with the entry as your record. Keep the charity's receipt too.</p>
     </details>`;
   }
   function bindCalculators() {
@@ -379,6 +418,41 @@
     const calc = () => { const n = Math.min(300, Math.max(0, Math.floor(Number(sq.value) || 0))); const amt = n * 5; out.textContent = money(amt); btn.disabled = !(amt > 0); return { n, amt }; };
     sq.addEventListener('input', calc);
     btn.onclick = () => { const { n, amt } = calc(); if (!amt) return; prefillCapture({ lineId: 'se.other', amount: amt, description: `Home office, simplified method: ${n} sq ft × $5`, date: todayInYear() }); };
+    bindDonationTool();
+  }
+  function bindDonationTool() {
+    const D = state.donation; if (!D || !$('#dnItem')) return;
+    const item = $('#dnItem'), qty = $('#dnQty'), cond = $('#dnCond'), val = $('#dnValue'), hint = $('#dnHint');
+    const current = () => VAL.byName(item.value) || VAL.find(item.value, 1)[0] || null;
+    const refreshHint = () => {
+      const c = current();
+      if (!c) { hint.textContent = item.value.trim() ? 'Not in the catalog; enter your own fair-market value.' : 'Pick an item to see its typical thrift-shop range.'; return; }
+      const sug = VAL.suggestValue(c, cond.value);
+      hint.textContent = `${c.name}: typically $${c.low} to $${c.high}. Suggested in ${cond.options[cond.selectedIndex].text.toLowerCase()} condition: ${moneyCents(sug)}.`;
+      if (!val.dataset.touched) val.value = String(sug);
+    };
+    item.addEventListener('input', () => { val.dataset.touched = ''; refreshHint(); });
+    cond.addEventListener('change', () => { val.dataset.touched = ''; refreshHint(); });
+    val.addEventListener('input', () => { val.dataset.touched = '1'; });
+    $('#dnCharity').addEventListener('input', (ev) => { D.charity = ev.target.value; });
+    $('#dnDate').addEventListener('change', (ev) => { D.date = ev.target.value; });
+    $('#dnAdd').onclick = () => {
+      const typed = item.value.trim();
+      const q = Math.max(1, Math.floor(Number(qty.value) || 1));
+      const v = Number(val.value);
+      if (!typed) { toast('Type the item first.'); return; }
+      if (!(v > 0)) { toast('Enter a value for each item.'); return; }
+      D.items.push({ name: (VAL.byName(typed) || {}).name || typed, qty: q, condition: cond.value, value: Math.round(v * 100) / 100 });
+      renderCapture();
+      const next = $('#dnItem'); if (next) next.focus();
+    };
+    $$('[data-dn-remove]').forEach((b) => { b.onclick = () => { D.items.splice(Number(b.dataset.dnRemove), 1); renderCapture(); }; });
+    $('#dnLog').onclick = () => {
+      if (!D.items.length) return;
+      const items = D.items.slice(), charity = D.charity.trim(), date = D.date || todayInYear();
+      state.donation = null;
+      prefillCapture({ lineId: 'ch.noncash', amount: VAL.total(items), description: `${charity || 'Donated goods'} — ${VAL.summarize(items)}`, date, note: VAL.recordText(items, charity, date), items });
+    };
   }
 
   // ---- trips: places, distances, the GPS recorder, the mileage log ---------------------
@@ -653,7 +727,7 @@
     const twoCol = I.map.debit >= 0 || I.map.credit >= 0;
     return `
       <section class="card">
-        <div class="card-head"><h2>${esc(I.fileName)}</h2><span class="muted small">${I.rows.length} rows read</span></div>
+        <div class="card-head"><h2>${esc(I.fileName)}</h2><span class="muted small">${I.rows.length} rows read${I.remembered ? ' · <span class="pill pill-info">layout remembered</span>' : ''}</span></div>
         <div class="grid-3">
           <label class="field"><span>Date column</span>${colSelect('impDate', I.map.date)}</label>
           <label class="field"><span>Description column</span>${colSelect('impDesc', I.map.description)}</label>
@@ -687,11 +761,14 @@
     const raw = IMP.parseCSV(text);
     if (raw.length < 1) { toast('That file has no rows.'); return; }
     const map = IMP.detectColumns(raw);
-    state.importer = { fileName: file.name, raw, map, spendIsNegative: undefined, headers: [], rows: [] };
+    const signature = IMP.headerSignature(raw[0]);
+    const remembered = map.headerRow ? (state.settings.importMappings || {})[signature] : null;
+    if (remembered && remembered.map) Object.assign(map, remembered.map);
+    state.importer = { fileName: file.name, raw, map, spendIsNegative: remembered ? remembered.spendIsNegative : undefined, headers: [], rows: [], signature, remembered: !!remembered };
     rebuildImport();
     state.captureMode = 'import';
     renderCapture();
-    toast(`${state.importer.rows.length} rows read, ${state.importer.rows.filter((r) => r.selected).length} look deductible.`);
+    toast(`${state.importer.rows.length} rows read, ${state.importer.rows.filter((r) => r.selected).length} look deductible.${remembered ? ' Column layout remembered from last time.' : ''}`);
   }
   function bindImportMode() {
     const pick = $('#pickCsv'); if (pick) { pick.onclick = () => $('#csvInput').click(); return; }
@@ -720,6 +797,10 @@
       await DB.putEntries(entries);
       state.entries.push(...entries);
       for (const r of chosen) if (r.description) C.learn(state.settings.learned, r.description, r.lineId);
+      if (I.map.headerRow && I.signature) {
+        state.settings.importMappings = state.settings.importMappings || {};
+        state.settings.importMappings[I.signature] = { map: { date: I.map.date, description: I.map.description, amount: I.map.amount, debit: I.map.debit, credit: I.map.credit, memo: I.map.memo, headerRow: true }, spendIsNegative: I.spendIsNegative };
+      }
       await DB.saveSettings(state.settings);
       state.importer = null; state.captureMode = 'expense';
       toast(`Added ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} from the statement.`);
@@ -784,6 +865,8 @@
     const cap = freshCapture();
     cap.lineId = entry.lineId || null;
     cap.description = entry.description || '';
+    cap.note = entry.note || '';
+    cap.items = entry.items || null;
     cap.date = entry.date || todayInYear();
     const val = entry.amount === '' || entry.amount == null ? '' : String(entry.amount);
     if (cap.lineId && S.isMiles(cap.lineId)) cap.miles = val; else cap.amount = val;
@@ -910,6 +993,7 @@
         description: cap.description.trim(), note: noteText, hasReceipt: !isMiles && (cap.paper || (i === 0 && !!receiptId)), receiptId: i === 0 ? receiptId : null,
         createdAt: now, updatedAt: now, sample: false,
         fullAmount: share < 100 ? Math.round(value * 100) / 100 : null, share: share < 100 ? share : null,
+        items: i === 0 ? (cap.items || null) : null,
       });
     }
     if (receiptId) { await DB.putReceipt({ id: receiptId, entryId: entries[0].id, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob }); }
@@ -1008,11 +1092,13 @@
           ${chip('noack', 'Needs acknowledgment', noAck.size)}
           ${chip('dupes', 'Possible duplicates', dupeIds.size)}
           ${samples.length ? chip('samples', 'Examples', samples.length) : ''}
+          <button class="chip" type="button" id="ledgerSelectToggle" aria-pressed="${L.selectMode}">${L.selectMode ? 'Done selecting' : 'Select'}</button>
         </div>
       </div>
+      ${L.selectMode ? `<div class="card bulk-bar"><span><b>${L.selected.size}</b> selected</span><div class="btn-row">${lineSelectHTML('bulkLine', '')}<button class="btn btn-sm" type="button" id="bulkMove" ${L.selected.size ? '' : 'disabled'}>Move to line</button><button class="btn btn-sm" type="button" id="bulkPaper" ${L.selected.size ? '' : 'disabled'}>Mark paper receipt</button><button class="btn btn-sm btn-danger" type="button" id="bulkDelete" ${L.selected.size ? '' : 'disabled'}>Delete</button><button class="btn btn-sm btn-ghost" type="button" id="bulkAll">Select all shown</button></div></div>` : ''}
       <div class="ledger-summary"><span>${list.length} ${list.length === 1 ? 'entry' : 'entries'}${totalMiles ? ` · ${fmtMiles(totalMiles)}` : ''}</span><span class="num"><b>${moneyCents(totalUsd)}</b></span></div>
       <div class="card">
-        ${list.length ? groups.map((g) => `<div class="month-head"><span>${esc(monthLabel(g.key))}</span><span class="num">${moneyCents(g.usd)}</span></div><div class="ledger-list">${g.entries.map((e) => entryRow(e, { dupes: dupeIds })).join('')}</div>`).join('') : (yearEntries().length ? '<div class="empty"><h3>No entries match</h3><p>Try a different filter or search.</p></div>' : emptyStateHTML())}
+        ${list.length ? groups.map((g) => `<div class="month-head"><span>${esc(monthLabel(g.key))}</span><span class="num">${moneyCents(g.usd)}</span></div><div class="ledger-list">${g.entries.map((e) => entryRow(e, { dupes: dupeIds, select: L.selectMode, selected: L.selected })).join('')}</div>`).join('') : (yearEntries().length ? '<div class="empty"><h3>No entries match</h3><p>Try a different filter or search.</p></div>' : emptyStateHTML())}
       </div>
       <div class="btn-row">
         <button class="btn" type="button" id="csvBtn" ${yearEntries().length ? '' : 'disabled'}>Export ${R0.taxYear} as CSV</button>
@@ -1026,7 +1112,35 @@
     $('#ledgerTo').onchange = (ev) => { L.to = ev.target.value; renderLedger(); };
     const cd = $('#ledgerClearDates'); if (cd) cd.onclick = () => { L.from = ''; L.to = ''; renderLedger(); };
     $('#ledgerChips').addEventListener('click', (ev) => { const b = ev.target.closest('[data-filter]'); if (!b) return; L.filter = b.dataset.filter; renderLedger(); });
-    root.addEventListener('click', (ev) => { const b = ev.target.closest('[data-edit]'); if (b) openEdit(b.dataset.edit); });
+    $('#ledgerSelectToggle').onclick = () => { L.selectMode = !L.selectMode; L.selected.clear(); renderLedger(); };
+    root.onclick = (ev) => { const b = ev.target.closest('[data-edit]'); if (b) openEdit(b.dataset.edit); };
+    const updateBulkBar = () => { const bar = $('.bulk-bar'); if (!bar) return; bar.querySelector('b').textContent = String(L.selected.size); ['bulkMove', 'bulkPaper', 'bulkDelete'].forEach((id) => { const b = $('#' + id); if (b) b.disabled = !L.selected.size; }); };
+    root.onchange = (ev) => { const cb = ev.target.closest('[data-sel]'); if (!cb) return; if (cb.checked) L.selected.add(cb.dataset.sel); else L.selected.delete(cb.dataset.sel); updateBulkBar(); };
+    if (L.selectMode) {
+      const chosen = () => list.filter((e) => L.selected.has(e.id));
+      $('#bulkAll').onclick = () => { list.forEach((e) => L.selected.add(e.id)); renderLedger(); };
+      $('#bulkMove').onclick = async () => {
+        const lineId = $('#bulkLine').value; if (!lineId) { toast('Pick the line to move them to.'); return; }
+        const moved = [], skipped = [];
+        for (const e of chosen()) { if (S.isMiles(lineId) !== S.isMiles(e.lineId)) { skipped.push(e); continue; } e.lineId = lineId; e.updatedAt = new Date().toISOString(); moved.push(e); }
+        if (moved.length) await DB.putEntries(moved);
+        toast(`Moved ${moved.length} to ${S.getLine(lineId).label}${skipped.length ? `; ${skipped.length} skipped (miles and dollars cannot swap)` : ''}.`);
+        L.selected.clear(); render();
+      };
+      $('#bulkPaper').onclick = async () => {
+        const changed = chosen().filter((e) => !S.isMiles(e.lineId) && !e.hasReceipt);
+        for (const e of changed) { e.hasReceipt = true; e.updatedAt = new Date().toISOString(); }
+        if (changed.length) await DB.putEntries(changed);
+        toast(`Marked ${changed.length} as having a paper receipt.`);
+        L.selected.clear(); render();
+      };
+      $('#bulkDelete').onclick = async () => {
+        const items = chosen(); if (!items.length) return;
+        if (!(await confirmDialog(`Delete ${items.length} ${items.length === 1 ? 'entry' : 'entries'}?`, 'You can undo from the message that appears for a few seconds afterwards.', 'Delete', true))) return;
+        L.selected.clear(); L.selectMode = false;
+        await deleteWithUndo(items);
+      };
+    }
     $('#csvBtn').onclick = () => downloadText(`itemizer-${R0.taxYear}.csv`, DB.toCSV(yearEntries(), S), 'text/csv');
     const rs = $('#removeSamples'); if (rs) rs.onclick = removeSampleData;
     const ls = $('#loadSample'); if (ls) ls.onclick = loadSampleData;
@@ -1072,6 +1186,26 @@
     toast(`Downloading ${filename}`);
   }
 
+  /** Delete entries (and their receipt photos) with a few seconds to undo. */
+  async function deleteWithUndo(entries) {
+    const list = entries.slice();
+    const receipts = [];
+    for (const e of list) if (e.receiptId) { try { const r = await DB.getReceipt(e.receiptId); if (r) receipts.push(r); } catch (err) { /* photo unavailable */ } }
+    await DB.deleteEntries(list.map((e) => e.id));
+    const ids = new Set(list.map((e) => e.id));
+    state.entries = state.entries.filter((x) => !ids.has(x.id));
+    for (const e of list) if (e.receiptId && state.receiptURLs.has(e.receiptId)) { URL.revokeObjectURL(state.receiptURLs.get(e.receiptId)); state.receiptURLs.delete(e.receiptId); }
+    render();
+    const what = list.length === 1 ? (list[0].description || S.getLine(list[0].lineId).label) : `${list.length} entries`;
+    toast(`Deleted ${what}.`, 8000, { label: 'Undo', onClick: async () => {
+      for (const r of receipts) { try { await DB.putReceipt(r); } catch (err) { /* photo could not be restored */ } }
+      await DB.putEntries(list);
+      state.entries.push(...list);
+      render();
+      toast('Restored.');
+    } });
+  }
+
   // ---- edit sheet -----------------------------------------------------------
   async function openEdit(id) {
     const e = state.entries.find((x) => x.id === id);
@@ -1087,6 +1221,7 @@
         <label class="field span-2"><span>What / who</span><input id="eDesc" value="${esc(e.description)}"></label>
         <div class="field span-2"><span>Worksheet line</span>${lineSelectHTML('eLine', e.lineId)}<div class="line-hint" id="eHint">${lineHintHTML(e.lineId)}</div></div>
         <label class="field span-2"><span>Note</span><textarea id="eNote">${esc(e.note)}</textarea></label>
+        ${e.items && e.items.length ? `<div class="field span-2"><span>Itemized donation record</span><div class="note small" style="white-space:pre-line">${esc(VAL.recordText(e.items, String(e.description || '').split(' — ')[0], e.date))}</div></div>` : ''}
       </div>
       <div class="receipt-row" id="eReceiptRow" ${isMiles ? 'hidden' : ''}>
         ${url ? `<img class="receipt-thumb" id="eThumb" src="${url}" alt="Receipt"><button class="btn btn-sm" type="button" id="eReplace">Replace photo</button><button class="btn btn-ghost btn-sm" type="button" id="eRemovePhoto">Remove photo</button>` : `<button class="btn" type="button" id="eAttach">${ICON.camera} Attach receipt</button>`}
@@ -1109,10 +1244,7 @@
       panel.querySelector('#eDelete').onclick = async () => {
         closeModal();
         if (!(await confirmDialog('Delete this entry?', `${e.description || line.label} · ${fmtAmount(e)} on ${P.formatDate(e.date)}. This cannot be undone.`, 'Delete', true))) return;
-        await DB.deleteEntry(e.id);
-        state.entries = state.entries.filter((x) => x.id !== e.id);
-        toast('Entry deleted.');
-        render();
+        await deleteWithUndo([e]);
       };
       panel.querySelector('#eSave').onclick = async () => {
         const newLine = lineSel.value;
@@ -1183,6 +1315,8 @@
         <div class="bar-legend"><span><span class="legend-dot" style="background:var(--accent)"></span>Counts on the return</span><span><span class="legend-dot" style="background:var(--accent-soft)"></span>Entered on the worksheet</span></div>
       </section>` : ''}
 
+      ${yoyHTML()}
+
       ${R0.entries.length ? `<section class="card">
         <div class="card-head"><h2>Month by month</h2><button class="btn btn-ghost btn-sm" type="button" id="toggleMonthsTable">${state.showMonthsTable ? 'Show chart' : 'Show as table'}</button></div>
         ${state.showMonthsTable ? `<table class="table-twin"><thead><tr><th>Month</th><th class="num">Logged (dollar value)</th></tr></thead><tbody>${months.map((v, i) => `<tr><td>${MONTHS_SHORT[i]} ${R0.taxYear}</td><td class="num">${moneyCents(v)}</td></tr>`).join('')}</tbody></table>` : `
@@ -1225,6 +1359,23 @@
       const go1 = ev.target.closest('[data-go]');
       if (go1) { ev.preventDefault(); const [view, filter] = go1.dataset.go.split(':'); if (filter) state.ledger.filter = filter; go(view, filter ? { filter } : null); }
     });
+  }
+  function yoyHTML() {
+    const R0 = state.computed;
+    const prevYear = R0.taxYear - 1;
+    if (!state.entries.some((e) => R.taxYearOf(e) === prevYear)) return '';
+    const prev = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: prevYear, today: P.todayISO() }));
+    const rows = S.SECTIONS.filter((s) => R0.sections[s.id].count || prev.sections[s.id].count).map((s) => ({ title: s.title, now: R0.sections[s.id].value, before: prev.sections[s.id].value }));
+    const delta = (a, b) => { const d = Math.round((a - b) * 100) / 100; return `<span class="${d > 0 ? 'delta-up' : d < 0 ? 'delta-down' : ''}">${d > 0 ? '+' : ''}${money(d)}</span>`; };
+    return `<section class="card">
+        <div class="card-head"><h2>Compared with ${prevYear}</h2><span class="muted small">dollar value by section</span></div>
+        <div class="table-wrap"><table class="table-twin yoy"><thead><tr><th>Section</th><th class="num">${prevYear}</th><th class="num">${R0.taxYear}</th><th class="num">Change</th></tr></thead><tbody>
+          ${rows.map((r) => `<tr><td>${esc(r.title)}</td><td class="num">${money(r.before)}</td><td class="num">${money(r.now)}</td><td class="num">${delta(r.now, r.before)}</td></tr>`).join('')}
+          <tr class="total"><td><b>Schedule A after limits</b></td><td class="num">${money(prev.scheduleA.total)}</td><td class="num">${money(R0.scheduleA.total)}</td><td class="num">${delta(R0.scheduleA.total, prev.scheduleA.total)}</td></tr>
+          ${R0.scheduleC.hasActivity || prev.scheduleC.hasActivity ? `<tr class="total"><td><b>Schedule C</b></td><td class="num">${money(prev.scheduleC.total)}</td><td class="num">${money(R0.scheduleC.total)}</td><td class="num">${delta(R0.scheduleC.total, prev.scheduleC.total)}</td></tr>` : ''}
+        </tbody></table></div>
+        ${new Date().getFullYear() === R0.taxYear ? `<p class="note" style="margin-top:8px">${R0.taxYear} is still in progress, so a lower figure may only mean the year is not over yet.</p>` : ''}
+      </section>`;
   }
   function kpi(label, value, sub) { return `<div class="card kpi"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${esc(value)}</div><div class="kpi-sub">${esc(sub)}</div></div>`; }
   function insightHTML(i) {
@@ -1311,7 +1462,7 @@
     $('#view-worksheet').innerHTML = `
       <div class="sheet-tools">
         <p class="note">This is the organizer sheet, filled in from your ledger. Print it or save it as a PDF for your preparer.</p>
-        <div class="btn-row"><button class="btn" type="button" id="copySummary">Copy as text</button><button class="btn btn-primary" type="button" id="printBtn">${ICON.print} Print / Save PDF</button></div>
+        <div class="btn-row"><button class="btn" type="button" id="copySummary">Copy as text</button><button class="btn" type="button" id="receiptsToggle" aria-pressed="${state.showReceiptSheet}">${state.showReceiptSheet ? 'Hide receipts' : 'Receipts sheet'}</button>${state.showReceiptSheet ? `<button class="btn" type="button" id="printReceipts">${ICON.print} Print receipts</button>` : ''}<button class="btn btn-primary" type="button" id="printBtn">${ICON.print} Print / Save PDF</button></div>
       </div>
       <article class="sheet" id="sheet">
         <div class="sheet-bar">Keep track of your expenses</div>
@@ -1336,14 +1487,39 @@
         </div>
         ${notes.length ? `<div class="sheet-notes"><h3>Notes for the preparer</h3><ul>${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
         <p class="sheet-foot">Prepared with Itemizer from the taxpayer's own records. Totals are planning figures using ${R0.params.baseYear} IRS thresholds${R0.params.isFallback ? ` (no ${R0.taxYear} figures loaded)` : ''}; the preparer should verify eligibility and limits against source documents.</p>
-      </article>`;
+      </article>
+      ${state.showReceiptSheet ? receiptSheetHTML() : ''}`;
 
     $('#printBtn').onclick = () => window.print();
+    $('#receiptsToggle').onclick = () => { state.showReceiptSheet = !state.showReceiptSheet; renderWorksheet(); if (state.showReceiptSheet) { const el = $('#receiptSheet'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } };
+    const pr = $('#printReceipts');
+    if (pr) pr.onclick = () => { document.body.classList.add('print-receipts'); const done = () => { document.body.classList.remove('print-receipts'); window.removeEventListener('afterprint', done); }; window.addEventListener('afterprint', done); window.print(); };
+    if (state.showReceiptSheet) fillReceiptImages();
     $('#copySummary').onclick = async () => {
       const text = worksheetText();
       try { await navigator.clipboard.writeText(text); toast('Worksheet copied as text.'); }
       catch (e) { openModal(`<h2>Worksheet as text</h2><textarea class="input" style="min-height:50vh;font-family:var(--font-mono);font-size:.8rem" readonly>${esc(text)}</textarea><div class="modal-actions"><span class="spacer"></span><button class="btn" data-close="1">Close</button></div>`, (p) => { p.querySelector('[data-close]').onclick = closeModal; p.querySelector('textarea').select(); }); }
     };
+  }
+
+  /** A printable contact sheet of every receipt photo, plus the paper receipts on file. */
+  function receiptSheetHTML() {
+    const R0 = state.computed;
+    const withPhoto = yearEntries().filter((e) => e.receiptId).sort((a, b) => a.date.localeCompare(b.date));
+    const paper = yearEntries().filter((e) => e.hasReceipt && !e.receiptId && !S.isMiles(e.lineId)).sort((a, b) => a.date.localeCompare(b.date));
+    const groups = new Map();
+    for (const e of withPhoto) { const l = S.getLine(e.lineId); if (!groups.has(l.sectionTitle)) groups.set(l.sectionTitle, []); groups.get(l.sectionTitle).push(e); }
+    const prepared = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    return `<article class="sheet receipt-sheet" id="receiptSheet">
+      <div class="sheet-bar">Receipts — tax year ${R0.taxYear}</div>
+      <p class="sheet-sub">${withPhoto.length} receipt ${withPhoto.length === 1 ? 'photo' : 'photos'} attached to entries and ${paper.length} paper ${paper.length === 1 ? 'receipt' : 'receipts'} on file. Prepared ${esc(prepared)}.</p>
+      ${[...groups.entries()].map(([title, list]) => `<h3 class="receipt-group">${esc(title)}</h3><div class="receipt-grid">${list.map((e) => `<figure class="receipt-fig"><img data-receipt="${esc(e.receiptId)}" alt="Receipt for ${esc(e.description || S.getLine(e.lineId).label)}"><figcaption><b>${esc(P.formatDate(e.date))}</b> · ${esc(moneyCents(e.amount))}<br>${esc(e.description || '')}<br><span class="muted">${esc(S.getLine(e.lineId).label)}</span></figcaption></figure>`).join('')}</div>`).join('')}
+      ${paper.length ? `<h3 class="receipt-group">Paper receipts on file</h3><table class="table-twin"><thead><tr><th>Date</th><th>Payee</th><th>Line</th><th class="num">Amount</th></tr></thead><tbody>${paper.map((e) => `<tr><td>${esc(P.formatDate(e.date, false))}</td><td>${esc(e.description || '')}</td><td>${esc(S.getLine(e.lineId).label)}</td><td class="num">${esc(moneyCents(e.amount))}</td></tr>`).join('')}</tbody></table>` : ''}
+      ${!withPhoto.length && !paper.length ? '<p class="note">No receipts yet. Attach photos from Capture or the ledger, or tick "paper receipt filed" on an entry.</p>' : ''}
+    </article>`;
+  }
+  async function fillReceiptImages() {
+    for (const img of $$('#receiptSheet img[data-receipt]')) { const url = await receiptURL(img.dataset.receipt); if (url) img.src = url; }
   }
 
   function worksheetText() {

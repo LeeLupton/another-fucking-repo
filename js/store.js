@@ -35,6 +35,7 @@
     state: '',
     county: '',
     disasterNumber: '',
+    importMappings: {},
   };
 
   let dbPromise = null;

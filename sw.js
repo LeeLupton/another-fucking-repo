@@ -1,5 +1,5 @@
 /* Service worker: cache the app shell so Itemizer opens offline and installs to a home screen. */
-const CACHE = 'itemizer-v3';
+const CACHE = 'itemizer-v4';
 const SHELL = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const SHELL = [
   './js/advisor.js',
   './js/geo.js',
   './js/importer.js',
+  './js/valuation.js',
   './js/store.js',
   './js/app.js',
   './icons/icon.svg',
