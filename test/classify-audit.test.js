@@ -124,6 +124,23 @@ test('a title and a surname is a doctor visit, even when the surname is a keywor
   assert.equal(top('SHELL 1234 MAIN DR RALEIGH NC'), 'se.car', 'a street address is not a doctor');
 });
 
+test('a street name of more than one word ending in Dr is still an address, not a doctor', () => {
+  assert.ok(!C.classify('4500 north market dr parking').suggestions.some((s) => s.lineId === 'med.doctor'));
+  assert.ok(!C.classify('parking 210 west trade dr garage').suggestions.some((s) => s.lineId === 'med.doctor'));
+  assert.ok(!C.classify('123 main dr parking').suggestions.some((s) => s.lineId === 'med.doctor'));
+  // the little words that join an amount to a name never appear in a street name
+  assert.equal(top('paid 250 to dr patel'), 'med.doctor');
+});
+
+test('a correction holds down the title-and-name rule the way it holds down a keyword', () => {
+  const plain = C.classify('Dr Patel').suggestions[0];
+  assert.equal(plain.lineId, 'med.doctor');
+  assert.equal(plain.score, 1.3);
+  const held = C.classify('Dr Patel', { weights: { 'title and name': 0.2 } }).suggestions[0];
+  assert.equal(held.lineId, 'med.doctor');
+  assert.equal(Number(held.score.toFixed(3)), 0.26, 'below the 0.9 the app needs to file it on its own');
+});
+
 test('practice names on a statement reach a real medical line', () => {
   assert.equal(top('TRIANGLE PEDIATRICS'), 'med.doctor');
   assert.equal(top('DUKE CARDIOLOGY'), 'med.doctor');
@@ -230,6 +247,18 @@ test('statement dates drop out of the learned key, so the same payee matches nex
   // form numbers keep their identity, and amounts still drop out
   assert.notEqual(C.keyFor('form 1098e'), C.keyFor('form 1099k'));
   assert.equal(C.keyFor('Shell #1234 $40.12'), 'shell');
+});
+
+test('a payee taught under an older key rule still matches', () => {
+  // rows stored before statement dates were dropped from the key
+  const stale = { 'cvs pharmacy 12/25': 'se.supplies' };
+  const r = C.classify('CVS PHARMACY 7/03', { learned: stale }).suggestions[0];
+  assert.equal(r.lineId, 'se.supplies');
+  assert.equal(r.learned, true);
+  assert.equal(r.score, 8);
+  const farm = C.classify('ACH 5/12 STATE FARM', { learned: { 'ach 4/5 state farm': 'se.car' } }).suggestions[0];
+  assert.equal(farm.lineId, 'se.car');
+  assert.equal(farm.learned, true);
 });
 
 test('line hints and treatments describe what the app actually does', () => {

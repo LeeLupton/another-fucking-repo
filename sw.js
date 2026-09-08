@@ -9,7 +9,7 @@
  * served from this worker's own cache, so the page and the scripts it loads are always one generation.
  */
 const PREFIX = 'itemizer-';
-const STAMP = '88729e06c978'; // written by build.js: a hash of the files it caches
+const STAMP = '4c66105c9114'; // written by build.js: a hash of the files it caches
 const CACHE = PREFIX + STAMP;
 const SHELL = [
   './',

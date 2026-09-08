@@ -278,7 +278,7 @@
         id: `recur:${r.key}:${r.nextDate}`, kind: 'log',
         priority: r.status === 'overdue' ? 80 + Math.min(15, Math.floor(r.overdueBy / 7)) : 60,
         title: r.status === 'overdue' ? `${r.description}: nothing logged since ${fmtDate(r.lastDate, taxYear)}` : `${r.description} is due about now`,
-        body: `Logged ${r.count} times, ${r.cadenceLabel}, usually ${amountText}; expected around ${fmtDate(r.nextDate)}. If it was paid, log it. If it stopped, dismiss this.`,
+        body: `Logged ${r.count} times, ${r.cadenceLabel}, usually ${amountText}; expected around ${fmtDate(r.nextDate, taxYear)}. If it was paid, log it. If it stopped, dismiss this.`,
         because: `${r.count} ${r.cadenceLabel} entries on the ${r.label} line`,
         action: { type: 'prefill', entry: { description: r.description, lineId: r.lineId, amount: r.typicalAmount, date: r.nextDate <= today ? r.nextDate : today } },
       });
@@ -312,8 +312,8 @@
         const sameEveryTime = known && known.length && known.every((n) => Math.round(n * 10) / 10 === typical);
         recs.push({
           id: `miles:${v.id}`, kind: 'log', priority: 50,
-          title: `Add the drive to ${what} on ${fmtDate(v.date)}?`,
-          body: `${sameEveryTime ? `You logged ${fmtValue('med.miles', typical)} for this trip before.` : known && known.length ? `Your drives to ${what} are usually about ${fmtValue('med.miles', typical)}.` : `Your medical trips are usually about ${fmtValue('med.miles', typical)}.`} At ${Rules.perMile(P.mileage.medical)} each one is small, but a year of visits adds up.`,
+          title: `Add the drive to ${what} on ${fmtDate(v.date, taxYear)}?`,
+          body: `${sameEveryTime ? `You logged ${fmtValue('med.miles', typical)} for this trip before.` : known && known.length ? `Your drives to ${what} are usually about ${fmtValue('med.miles', typical)}.` : `Your medical trips are usually about ${fmtValue('med.miles', typical)}.`} At ${Rules.perMile(Rules.mileageRate(P, 'medical', v.date))} each one is small, but a year of visits adds up.`,
           because: 'a medical visit with no mileage entry within a day of it',
           action: { type: 'prefill', entry: { description: `Round trip — ${what}`, lineId: 'med.miles', amount: typical, date: v.date } },
         });
@@ -347,7 +347,7 @@
           const yTypical = median(entries.filter((z) => z.lineId === y).map((z) => Number(z.amount) || 0));
           recs.push({
             id: `pair:${e.id}:${y}`, kind: 'log', priority: 35,
-            title: `${xl.label} on ${fmtDate(e.date)} usually comes with ${yl.label}`,
+            title: `${xl.label} on ${fmtDate(e.date, taxYear)} usually comes with ${yl.label}`,
             body: `On ${dates.size} dates you logged both lines together; that day has nothing on the ${yl.label} line.`,
             because: 'a pattern in your own entries',
             action: { type: 'prefill', entry: { description: '', lineId: y, amount: yTypical || '', date: e.date } },

@@ -141,7 +141,7 @@
   }
 
   /** Keywords the classifier reports as reasons; pseudo reasons are not weights. */
-  const isKeyword = (k) => typeof k === 'string' && !/here before|section context|^miles|odometer|^title and name$/.test(k);
+  const isKeyword = (k) => typeof k === 'string' && !/here before|section context|^miles|odometer/.test(k);
 
   return { KEEP_MONTHS, WEIGHT_FLOOR, WEIGHT_CAP, ACCEPT_CAP, CARRIED_SETTINGS, monthKey, snapshot, changed, validate, calibration, summary, applyCorrection, isKeyword };
 });

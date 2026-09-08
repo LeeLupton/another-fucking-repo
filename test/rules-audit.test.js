@@ -208,6 +208,11 @@ test('a dollar value rounds half up on the decimal, so the ledger, the CSV and t
   assert.equal(Rules.cents(101 * 0.725), 73.23);
   assert.equal(Rules.cents(9.5 * 0.21), 2);
   assert.equal(Rules.cents(101.5 * 0.21), 21.32);
+  // halves go away from zero, as in money(), so a gain and a loss of the same size round alike
+  assert.equal(Rules.cents(-101 * 0.725), -73.23);
+  assert.equal(Rules.cents(1.005), 1.01);
+  assert.equal(Rules.cents(-1.005), -1.01);
+  assert.ok(!Object.is(Rules.cents(-0.004), -0), 'no signed zero reaches the views');
   const r = Rules.compute([E('2026-05-01', 'se.miles', 101)], { taxYear: 2026, filingStatus: 'single', agi: 90000 });
   assert.equal(r.sections.selfemp.value, r.scheduleC.vehicle.milesValue);
   // the figure the ledger and the worksheet print for the line is the figure the section carries
@@ -215,10 +220,29 @@ test('a dollar value rounds half up on the decimal, so the ledger, the CSV and t
 });
 
 test('a mileage dollar value rounds in cents, so the log and the worksheet agree', () => {
-  assert.equal(Rules.cents(0.5 * 0.21), 0.11);
-  assert.equal(Rules.cents(3.5 * 0.21), 0.74);
-  assert.equal(Rules.cents(7.5 * 0.21), 1.58);
+  // each of these is a half-cent on paper that the binary double puts a hair below the half
+  assert.equal(Rules.cents(3 * 0.725), 2.18);
+  assert.equal(Rules.cents(5 * 0.205), 1.03);
+  assert.equal(Rules.cents(21.5 * 0.21), 4.52);
   assert.equal(Rules.cents(0.5 * 0.21).toFixed(2), '0.11'); // the string the mileage CSV writes
+});
+
+test('a fallback year has no mid-year split, so a March drive is not valued at 2026\'s July rate', () => {
+  const march = [E('2027-03-01', 'se.miles', 1000)];
+  const s = { ...base, taxYear: 2027, agi: 50000, today: '2027-04-01' };
+  const r = Rules.compute(march, s);
+  assert.equal(r.params.baseYear, 2026);
+  assert.equal(r.scheduleC.vehicle.milesValue, 725);
+  assert.equal(Rules.perMileText(r.params, 'business'), '72.5¢/mile', 'one rate is printed, and it is the one that was used');
+  // the Settings row the fallback warning points at now reaches the entry
+  assert.equal(Rules.compute(march, { ...s, paramOverrides: { 2027: { mileage: { business: 0.80 } } } }).scheduleC.vehicle.milesValue, 800);
+  // a split entered for that year still applies, dated from its own July 1
+  const split = { 2027: { mileageJul: { business: 0.90 } } };
+  assert.equal(Rules.compute(march, { ...s, paramOverrides: split }).scheduleC.vehicle.milesValue, 725);
+  assert.equal(Rules.compute([E('2027-08-01', 'se.miles', 1000)], { ...s, paramOverrides: split }).scheduleC.vehicle.milesValue, 900);
+  // 2026 itself, the year the rates were published for, still changes on July 1
+  assert.equal(Rules.compute([E('2026-03-01', 'se.miles', 1000)], { ...base, agi: 50000 }).scheduleC.vehicle.milesValue, 725);
+  assert.equal(Rules.compute([E('2026-08-01', 'se.miles', 1000)], { ...base, agi: 50000 }).scheduleC.vehicle.milesValue, 760);
 });
 
 test('an amount that is not a finite number counts as nothing instead of poisoning the totals', () => {
@@ -251,9 +275,19 @@ test('the worksheet total counts state withholding, which no section carries', (
   const r = Rules.compute(entries, { ...base, agi: 100000, state: 'NC', stateWithholding: '3000' });
   assert.equal(r.scheduleA.taxes.withheld, 3000);
   const sections = ['medical', 'charity', 'volunteer', 'taxes', 'interest', 'other', 'casualty'];
-  const entered = Rules.cents(sections.reduce((a, id) => a + r.sections[id].value, 0) + r.scheduleA.taxes.withheld);
-  assert.equal(entered, 19001.50); // 16,001.50 of entries plus 3,000 withheld
-  assert.equal(entered, r.scheduleA.grossEntered);
+  const entered = (x) => Rules.cents(sections.reduce((a, id) => a + x.sections[id].value, 0) + x.scheduleA.taxes.withheld);
+  assert.equal(entered(r), 19001.50); // 16,001.50 of entries plus 3,000 withheld
+  assert.equal(entered(r), r.scheduleA.grossEntered);
+  // a capped long-term-care premium is still entered on the worksheet in full: the limit belongs to the medical total
+  const capped = Rules.compute(entries.concat([E('2026-02-01', 'med.ltc', 9000)]), { ...base, agi: 100000, state: 'NC', stateWithholding: '3000', ltcAgeBracket: '41-50' });
+  assert.equal(capped.sections.medical.value, 9000);
+  assert.equal(entered(capped), 28001.50);
+  assert.equal(capped.scheduleA.grossEntered, 28001.50);
+  assert.equal(capped.scheduleA.medical.entered, 9000);
+  assert.equal(capped.scheduleA.medical.gross, 930); // only the age-band limit reaches the itemized total
+  // and the floor insight names both figures rather than the one the user never logged
+  const floorNote = mustFind(capped.insights, /under the/, 'the medical floor insight');
+  assert.match(floorNote.body, /\$9,000 logged, \$930 of it after the long-term-care limit/);
 });
 
 test('the charity split the views print comes straight from the engine', () => {
@@ -351,6 +385,10 @@ test('bunching advice waits for a year you can still act on', () => {
   const bunching = mustFind(open.insights, /consider bunching/, 'the bunching advice');
   assert.equal(bunching.level, 'act');
   assert.match(bunching.body, /before Dec 31/);
+  // a year that has not started is a year you can still act on, not history
+  const ahead = Rules.compute(entries.map((e) => ({ ...e, date: e.date.replace('2025', '2027'), taxYear: 2027 })), { ...base, taxYear: 2027, agi: 80000, today: '2026-09-08' });
+  assert.equal(mustFind(ahead.insights, /consider bunching/, 'the bunching advice for a future year').level, 'act');
+  assert.ok(!titles(ahead).some((t) => /fell .* short of itemizing/.test(t)), 'nothing has happened in 2027 yet');
   const closed = Rules.compute(entries, { ...settings, today: '2026-09-02' });
   assert.ok(!titles(closed).some((t) => /consider bunching/.test(t)));
   const past = mustFind(closed.insights, /fell \$2,750 short/, 'the closed-year summary');
@@ -367,8 +405,9 @@ test('long-term-care premiums are held to the age-based limit and the bands are 
   const capped = mustFind(r.insights, /Long-term-care premiums are limited/, 'the long-term-care warning');
   assert.equal(capped.level, 'warn');
   assert.match(capped.body, /\$4,810/); assert.match(capped.body, /\$6,020/); assert.match(capped.body, /per insured person/);
-  // a joint return can hold a second policy at any age, so the top band is allowed on top
-  assert.equal(Rules.compute(e, { ...base, taxYear: 2025, agi: 20000, age65: true, filingStatus: 'mfj' }).scheduleA.medical.gross, 9000);
+  // a joint return gets a second limit only for a spouse whose own band has been given
+  assert.equal(Rules.compute(e, { ...base, taxYear: 2025, agi: 20000, age65: true, filingStatus: 'mfj' }).scheduleA.medical.gross, 6020);
+  assert.equal(Rules.compute(e, { ...base, taxYear: 2025, agi: 20000, age65: true, filingStatus: 'mfj', spouseLtcAgeBracket: '41-50' }).scheduleA.medical.gross, 6920);
   // a plausible premium is left alone, and the age band is asked for
   const small = Rules.compute([E('2025-01-01', 'med.ltc', 1200)], { ...base, taxYear: 2025, agi: 20000 });
   assert.equal(small.scheduleA.medical.gross, 1200);
@@ -394,16 +433,29 @@ test('a stated age band applies that band\'s long-term-care limit, not the highe
   assert.match(capped.body, /\$8,100/);
   assert.match(capped.body, /41 to 50/);
   assert.ok(!r.insights.some((i) => /age band for long-term-care/.test(i.title)), 'the band is set, so it is not asked for again');
-  // a joint return leaves room for a second policy on the spouse, whose age is not asked for
-  assert.equal(Rules.compute(e, { ...s, ltcAgeBracket: '41-50', filingStatus: 'mfj' }).scheduleA.medical.ltc.counted, 6920);
+  // one policy on a joint return is entitled to one limit; the spouse's own band adds the second
+  const joint = Rules.compute(e, { ...s, ltcAgeBracket: '41-50', filingStatus: 'mfj' });
+  assert.equal(joint.scheduleA.medical.ltc.counted, 900);
+  assert.equal(joint.scheduleA.medical.ltc.spousePending, true);
+  assert.equal(Rules.compute(e, { ...s, ltcAgeBracket: '41-50', filingStatus: 'mfj', spouseLtcAgeBracket: '41-50' }).scheduleA.medical.ltc.counted, 1800);
+  assert.equal(Rules.compute(e, { ...s, ltcAgeBracket: '41-50', filingStatus: 'mfj', spouseLtcAgeBracket: '71+' }).scheduleA.medical.ltc.counted, 6920);
+  // a spouse's band on a return that is not joint changes nothing
+  assert.equal(Rules.compute(e, { ...s, ltcAgeBracket: '41-50', spouseLtcAgeBracket: '71+' }).scheduleA.medical.ltc.counted, 900);
   // within the band nothing is held back, and the note names the limit that was applied
   const within = Rules.compute([E('2025-02-01', 'med.ltc', 800)], { ...s, ltcAgeBracket: '41-50' });
   assert.equal(within.scheduleA.medical.gross, 800);
   const note = mustFind(within.insights, /Long-term-care premiums have an age limit/, 'the long-term-care note');
   assert.equal(note.level, 'info');
   assert.match(note.body, /\$900/);
-  // an unknown band is ignored rather than trusted
-  assert.equal(Rules.compute(e, { ...s, ltcAgeBracket: 'nonsense' }).scheduleA.medical.ltc.counted, 4810);
+  // an unknown band trims only what is above the highest limit, which is what the insight promises
+  const unknown = Rules.compute(e, { ...s, ltcAgeBracket: 'nonsense' });
+  assert.equal(unknown.scheduleA.medical.ltc.counted, 6020);
+  assert.equal(unknown.scheduleA.medical.ltc.excess, 2980);
+  // and a premium within that highest limit is left alone rather than trimmed at the 61-to-70 band
+  const noBand = Rules.compute([E('2026-03-01', 'med.ltc', 5500)], { ...base, agi: 50000 });
+  assert.equal(noBand.scheduleA.medical.ltc.counted, 5500);
+  assert.equal(noBand.scheduleA.medical.ltc.excess, 0);
+  assert.equal(noBand.scheduleA.medical.gross, 5500);
 });
 
 test('investment interest is held to the investment income entered in settings', () => {
@@ -465,7 +517,12 @@ test('education credits are only called good news at incomes where they exist', 
   assert.equal(out.level, 'warn');
   assert.ok(!at({ agi: 150000 }).some((i) => i.level === 'good' && /education credit/i.test(i.title)));
   assert.equal(mustFind(at({ agi: 60000 }), /may qualify for an education credit/, 'the credit note').level, 'good');
-  assert.equal(mustFind(at({ agi: 170000, filingStatus: 'mfj' }), /partly phased out/, 'the partial credit note').level, 'info');
+  const joint = mustFind(at({ agi: 170000, filingStatus: 'mfj' }), /partly phased out/, 'the partial credit note');
+  assert.equal(joint.level, 'info');
+  // on a joint return the range in force is already the joint one, so it is named once
+  assert.match(joint.body, /between \$160,000 and \$180,000 of income\./);
+  assert.equal(joint.body.match(/\$160,000/g).length, 1);
+  assert.match(mustFind(at({ agi: 85000 }), /partly phased out/, 'the single partial credit note').body, /\$80,000 and \$90,000 of income \(\$160,000 to \$180,000 on a joint return\)/);
   const unchecked = mustFind(at({ agi: '' }), /may qualify for an education credit/, 'the unchecked credit note');
   assert.equal(unchecked.level, 'good');
   assert.match(unchecked.body, /\$80,000/);
@@ -504,10 +561,32 @@ test('every figure the fallback insight asks for can be entered in Settings', ()
   const r = Rules.compute([E('2027-01-05', 'tax.real_estate', 45000)], { ...base, taxYear: 2027, agi: 507000, today: '2027-09-02', paramOverrides: { 2027: { saltCap: { default: 40804 }, saltPhaseout: { start: { default: 510050 } } } } });
   assert.equal(r.scheduleA.taxes.cap, 40804);
   assert.equal(r.scheduleA.taxes.phasedOut, false);
+  // every figure in the table has a row: a date is the one thing the boxes cannot take
+  const leaves = (o, prefix) => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' && !Array.isArray(v) ? leaves(v, prefix + k + '.') : [prefix + k]));
+  const missing = leaves(Rules.PARAMS[2026], '').filter((path) => !paths.includes(path));
+  assert.deepEqual(missing, ['mileageJul.from']);
+  // the qualified-disaster window can be reopened without a new release
+  assert.ok(paths.includes('qualifiedDisasterLoss'));
+  const loss = [E('2026-05-01', 'cas.loss', 20000)];
+  const decl = { ...base, agi: 50000, casualtyFederalDisaster: true, casualtyQualifiedDisaster: true };
+  assert.equal(Rules.compute(loss, decl).scheduleA.casualty.qualified, false);
+  const reopened = Rules.compute(loss, { ...decl, paramOverrides: { 2026: { qualifiedDisasterLoss: true } } });
+  assert.equal(reopened.scheduleA.casualty.qualified, true);
+  assert.equal(reopened.scheduleA.casualty.deductible, 19500); // the $500 floor and no AGI reduction
   // the store keeps one row per parameter, so each path must survive the round trip
   const rows = DB.flattenOverrides(2027, { saltPhaseout: { start: { default: 510050 } }, studentLoanPhaseout: { single: { start: 86000 } } });
   assert.deepEqual(rows.map((x) => x.path), ['saltPhaseout.start.default', 'studentLoanPhaseout.single.start']);
   for (const row of rows) assert.ok(DB.sanitizeRow('overrides', row), row.path);
+});
+
+test('in a split year each mileage row says which half of the year it governs', () => {
+  const labels = (y) => Rules.paramFields(y).filter((f) => /^mileage/.test(f.path)).map((f) => f.label);
+  assert.deepEqual(labels(2026), [
+    'Business mileage rate to June 30 (¢/mile)', 'Medical mileage rate to June 30 (¢/mile)', 'Charitable mileage rate to June 30 (¢/mile)',
+    'Business mileage rate from July 1 (¢/mile)', 'Medical mileage rate from July 1 (¢/mile)', 'Charitable mileage rate from July 1 (¢/mile)',
+  ]);
+  // a year with one set of rates reads as it always did
+  assert.deepEqual(labels(2025), ['Business mileage rate (¢/mile)', 'Medical mileage rate (¢/mile)', 'Charitable mileage rate (¢/mile)']);
 });
 
 test('the override fields are labelled in the unit the box takes', () => {

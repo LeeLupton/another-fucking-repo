@@ -97,5 +97,5 @@ test('accepting a suggestion reinforces gently and saturates below an explicit c
   let d = { gas: 0.2 };
   for (let i = 0; i < 40; i++) d = X.applyCorrection(d, 'se.car', ['gas'], 'se.car', ['gas']);
   assert.equal(d.gas, X.ACCEPT_CAP);
-  assert.equal(X.isKeyword('title and name'), false, 'the honorific reason is not a keyword weight');
+  assert.equal(X.isKeyword('title and name'), true, 'the honorific score is corrected like any other keyword');
 });

@@ -122,6 +122,14 @@ test('a measurement is a quantity, not a dollar amount', () => {
   assert.equal(parse('$45 min session', T).amount, 45, 'a typed dollar sign still wins');
 });
 
+test('a price written before a period keeps its amount', () => {
+  assert.equal(parse('800 mo rent', T).amount, 800);
+  assert.equal(parse('1200 yr insurance', T).amount, 1200);
+  assert.equal(parse('25 wks of classes 90', T).amount, 90, 'a plausible count of periods is still a count');
+  assert.equal(parse('3 mo supply of pills', T).amount, null);
+  assert.equal(parse('6 wk program 300', T).amount, 300);
+});
+
 test('week and month relative phrases', () => {
   const a = parse('lunch 20 2 weeks ago', T);
   assert.equal(a.date, '2026-08-19'); assert.equal(a.amount, 20); assert.equal(a.description, 'Lunch');
@@ -209,4 +217,17 @@ test('formatDate keeps its wording and its empty-input guard', () => {
   assert.equal(formatDate('2026-01-01', false), 'Jan 1');
   assert.equal(formatDate(''), '');
   assert.equal(formatDate(null), '');
+});
+
+test('a rate written with a slash is one payment: the amount is read and the suffix leaves the description', () => {
+  assert.equal(parse('$800/mo rent', T).amount, 800);
+  assert.equal(parse('$800/mo rent', T).description, 'Rent');
+  assert.equal(parse('800/mo rent', T).amount, 800);
+  assert.equal(parse('$1,200/month mortgage', T).amount, 1200);
+  assert.equal(parse('$25/hr tutoring', T).description, 'Tutoring');
+  assert.equal(parse('$62.50/wk daycare', T).amount, 62.5);
+  // a date is not a rate: only period words may follow the slash
+  assert.equal(parse('12/25 gift 40', T).amount, 40);
+  assert.equal(parse('12/25 gift 40', T).date, '2025-12-25');
+  assert.equal(parse('copay 40 12/28', T).date, '2025-12-28');
 });

@@ -50,7 +50,13 @@
   // instead — except for the brands that begin with it, and for a street address ending in Dr.
   const HONORIFIC = /(^| )(dr|drs|doctor) ([a-z]{2,})/;
   const DR_BRANDS = new Set(['pepper', 'martens', 'marten', 'seuss', 'scholl', 'scholls', 'squatch', 'bronner', 'bronners', 'teals', 'horton', 'oz']);
-  const STREET_DR = /\d+ [a-z]+ dr /;
+  // A street name can be several words long ("4500 North Market Dr"), but the little words that
+  // join an amount to a name ("250 to Dr Patel") never appear in one, so they rule an address out.
+  const STREET_DR = /\d+ ((?:[a-z]+ ){1,4})dr\b/;
+  function isStreetAddress(norm) {
+    const m = STREET_DR.exec(norm);
+    return !!m && m[1].trim().split(' ').every((w) => !STOP.has(w));
+  }
 
   /** Key under which a description is remembered: lower-case, store numbers, statement dates and standalone amounts removed (tokens like 1098e stay). */
   function keyFor(description) {
@@ -89,7 +95,11 @@
         }
       }
       const title = HONORIFIC.exec(norm);
-      if (title && !DR_BRANDS.has(title[3]) && !STREET_DR.test(norm)) bump('med.doctor', 1.3, 'title and name', false, title[0].trim().length);
+      // Weighted like a keyword, so corrections can hold it down when it keeps picking the wrong line.
+      if (title && !DR_BRANDS.has(title[3]) && !isStreetAddress(norm)) {
+        const w = (opts.weights && opts.weights['title and name'] > 0) ? opts.weights['title and name'] : 1;
+        bump('med.doctor', 1.3 * w, 'title and name', false, title[0].trim().length);
+      }
       // 2. section context
       const activeSections = new Set();
       for (const c of CONTEXT) {
@@ -115,7 +125,7 @@
       if (opts.description) keys.add(keyFor(opts.description));
       for (const lk of Object.keys(learned)) {
         if (!lk || !Schema.getLine(learned[lk])) continue;
-        const lkn = lk.replace(/['’`]/g, ''); // keys learned before apostrophes were stripped still match
+        const lkn = keyFor(lk); // keys learned under an older rule (apostrophes kept, statement date left in) still match
         if (keys.has(lkn)) bump(learned[lk], 8, 'you filed this here before', true);
         // a partial match only counts for distinctive keys: a short generic word ("gas", "amazon") must not hijack every later entry
         else if ((lkn.includes(' ') || lkn.length >= 6) && norm.includes(' ' + lkn + ' ')) bump(learned[lk], 5, `"${lk}" filed here before`, true);

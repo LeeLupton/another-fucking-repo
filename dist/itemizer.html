@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- Everything the app needs comes from this origin, so an escaping slip in a description or a receipt name cannot run as script. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-dWQs/S3OkDbznFuAcaMp+Gpxm285X2lHq0a/kR7IsYY='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-BThAH42typ1buS7sLJhHsepUdb8lHjHOwtYusZyDKNI='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Itemizer</title>
 <meta name="description" content="Keep track of deductible expenses through the year, know the moment itemizing beats the standard deduction, and hand your preparer a filled-in worksheet.">
@@ -702,7 +702,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         { id: 'med.operations', label: 'Operations', keywords: ['surgery', 'surgeon', 'operation', 'surgical', 'procedure', 'anesthesia', 'anesthesiologist', 'outpatient surgery'] },
         { id: 'med.prescriptions', label: 'Prescription Drugs', keywords: ['prescription', 'prescriptions', 'rx', 'pharmacy', 'cvs', 'walgreens', 'rite aid', 'medication', 'meds', 'insulin', 'refill', 'goodrx', 'express scripts', 'optumrx', 'caremark'] },
         { id: 'med.insurance', label: 'Medical/Dental Insurance', hint: 'After-tax premiums only. Premiums taken pre-tax from a paycheck are already excluded from income and cannot be deducted again. Medicare Part B/D premiums count.', keywords: ['health insurance', 'health insurance premium', 'medical insurance', 'medical premium', 'health premium', 'dental insurance', 'dental premium', 'vision insurance', 'delta dental', 'blue cross', 'bcbs', 'aetna', 'cigna', 'unitedhealthcare', 'united healthcare', 'kaiser', 'humana', 'anthem', 'tricare', 'fehb', 'medicare part b', 'medicare part d', 'medicare premium', 'medigap', 'cobra'] },
-        { id: 'med.ltc', label: 'Long-term Care Insurance', hint: 'Deductible only up to an annual limit set by your age at the end of the year. There are five age bands, and the limit belongs to each insured person, so on a joint return each spouse\'s policy has its own. Set your age band in Settings and this worksheet applies your limit; if a second policy insures someone in another band, tell your preparer so each policy gets its own.', keywords: ['long-term care', 'long term care', 'ltc', 'ltci', 'genworth', 'fltcip'] },
+        { id: 'med.ltc', label: 'Long-term Care Insurance', hint: 'Deductible only up to an annual limit set by your age at the end of the year. There are five age bands, and the limit belongs to each insured person, so on a joint return each spouse\'s policy has its own. Set your age band in Settings, and your spouse\'s band too, and this worksheet applies each limit; if a policy insures anyone else, tell your preparer so it gets its own.', keywords: ['long-term care', 'long term care', 'ltc', 'ltci', 'genworth', 'fltcip'] },
         { id: 'med.hospital', label: 'Hospital & Emergency', keywords: ['hospital', 'emergency room', 'emergency dept', 'emergency department', 'er visit', 'er', 'inpatient', 'hospital admission', 'trauma', 'medical center', 'health system'] },
         { id: 'med.lab', label: 'Lab & X-Ray', keywords: ['lab', 'labs', 'labcorp', 'quest diagnostics', 'x-ray', 'xray', 'mri', 'ct scan', 'imaging', 'ultrasound', 'blood test', 'bloodwork', 'radiology', 'mammogram', 'biopsy', 'colonoscopy', 'ekg', 'echocardiogram'] },
         { id: 'med.nurses', label: 'Visiting Nurses/In-home Care', keywords: ['nurse', 'nursing', 'home health', 'in-home care', 'in home care', 'caregiver', 'home care', 'hospice', 'aide', 'respite care'] },
@@ -1052,6 +1052,10 @@ window.ITEMIZER_SINGLE_FILE = true;
     { path: 'studentLoanPhaseout.single.end', label: 'Student loan interest phase-out ends', kind: 'usd' },
     { path: 'studentLoanPhaseout.mfj.start', label: 'Student loan interest phase-out starts (joint)', kind: 'usd' },
     { path: 'studentLoanPhaseout.mfj.end', label: 'Student loan interest phase-out ends (joint)', kind: 'usd' },
+    { path: 'educationCreditPhaseout.single.start', label: 'Education credit phase-out starts', kind: 'usd' },
+    { path: 'educationCreditPhaseout.single.end', label: 'Education credit phase-out ends', kind: 'usd' },
+    { path: 'educationCreditPhaseout.mfj.start', label: 'Education credit phase-out starts (joint)', kind: 'usd' },
+    { path: 'educationCreditPhaseout.mfj.end', label: 'Education credit phase-out ends (joint)', kind: 'usd' },
     { path: 'educatorExpenseCap', label: 'Educator classroom-expense deduction', kind: 'usd' },
     { path: 'ltcPremiumLimits.to40', label: 'Long-term-care premium limit — age 40 or under', kind: 'usd' },
     { path: 'ltcPremiumLimits.to50', label: 'Long-term-care premium limit — age 41 to 50', kind: 'usd' },
@@ -1091,6 +1095,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     { path: 'pmiPhaseout.default.end', label: 'Mortgage insurance phase-out ends', kind: 'usd' },
     { path: 'pmiPhaseout.mfs.start', label: 'Mortgage insurance phase-out starts (married filing separately)', kind: 'usd' },
     { path: 'pmiPhaseout.mfs.end', label: 'Mortgage insurance phase-out ends (married filing separately)', kind: 'usd' },
+    // A yes/no row: the qualified-disaster window has been reopened by Congress before, and a filer
+    // with a genuinely qualified loss needs a way to say so without waiting for a new release.
+    { path: 'qualifiedDisasterLoss', label: 'Qualified disaster loss treatment is available', kind: 'bool' },
   ];
 
   // ---- helpers -------------------------------------------------------------
@@ -1108,8 +1115,13 @@ window.ITEMIZER_SINGLE_FILE = true;
   /** Margins decide the verdict, so print the cents when the whole-dollar figure would read as $0. */
   function moneyNear(n) { return Math.abs(Number(n) || 0) < 1 ? moneyCents(n) : money(n); }
   // Round the decimal figure half up, the way the IRS does, rather than the binary double:
-  // 101 miles at 72.5¢ is 73.225 on paper, and $73.23 on the return.
-  function cents(n) { const x = Number(n) || 0; return Math.round(Math.round(x * 1e6) / 1e4) / 100; }
+  // 101 miles at 72.5¢ is 73.225 on paper, and $73.23 on the return. Halves go away from zero,
+  // as in money(), so a gain and a loss of the same size round to the same figure.
+  function cents(n) {
+    const x = Number(n) || 0;
+    const r = (x < 0 ? -1 : 1) * Math.round(Math.round(Math.abs(x) * 1e6) / 1e4);
+    return r === 0 ? 0 : r / 100;
+  }
   function pct(rate) { const p = rate * 100; return (Number.isInteger(p) ? p : p.toFixed(1).replace(/\.0$/, '')) + '%'; }
   function perMile(rate) { return (rate * 100).toFixed(1).replace(/\.0$/, '') + '¢/mile'; }
   function plural(n, one, many) { return n === 1 ? one : (many || one + 's'); }
@@ -1138,14 +1150,22 @@ window.ITEMIZER_SINGLE_FILE = true;
     const y = Number(taxYear);
     let baseYear = y;
     if (!PARAMS[y]) baseYear = y < KNOWN_YEARS[0] ? KNOWN_YEARS[0] : KNOWN_YEARS[KNOWN_YEARS.length - 1];
-    const merged = deepMerge(PARAMS[baseYear], overrides && overrides[y]);
+    // A mid-year rate change belongs to the year it was published for. Carried into a fallback year it
+    // would date every drive from another year's July 1, so drop it and let the January rates stand
+    // until the user enters that year's own figures.
+    const base = baseYear === y ? PARAMS[baseYear] : Object.assign({}, PARAMS[baseYear], { mileageJul: null });
+    const merged = deepMerge(base, overrides && overrides[y]);
     return Object.assign({}, merged, { year: y, baseYear, isFallback: baseYear !== y, hasOverrides: !!(overrides && overrides[y] && Object.keys(overrides[y]).length) });
   }
 
   /** The settings rows that apply to one year: the standing list plus whatever that year actually has. */
   function paramFields(taxYear, overrides) {
     const P = getParams(taxYear, overrides);
-    return PARAM_FIELDS.concat(CONDITIONAL_PARAM_FIELDS.filter((f) => getPath(P, f.path) != null));
+    // In a year with a mid-year change the January rows sit above the July rows, so say which half each governs.
+    const standing = P.mileageJul
+      ? PARAM_FIELDS.map((f) => (f.path.startsWith('mileage.') ? Object.assign({}, f, { label: f.label.replace(' (¢/mile)', ' to June 30 (¢/mile)') }) : f))
+      : PARAM_FIELDS;
+    return standing.concat(CONDITIONAL_PARAM_FIELDS.filter((f) => getPath(P, f.path) != null));
   }
 
   /**
@@ -1155,7 +1175,8 @@ window.ITEMIZER_SINGLE_FILE = true;
    */
   function mileageRate(P, key, dateISO) {
     const late = P.mileageJul;
-    const from = late ? (late.from || `${P.baseYear || P.year}-07-01`) : null;
+    // A split entered in Settings carries no date, so it takes effect on July 1 of the year being computed.
+    const from = late ? (late.from || `${P.year}-07-01`) : null;
     if (late && dateISO && String(dateISO) >= from) return Number(late[key]) || 0;
     return (P.mileage && Number(P.mileage[key])) || 0;
   }
@@ -1241,7 +1262,10 @@ window.ITEMIZER_SINGLE_FILE = true;
       let dollars = 0, miles = 0, milesValue = 0, count = 0, missingReceipts = 0;
       for (const l of secLines) {
         count += lines[l.id].count; missingReceipts += lines[l.id].missingReceipts;
-        if (l.unit === 'miles') { if (l.treatment !== 'info') { miles += T(l.id); milesValue += valueOf(l); } }
+        // An info line is a note for the preparer, not a deduction: it carries no value here and none
+        // in the month buckets either, so the section total and its monthly bars agree.
+        if (l.treatment === 'info') continue;
+        if (l.unit === 'miles') { miles += T(l.id); milesValue += valueOf(l); }
         else dollars += T(l.id);
       }
       sections[sec.id] = { id: sec.id, title: sec.title, dollars: cents(dollars), miles, milesValue: cents(milesValue), value: cents(dollars + milesValue), count, missingReceipts, months: monthsBySection[sec.id].map(cents) };
@@ -1251,23 +1275,30 @@ window.ITEMIZER_SINGLE_FILE = true;
     const medicalLines = Schema.linesForSection('medical');
     // §213(d)(10) caps long-term-care premiums by age, and the cap belongs to each insured person. The age
     // band from Settings sets the taxpayer's own limit; with no band stated only an obviously excessive
-    // figure is trimmed, at the top band. A joint return is allowed the top band again on top, because one
-    // worksheet line cannot tell one spouse's policy from the other's and the spouse's age is not asked for.
+    // figure is trimmed, at the top band. A second limit is added for a spouse's own policy on a joint
+    // return, but only once that spouse's band is given: a couple with one policy is entitled to one limit.
     const ltcPaid = T('med.ltc');
     const ltcLimits = P.ltcPremiumLimits || null;
     const ltcBracket = LTC_BRACKET_BY_ID[s.ltcAgeBracket] || null;
-    const ltcOwnLimit = ltcLimits ? Number(ltcLimits[ltcBracket ? ltcBracket.key : (s.age65 ? 'over70' : 'to70')]) || 0 : null;
-    const ltcBound = ltcLimits ? cents(ltcOwnLimit + (s.filingStatus === 'mfj' ? Number(ltcLimits.over70) || 0 : 0)) : null;
+    const ltcSpouseBracket = s.filingStatus === 'mfj' ? (LTC_BRACKET_BY_ID[s.spouseLtcAgeBracket] || null) : null;
+    const ltcOwnLimit = ltcLimits ? Number(ltcLimits[ltcBracket ? ltcBracket.key : 'over70']) || 0 : null;
+    const ltcSpouseLimit = ltcLimits && ltcSpouseBracket ? Number(ltcLimits[ltcSpouseBracket.key]) || 0 : 0;
+    const ltcBound = ltcLimits ? cents(ltcOwnLimit + ltcSpouseLimit) : null;
     const ltcCounted = ltcBound == null ? ltcPaid : Math.min(ltcPaid, ltcBound);
-    const medGross = cents(medicalLines.reduce((a, l) => a + valueOf(l), 0) - (ltcPaid - ltcCounted));
+    // The medical figure people expect to see is what they logged; the limit shows up in `gross`.
+    const medEntered = cents(medicalLines.reduce((a, l) => a + valueOf(l), 0));
+    const medGross = cents(medEntered - (ltcPaid - ltcCounted));
     const medFloor = agi == null ? null : cents(agi * P.medicalFloorRate);
     const medical = {
+      entered: medEntered,
       gross: medGross,
       ltc: {
         paid: ltcPaid, counted: cents(ltcCounted), excess: cents(ltcPaid - ltcCounted),
         bracket: ltcBracket ? ltcBracket.id : '', bracketLabel: ltcBracket ? ltcBracket.label : null,
-        limit: ltcOwnLimit, bound: ltcBound, limits: ltcLimits,
+        spouseBracket: ltcSpouseBracket ? ltcSpouseBracket.id : '', spouseBracketLabel: ltcSpouseBracket ? ltcSpouseBracket.label : null,
+        limit: ltcOwnLimit, spouseLimit: ltcSpouseLimit, bound: ltcBound, limits: ltcLimits,
         capped: ltcCounted < ltcPaid, pending: !ltcBracket && ltcPaid > 0,
+        spousePending: s.filingStatus === 'mfj' && !ltcSpouseBracket && ltcPaid > 0,
       },
       milesValue: valueOf(Schema.getLine('med.miles')),
       floor: medFloor,
@@ -1336,7 +1367,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     const casGross = T('cas.loss');
     // A "qualified disaster loss" (declarations covered by P.L. 118-148 and P.L. 119-21) uses a $500 floor, no AGI reduction,
     // and counts on top of the standard deduction for non-itemizers. Those acts reach declarations made between
-    // January 2020 and September 2025, so a later year cannot use the treatment however the box is set.
+    // January 2020 and September 2025, so a later year cannot use the treatment unless Congress extends the
+    // window again — which is why the year's `qualifiedDisasterLoss` figure is editable in Settings.
     const qualifiedDisaster = P.qualifiedDisasterLoss !== false && !!s.casualtyFederalDisaster && !!s.casualtyQualifiedDisaster;
     const perEvent = qualifiedDisaster ? (P.casualtyQualifiedPerEvent || 500) : P.casualtyPerEvent;
     const casualty = {
@@ -1355,7 +1387,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const scheduleA = { medical, taxes, interest, charity, other, casualty };
     scheduleA.total = cents((medical.deductible || 0) + taxes.deductible + interest.deductible + charity.deductible + other.deductible + casualty.deductible);
     // What the worksheet adds up to before any floor or cap — the number people expect to see.
-    scheduleA.grossEntered = cents(medGross + taxGross + interest.total + charGross + losses + casGross);
+    scheduleA.grossEntered = cents(medEntered + taxGross + interest.total + charGross + losses + casGross);
 
     // ---- standard deduction ----
     const conditions = [];
@@ -1501,7 +1533,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     const P = R.params, A = R.scheduleA, SD = R.standardDeduction, V = R.verdict, agi = R.agi;
     const T = (id) => R.lines[id].total;
     const today = s.today ? new Date(s.today + 'T00:00:00') : new Date();
+    // Three cases, not two: a year that has not started still takes the advice for a year you can act on.
     const inYear = today.getFullYear() === R.taxYear;
+    const yearOver = today.getFullYear() > R.taxYear;
     const isMFS0 = R.filingStatus === 'mfs';
     const month = today.getMonth() + 1;
     // What the standard-deduction side of the comparison is made of, when it is more than the table figure.
@@ -1514,7 +1548,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (R.entries.length === 0) {
       add('info', `Nothing logged for ${R.taxYear} yet`, `Your standard deduction is ${money(SD.total)}. Log expenses as they happen and this page will tell you the moment itemizing starts to pay.`);
     } else if (V.itemize) {
-      add('good', `Itemizing wins by ${moneyNear(V.difference)}`, `Schedule A deductions of ${money(A.total)} beat your ${stdPlus}.${inYear ? ' Every additional dollar you log now lowers your taxable income — keep the receipts.' : ' Keep the receipts with the return.'}${V.agiPending ? ' This assumes the full state-and-local cap and no income-based limits; enter your estimated AGI in Settings to confirm.' : ''}`, V.agiPending ? { view: 'settings' } : undefined);
+      add('good', `Itemizing wins by ${moneyNear(V.difference)}`, `Schedule A deductions of ${money(A.total)} beat your ${stdPlus}.${yearOver ? ' Keep the receipts with the return.' : ' Every additional dollar you log now lowers your taxable income — keep the receipts.'}${V.agiPending ? ' This assumes the full state-and-local cap and no income-based limits; enter your estimated AGI in Settings to confirm.' : ''}`, V.agiPending ? { view: 'settings' } : undefined);
     } else {
       const need = moneyNear(-V.difference);
       let body = `Your itemized deductions come to ${money(A.total)} after floors and caps, against a ${stdPlus}. You would need ${need} more for itemizing to help.`;
@@ -1522,7 +1556,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       if (!A.taxes.withheld && !noIncomeTax0 && T('tax.state_income') + T('tax.real_estate') > 0) body += ` State and local income tax withheld from your pay (W-2 boxes 17 and 19) also counts — enter it in Settings.`;
       add('info', 'Standard deduction still wins', body, { view: 'settings' });
       const closeEnough = -V.difference <= Math.max(3000, SD.total * 0.3);
-      if (closeEnough && A.total > 0 && inYear) {
+      if (closeEnough && A.total > 0 && !yearOver) {
         add('act', 'Close to the line — consider bunching', `Paying deductible bills before Dec 31 that you would otherwise pay in January (a property-tax installment, next year's charitable pledge, an elective medical procedure) can push ${R.taxYear} over the standard deduction. Then take the standard deduction the following year. Two years of bunched deductions beat two years of just missing.`);
       } else if (closeEnough && A.total > 0) {
         // The year is over, so this is history: say what happened and where bunching still helps.
@@ -1532,9 +1566,13 @@ window.ITEMIZER_SINGLE_FILE = true;
 
     // Medical
     if (A.medical.gross > 0) {
+      // Once a long-term-care premium is trimmed, what was logged and what counts are two figures: name both.
+      const logged = A.medical.ltc.excess > 0
+        ? `${money(A.medical.entered)} logged, ${money(A.medical.gross)} of it after the long-term-care limit`
+        : `${money(A.medical.gross)} logged`;
       if (agi == null) add('act', 'Enter your estimated AGI', `Medical expenses only count above ${pct(P.medicalFloorRate)} of adjusted gross income. Without an AGI, ${money(A.medical.gross)} of medical costs cannot be evaluated and is left out of the itemized total.`, { view: 'settings' });
-      else if (A.medical.deductible === 0) add('info', `Medical costs are under the ${pct(P.medicalFloorRate)} floor`, `${money(A.medical.gross)} logged; the first ${money(A.medical.floor)} (${pct(P.medicalFloorRate)} of ${money(agi)}) never counts. ${A.medical.shortfall === 0 ? 'You are exactly on the floor, so the next dollar of medical spending starts to count' : `Another ${moneyNear(A.medical.shortfall)} of medical spending would start to count`} — dental work, glasses, and after-tax premiums add up faster than people expect.`);
-      else add('good', `${money(A.medical.deductible)} of medical costs count`, `${money(A.medical.gross)} logged, less the ${money(A.medical.floor)} floor (${pct(P.medicalFloorRate)} of AGI).`);
+      else if (A.medical.deductible === 0) add('info', `Medical costs are under the ${pct(P.medicalFloorRate)} floor`, `${logged}; the first ${money(A.medical.floor)} (${pct(P.medicalFloorRate)} of ${money(agi)}) never counts. ${A.medical.shortfall === 0 ? 'You are exactly on the floor, so the next dollar of medical spending starts to count' : `Another ${moneyNear(A.medical.shortfall)} of medical spending would start to count`} — dental work, glasses, and after-tax premiums add up faster than people expect.`);
+      else add('good', `${money(A.medical.deductible)} of medical costs count`, `${logged}, less the ${money(A.medical.floor)} floor (${pct(P.medicalFloorRate)} of AGI).`);
     }
     if (A.medical.gross > 0 && T('med.insurance') === 0) add('info', 'Check for after-tax insurance premiums', 'Medicare Part B/D, marketplace premiums you paid yourself, and dental or vision plans paid after tax all count on the Medical/Dental Insurance line. Premiums withheld pre-tax from a paycheck do not.');
     if (T('med.miles') > 0) add('info', `Medical miles are worth ${money(A.medical.milesValue)}`, `${T('med.miles').toLocaleString()} miles at ${perMileText(P, 'medical')}. Parking and tolls on those trips go under Other Medical Transportation.`);
@@ -1542,20 +1580,23 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (LTC && LTC.paid > 0 && LTC.limits) {
       const bands = `${money(LTC.limits.to40)} at age 40 or under, ${money(LTC.limits.to50)} at 41 to 50, ${money(LTC.limits.to60)} at 51 to 60, ${money(LTC.limits.to70)} at 61 to 70, and ${money(LTC.limits.over70)} over 70`;
       const perPerson = `The limit for ${R.taxYear} is ${bands} — per insured person, so a couple who each hold a policy get two limits.`;
+      // A spouse's own policy adds a second limit, and only their band can size it.
+      const spouseAdd = LTC.spouseBracketLabel ? `, plus the limit at age ${LTC.spouseBracketLabel} for your spouse's own policy` : '';
+      const askSpouse = LTC.spousePending ? ' If a second policy insures your spouse, set their age band in Settings as well and it gets its own limit.' : '';
       if (LTC.capped) {
         const held = LTC.bracket
-          ? `${money(LTC.counted)} is counted, which is the ${R.taxYear} limit at age ${LTC.bracketLabel}${R.filingStatus === 'mfj' ? ', plus room for a second policy on your spouse' : ''}`
-          : `${money(LTC.counted)} is counted, which is the most any one insured person of your age can claim in ${R.taxYear}`;
-        add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${held}, so ${money(LTC.excess)} is left out of the medical total. ${perPerson}${LTC.bracket ? '' : ' Tell your preparer the age of each insured person.'}`);
+          ? `${money(LTC.counted)} is counted, which is the ${R.taxYear} limit at age ${LTC.bracketLabel}${spouseAdd}`
+          : `${money(LTC.counted)} is counted, which is the most any one insured person can claim in ${R.taxYear}${spouseAdd}`;
+        add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${held}, so ${money(LTC.excess)} is left out of the medical total. ${perPerson}${LTC.bracket ? '' : ' Tell your preparer the age of each insured person.'}${askSpouse}`, LTC.spousePending ? { view: 'settings' } : undefined);
       }
-      if (LTC.pending) add('act', 'Tell Settings your age band for long-term-care premiums', `The limit on a long-term-care premium is set by your age at the end of the year, and without your age band the worksheet can only hold back what is above the highest limit${LTC.capped ? '' : ', which leaves the whole premium counted'}. ${perPerson} Choose your band under Age & vision in Settings and the right limit is applied.`, { view: 'settings' });
-      else if (!LTC.capped) add('info', 'Long-term-care premiums have an age limit', `All ${money(LTC.paid)} counts: the ${R.taxYear} limit at age ${LTC.bracketLabel} is ${money(LTC.limit)}. The limit is per insured person, so a second policy insuring someone in another band has its own limit — tell your preparer if there is one.`);
+      if (LTC.pending) add('act', 'Tell Settings your age band for long-term-care premiums', `The limit on a long-term-care premium is set by your age at the end of the year, and without your age band the worksheet can only hold back what is above the highest limit${LTC.capped ? '' : ', which leaves the whole premium counted'}. ${perPerson} Choose your band under Age & vision in Settings and the right limit is applied.${askSpouse}`, { view: 'settings' });
+      else if (!LTC.capped) add('info', 'Long-term-care premiums have an age limit', `All ${money(LTC.paid)} counts: the ${R.taxYear} limit at age ${LTC.bracketLabel} is ${money(LTC.limit)}${spouseAdd}. The limit is per insured person, so a second policy insuring someone in another band has its own limit — tell your preparer if there is one.${askSpouse}`);
     }
     if (R.scheduleC.hasActivity && T('med.insurance') > 0) add('act', 'Self-employed? Move health premiums above the line', `With self-employment profit, health, dental, and long-term-care premiums (${money(T('med.insurance') + (LTC ? LTC.counted : T('med.ltc')))}) can be deducted on Schedule 1 with no ${pct(P.medicalFloorRate)} floor — usually far better than Schedule A. The same age limit applies to the long-term-care part. Tell your preparer which it is.`);
 
     // Taxes
     if (A.taxes.withheld > 0) add('info', `${money(A.taxes.withheld)} of state tax withholding is counted`, 'Income tax withheld from your pay (W-2 boxes 17 and 19) counts toward the state-and-local deduction alongside the payments you log here.');
-    if (A.taxes.excess > 0) add('warn', 'State and local taxes hit the cap', `${money(A.taxes.gross)} ${A.taxes.withheld > 0 ? 'logged and withheld' : 'logged'} but only ${money(A.taxes.cap)} can be deducted${A.taxes.phasedOut ? ' (the cap is reduced at your income level)' : ''}. ${money(A.taxes.excess)} will not count${inYear ? ' — there is no reason to prepay more this year' : ''}.`);
+    if (A.taxes.excess > 0) add('warn', 'State and local taxes hit the cap', `${money(A.taxes.gross)} ${A.taxes.withheld > 0 ? 'logged and withheld' : 'logged'} but only ${money(A.taxes.cap)} can be deducted${A.taxes.phasedOut ? ' (the cap is reduced at your income level)' : ''}. ${money(A.taxes.excess)} will not count${yearOver ? '' : ` — there is no reason to prepay more for ${R.taxYear}`}.`);
     if (T('tax.personal_property') > 0) add('info', 'Only the value-based part of vehicle fees counts', 'Personal property tax must be based on the item\'s value (ad valorem). Flat registration or plate fees are not deductible — check the registration notice for the breakdown.');
     if (T('int.mortgage') > 0 && T('tax.real_estate') === 0) add('act', 'Mortgage interest logged but no property tax', 'If your lender pays property tax from escrow, the amount disbursed is on Form 1098 box 10 or your annual escrow statement — it belongs on the Real Estate Tax line.', { view: 'capture' });
     const noIncomeTax = NO_INCOME_TAX_STATES.has(R.state || '');
@@ -1618,7 +1659,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (R.credits.tuition > 0 && R.filingStatus === 'mfs') add('warn', 'Education credits are not allowed when married filing separately', `The American Opportunity and Lifetime Learning credits require a joint return for married couples, so ${money(R.credits.tuition)} of tuition earns no credit on a separate return. Filing jointly may be worth more than the separate returns — ask your preparer.`);
     else if (R.credits.tuition > 0) {
       const range = R.credits.educationCreditRange;
-      const band = range ? `${money(range.start)} and ${money(range.end)} of income (${money(P.educationCreditPhaseout.mfj.start)} to ${money(P.educationCreditPhaseout.mfj.end)} on a joint return)` : '';
+      // On a joint return `range` is already the joint one, so the aside would repeat the same two figures.
+      const band = range ? `${money(range.start)} and ${money(range.end)} of income${R.filingStatus === 'mfj' ? '' : ` (${money(P.educationCreditPhaseout.mfj.start)} to ${money(P.educationCreditPhaseout.mfj.end)} on a joint return)`}` : '';
       if (R.credits.educationCreditPhase === 'out') add('warn', 'Income is above the education-credit phase-out', `At ${money(agi)} of AGI both the American Opportunity and Lifetime Learning credits are fully phased out, so ${money(R.credits.tuition)} of tuition earns no credit on your return. It can still matter: a tax-free 529 withdrawal, employer tuition assistance, a state credit, or the student's own return if they are no longer your dependent. Ask your preparer.`);
       else if (R.credits.educationCreditPhase === 'partial') add('info', 'Education credits are partly phased out', `At ${money(agi)} of AGI the American Opportunity and Lifetime Learning credits are reduced; they phase out between ${band}. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged) so your preparer can work out what is left.`);
       else add('good', 'Tuition may qualify for an education credit', `The American Opportunity Credit (up to $2,500 per student, first four years) or Lifetime Learning Credit (up to $2,000) is usually worth far more than a deduction. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged).${R.credits.educationCreditPhase === 'unchecked' && range ? ` The credits phase out between ${band} — enter your estimated AGI in Settings to check.` : ''}`, R.credits.educationCreditPhase === 'unchecked' ? { view: 'settings' } : undefined);
@@ -1685,6 +1727,10 @@ window.ITEMIZER_SINGLE_FILE = true;
   // A bare integer followed by one of these is a quantity, not a dollar amount.
   // Units of time, distance and weight belong here too: "45 min" and "18 km" are measurements, not money.
   const COUNT_NOUNS = new Set(['bag', 'bags', 'box', 'boxes', 'item', 'items', 'piece', 'pieces', 'session', 'sessions', 'visit', 'visits', 'trip', 'trips', 'night', 'nights', 'day', 'days', 'week', 'weeks', 'month', 'months', 'hour', 'hours', 'people', 'kids', 'ticket', 'tickets', 'pair', 'pairs', 'unit', 'units', 'dose', 'doses', 'pill', 'pills', 'round', 'rounds', 'times', 'x', 'shirts', 'coats', 'shoes', 'books', 'chairs', 'tables', 'toys', 'gallons', 'gal', 'lbs', 'pounds', 'oz', 'pct', 'percent', '%', 'copies', 'pages', 'stamps', 'rolls', 'cans', 'bottles', 'cases', 'packs', 'meals', 'lunches', 'dinners', 'appointments', 'appts', 'prescriptions', 'refills', 'loads', 'cartons', 'min', 'mins', 'minute', 'minutes', 'hr', 'hrs', 'sec', 'secs', 'km', 'kms', 'lb', 'kg', 'yr', 'yrs', 'year', 'years', 'mo', 'mos', 'wk', 'wks', 'pants', 'socks']);
+  // Period words are the one ambiguous case: "3 mo supply" counts months, but "800 mo rent" is a
+  // price per month. Nobody counts a hundred months or years, so a bigger number is read as money.
+  const PERIOD_NOUNS = new Set(['mo', 'mos', 'wk', 'wks', 'yr', 'yrs', 'year', 'years']);
+  const COUNT_MAX = 100;
   // Number words accepted in "two days ago" and the like.
   const WORD_N = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 
@@ -1830,11 +1876,14 @@ window.ITEMIZER_SINGLE_FILE = true;
 
     // ---- amount ------------------------------------------------------------
     // A period followed by a space or the end is punctuation ("Lunch 20."), so the lookaheads allow it.
+    // A rate written with a slash ("$800/mo rent") is one payment said another way: the suffix is taken
+    // with the amount so the description reads "Rent". Only period words follow, so a date cannot match.
+    const PER = '\\/(?:mo|month|wk|week|yr|year|day|hr|hour)s?\\b';
     const amountPatterns = [
-      /(^|\s)-?\$\s?(\d[\d,]*(?:\.\d{1,2})?|\.\d{1,2})(?!\.?\d)(?=[\s,.;)]|$)/, // $42.13 / $1,200 / $.50 — never truncates $42.135 or $1.2k
-      /(^|\s)(\d[\d,]*\.\d{1,2})(?=[\s,;)]|\.(?:\s|$)|$)/, // 42.13 / 12.5
+      new RegExp('(^|\\s)-?\\$\\s?(\\d[\\d,]*(?:\\.\\d{1,2})?|\\.\\d{1,2})(?!\\.?\\d)(?:' + PER + ')?(?=[\\s,.;)]|$)'), // $42.13 / $1,200 / $.50 — never truncates $42.135 or $1.2k
+      new RegExp('(^|\\s)(\\d[\\d,]*\\.\\d{1,2})(?:' + PER + ')?(?=[\\s,;)]|\\.(?:\\s|$)|$)'), // 42.13 / 12.5
       /(^|\s)(\d[\d,]*(?:\.\d+)?)\s*(?:dollars|bucks|usd)\b/i, // 40 dollars
-      /(^|\s)(\d[\d,]*)(?=[\s,;)]|\.(?:\s|$)|$)(?!\s*(?:st|nd|rd|th)\b)/g, // bare 40 (skipped when it is clearly a count: "4 bags")
+      new RegExp('(^|\\s)(\\d[\\d,]*)(?:' + PER + ')?(?=[\\s,;)]|\\.(?:\\s|$)|$)(?!\\s*(?:st|nd|rd|th)\\b)', 'g'), // bare 40 (skipped when it is clearly a count: "4 bags")
     ];
     const isBareYear = (str) => /^(19|20)\d{2}$/.test(str);
     // "Dec 2025 property tax": a year that names a bill period is never the amount. Only the word
@@ -1849,7 +1898,8 @@ window.ITEMIZER_SINGLE_FILE = true;
         // Only the next word matters, so the remainder is not re-scanned for every candidate.
         const end = m.index + m[0].length;
         const after = (/^\s*(\S+)/.exec(s.slice(end, end + 64)) || [])[1] || '';
-        if (re.global && COUNT_NOUNS.has(after.toLowerCase().replace(/[.,;]+$/, ''))) continue;
+        const unit = after.toLowerCase().replace(/[.,;]+$/, '');
+        if (re.global && COUNT_NOUNS.has(unit) && !(PERIOD_NOUNS.has(unit) && toNumber(m[2]) >= COUNT_MAX)) continue;
         if (re.global && isBareYear(m[2]) && yearCtx.test(prevWord(m))) continue;
         candidates.push(m);
         if (!re.global) break;
@@ -1960,7 +2010,13 @@ window.ITEMIZER_SINGLE_FILE = true;
   // instead — except for the brands that begin with it, and for a street address ending in Dr.
   const HONORIFIC = /(^| )(dr|drs|doctor) ([a-z]{2,})/;
   const DR_BRANDS = new Set(['pepper', 'martens', 'marten', 'seuss', 'scholl', 'scholls', 'squatch', 'bronner', 'bronners', 'teals', 'horton', 'oz']);
-  const STREET_DR = /\d+ [a-z]+ dr /;
+  // A street name can be several words long ("4500 North Market Dr"), but the little words that
+  // join an amount to a name ("250 to Dr Patel") never appear in one, so they rule an address out.
+  const STREET_DR = /\d+ ((?:[a-z]+ ){1,4})dr\b/;
+  function isStreetAddress(norm) {
+    const m = STREET_DR.exec(norm);
+    return !!m && m[1].trim().split(' ').every((w) => !STOP.has(w));
+  }
 
   /** Key under which a description is remembered: lower-case, store numbers, statement dates and standalone amounts removed (tokens like 1098e stay). */
   function keyFor(description) {
@@ -1999,7 +2055,11 @@ window.ITEMIZER_SINGLE_FILE = true;
         }
       }
       const title = HONORIFIC.exec(norm);
-      if (title && !DR_BRANDS.has(title[3]) && !STREET_DR.test(norm)) bump('med.doctor', 1.3, 'title and name', false, title[0].trim().length);
+      // Weighted like a keyword, so corrections can hold it down when it keeps picking the wrong line.
+      if (title && !DR_BRANDS.has(title[3]) && !isStreetAddress(norm)) {
+        const w = (opts.weights && opts.weights['title and name'] > 0) ? opts.weights['title and name'] : 1;
+        bump('med.doctor', 1.3 * w, 'title and name', false, title[0].trim().length);
+      }
       // 2. section context
       const activeSections = new Set();
       for (const c of CONTEXT) {
@@ -2025,7 +2085,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       if (opts.description) keys.add(keyFor(opts.description));
       for (const lk of Object.keys(learned)) {
         if (!lk || !Schema.getLine(learned[lk])) continue;
-        const lkn = lk.replace(/['’`]/g, ''); // keys learned before apostrophes were stripped still match
+        const lkn = keyFor(lk); // keys learned under an older rule (apostrophes kept, statement date left in) still match
         if (keys.has(lkn)) bump(learned[lk], 8, 'you filed this here before', true);
         // a partial match only counts for distinctive keys: a short generic word ("gas", "amazon") must not hijack every later entry
         else if ((lkn.includes(' ') || lkn.length >= 6) && norm.includes(' ' + lkn + ' ')) bump(learned[lk], 5, `"${lk}" filed here before`, true);
@@ -2363,7 +2423,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         id: `recur:${r.key}:${r.nextDate}`, kind: 'log',
         priority: r.status === 'overdue' ? 80 + Math.min(15, Math.floor(r.overdueBy / 7)) : 60,
         title: r.status === 'overdue' ? `${r.description}: nothing logged since ${fmtDate(r.lastDate, taxYear)}` : `${r.description} is due about now`,
-        body: `Logged ${r.count} times, ${r.cadenceLabel}, usually ${amountText}; expected around ${fmtDate(r.nextDate)}. If it was paid, log it. If it stopped, dismiss this.`,
+        body: `Logged ${r.count} times, ${r.cadenceLabel}, usually ${amountText}; expected around ${fmtDate(r.nextDate, taxYear)}. If it was paid, log it. If it stopped, dismiss this.`,
         because: `${r.count} ${r.cadenceLabel} entries on the ${r.label} line`,
         action: { type: 'prefill', entry: { description: r.description, lineId: r.lineId, amount: r.typicalAmount, date: r.nextDate <= today ? r.nextDate : today } },
       });
@@ -2397,8 +2457,8 @@ window.ITEMIZER_SINGLE_FILE = true;
         const sameEveryTime = known && known.length && known.every((n) => Math.round(n * 10) / 10 === typical);
         recs.push({
           id: `miles:${v.id}`, kind: 'log', priority: 50,
-          title: `Add the drive to ${what} on ${fmtDate(v.date)}?`,
-          body: `${sameEveryTime ? `You logged ${fmtValue('med.miles', typical)} for this trip before.` : known && known.length ? `Your drives to ${what} are usually about ${fmtValue('med.miles', typical)}.` : `Your medical trips are usually about ${fmtValue('med.miles', typical)}.`} At ${Rules.perMile(P.mileage.medical)} each one is small, but a year of visits adds up.`,
+          title: `Add the drive to ${what} on ${fmtDate(v.date, taxYear)}?`,
+          body: `${sameEveryTime ? `You logged ${fmtValue('med.miles', typical)} for this trip before.` : known && known.length ? `Your drives to ${what} are usually about ${fmtValue('med.miles', typical)}.` : `Your medical trips are usually about ${fmtValue('med.miles', typical)}.`} At ${Rules.perMile(Rules.mileageRate(P, 'medical', v.date))} each one is small, but a year of visits adds up.`,
           because: 'a medical visit with no mileage entry within a day of it',
           action: { type: 'prefill', entry: { description: `Round trip — ${what}`, lineId: 'med.miles', amount: typical, date: v.date } },
         });
@@ -2432,7 +2492,7 @@ window.ITEMIZER_SINGLE_FILE = true;
           const yTypical = median(entries.filter((z) => z.lineId === y).map((z) => Number(z.amount) || 0));
           recs.push({
             id: `pair:${e.id}:${y}`, kind: 'log', priority: 35,
-            title: `${xl.label} on ${fmtDate(e.date)} usually comes with ${yl.label}`,
+            title: `${xl.label} on ${fmtDate(e.date, taxYear)} usually comes with ${yl.label}`,
             body: `On ${dates.size} dates you logged both lines together; that day has nothing on the ${yl.label} line.`,
             because: 'a pattern in your own entries',
             action: { type: 'prefill', entry: { description: '', lineId: y, amount: yTypical || '', date: e.date } },
@@ -3601,7 +3661,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   }
 
   /** Keywords the classifier reports as reasons; pseudo reasons are not weights. */
-  const isKeyword = (k) => typeof k === 'string' && !/here before|section context|^miles|odometer|^title and name$/.test(k);
+  const isKeyword = (k) => typeof k === 'string' && !/here before|section context|^miles|odometer/.test(k);
 
   return { KEEP_MONTHS, WEIGHT_FLOOR, WEIGHT_CAP, ACCEPT_CAP, CARRIED_SETTINGS, monthKey, snapshot, changed, validate, calibration, summary, applyCorrection, isKeyword };
 });
@@ -4339,7 +4399,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     return {
       id: t.id, date: t.date, taxYear: yearOf(t.taxYear) != null ? yearOf(t.taxYear) : Number(t.date.slice(0, 4)),
       fromId: ref(t.fromId), toId: ref(t.toId), fromLabel: str(t.fromLabel, 120), toLabel: str(t.toLabel, 120),
-      purpose: str(t.purpose, 300), miles: Math.round(miles * 10) / 10, roundTrip: !!t.roundTrip,
+      // miles keep the grain the ledger entry for the same drive keeps: rounding to a tenth here would quietly change a tax record on the way in
+      purpose: str(t.purpose, 300), miles: Math.round(miles * 100) / 100, roundTrip: !!t.roundTrip,
       method: TRIP_METHODS.includes(t.method) ? t.method : 'manual', lineId: lineId || null, entryId: ref(t.entryId), sample: !!t.sample,
       points: sanitizePoints(t.points), startedAt: time(t.startedAt), endedAt: time(t.endedAt), createdAt: str(t.createdAt, 40) || nowISO(),
     };
@@ -4542,11 +4603,21 @@ window.ITEMIZER_SINGLE_FILE = true;
     el.addEventListener(type, fn);
   }
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const money = R.money, moneyCents = R.moneyCents;
+  const money = R.money, moneyCents = R.moneyCents, moneyNear = R.moneyNear; // moneyNear keeps the cents on a margin under a dollar, which is exactly where the verdict is decided
   const fmtMiles = (n) => `${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })} mi`;
   const fmtAmount = (entry) => (S.isMiles(entry.lineId) ? fmtMiles(entry.amount) : moneyCents(entry.amount));
-  /** From 2026 a non-itemizer's cash gifts sit on the standard-deduction side (§170(p)), so the figure is no longer only the standard deduction. */
-  const stdGiftClause = (SD) => (SD && SD.charity > 0 ? `, including ${moneyCents(SD.charity)} of cash gifts` : '');
+  /**
+   * What sits on the standard-deduction side of the comparison besides the standard deduction itself: a qualified
+   * disaster loss, and from 2026 a non-itemizer's cash gifts (§170(p)). Either can dwarf the plain figure, so the
+   * worksheet names them rather than printing a total the preparer cannot account for.
+   */
+  function stdAddedClause(SD) {
+    if (!SD) return '';
+    const parts = [];
+    if (SD.disasterLoss > 0) parts.push(`${moneyCents(SD.disasterLoss)} of qualified disaster loss`);
+    if (SD.charity > 0) parts.push(`${moneyCents(SD.charity)} of cash gifts`);
+    return parts.length ? `, including ${parts.join(' and ')}` : '';
+  }
   /** A count and its noun, so nothing on screen reads "1 entries". Same shape as the helper in rules.js. */
   const plural = (n, one, many) => (Number(n) === 1 ? one : many || one + 's');
   /** styles.css turns off transitions for "reduce motion"; a scroll asked for in script has to check the setting itself. */
@@ -4641,10 +4712,10 @@ window.ITEMIZER_SINGLE_FILE = true;
     try { Object.assign(state.settings, await DB.updateSettings({ taxYear: now })); } catch (e) { /* the year still moves for this session */ }
     toast(`Tax year is now ${state.settings.taxYear}. Pick ${was} from the year menu to keep working on it.`, 12000, { label: `Back to ${was}`, onClick: () => setTaxYear(was) });
   }
-  /** Switch the year the app is working on. A choice made here survives the New Year roll-over. */
+  /** Switch the year the app is working on. A choice made here survives the New Year roll-over. True when the year really moved: the user can turn the switch down, and the write can fail. */
   async function setTaxYear(year) {
     // switching years throws away the capture form and any live recording, neither of which is stored anywhere else
-    if (!(await confirmDiscardWork(`Tax year ${Number(year)} will be shown instead.`))) { const sel = $('#yearSelect'); if (sel) sel.value = String(state.settings.taxYear); return; }
+    if (!(await confirmDiscardWork(`Tax year ${Number(year)} will be shown instead.`))) { const sel = $('#yearSelect'); if (sel) sel.value = String(state.settings.taxYear); return false; }
     const prev = { taxYear: state.settings.taxYear, taxYearPickedAt: state.settings.taxYearPickedAt };
     // the two keys this changes, not the whole row: another tab may have saved an AGI or a filing status since this one loaded
     try { Object.assign(state.settings, await DB.updateSettings({ taxYear: Number(year), taxYearPickedAt: P.todayISO() })); }
@@ -4653,13 +4724,14 @@ window.ITEMIZER_SINGLE_FILE = true;
       Object.assign(state.settings, prev);
       const sel = $('#yearSelect'); if (sel) sel.value = String(prev.taxYear);
       toast(`Could not switch the year: ${e && e.message ? e.message : 'storage error'}.`, 6000);
-      return;
+      return false;
     }
     discardCapture();
     discardRecorder();
     state.trip = null;
     clearLedgerSelection(); // ticks on last year's rows would count towards actions that cannot reach them
     render();
+    return true;
   }
 
   /** Forget the ledger selection: used wherever the list under it is replaced wholesale. */
@@ -4974,6 +5046,8 @@ window.ITEMIZER_SINGLE_FILE = true;
   }
 
   // ---- shared bits ----------------------------------------------------------
+  /** The worksheet line a row sits on. A row whose line a later schema no longer has stays listed, searchable and editable, rather than taking the view down with it. */
+  const lineOf = (e) => S.getLine(e.lineId) || { label: e.lineId, sectionId: '', sectionTitle: 'Unrecognised line', unit: 'usd', treatment: 'info' };
   function receiptIcon(entry) {
     const line = S.getLine(entry.lineId);
     if (!line || line.unit === 'miles') return '<span class="row-receipt rc-none"></span>';
@@ -4984,8 +5058,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     return '<span class="row-receipt rc-none"></span>';
   }
   function entryRow(e, opts) {
-    // a row whose line a later schema no longer has is still listed and editable, rather than taking the view down with it
-    const line = S.getLine(e.lineId) || { label: e.lineId, sectionId: '', sectionTitle: 'Unrecognised line', unit: 'usd', treatment: 'info' };
+    const line = lineOf(e);
     const dupe = opts && opts.dupes && opts.dupes.has(e.id);
     if (opts && opts.select) {
       return `<label class="row row-select">
@@ -5251,7 +5324,13 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (!sq) return;
     const calc = () => { const n = homeOfficeSqft(state.calc.sqft); const amt = n * 5; out.textContent = money(amt); btn.disabled = !(amt > 0); return { n, amt }; };
     sq.addEventListener('input', () => { state.calc.sqft = sq.value; calc(); });
-    btn.onclick = () => { const { n, amt } = calc(); if (!amt) return; state.calc.sqft = ''; prefillCapture({ lineId: 'se.other', amount: amt, description: `Home office, simplified method: ${n} sq ft × $5`, date: todayInYear() }); };
+    btn.onclick = async () => {
+      const { n, amt } = calc(); if (!amt) return;
+      const sqft = state.calc.sqft;
+      state.calc.sqft = '';
+      // the square feet stay in the calculator if the prefill was turned down
+      if (!(await prefillCapture({ lineId: 'se.other', amount: amt, description: `Home office, simplified method: ${n} sq ft × $5`, date: todayInYear() }))) { state.calc.sqft = sqft; renderCapture(); }
+    };
     bindDonationTool();
   }
   function bindDonationTool() {
@@ -5282,11 +5361,13 @@ window.ITEMIZER_SINGLE_FILE = true;
       const next = $('#dnItem'); if (next) next.focus();
     };
     $$('[data-dn-remove]').forEach((b) => { b.onclick = () => { D.items.splice(Number(b.dataset.dnRemove), 1); renderCapture(); }; });
-    $('#dnLog').onclick = () => {
+    $('#dnLog').onclick = async () => {
       if (!D.items.length) return;
       const items = D.items.slice(), charity = D.charity.trim(), date = D.date || todayInYear();
+      const donation = state.donation;
       state.donation = null;
-      prefillCapture({ lineId: 'ch.noncash', amount: VAL.total(items), description: `${charity || 'Donated goods'} — ${VAL.summarize(items)}`, date, note: VAL.recordText(items, charity, date), items });
+      // the list of donated items stays put if the prefill was turned down
+      if (!(await prefillCapture({ lineId: 'ch.noncash', amount: VAL.total(items), description: `${charity || 'Donated goods'} — ${VAL.summarize(items)}`, date, note: VAL.recordText(items, charity, date), items }))) { state.donation = donation; renderCapture(); }
     };
   }
 
@@ -5371,6 +5452,19 @@ window.ITEMIZER_SINGLE_FILE = true;
       </section>`;
   }
 
+  /**
+   * Miles typed over the ones that were measured or recorded are the user's own figure, so the log must not
+   * still call them a road or GPS distance. The recorded track and its times stay on the trip: they are the
+   * evidence of the drive, and dropping them on a keystroke would lose the drive itself. True when the trip
+   * has just stopped being a measured one.
+   */
+  function retypeMiles(T) {
+    const produced = T.method === 'gps' ? T.recordedMiles : (T.oneWay ? (T.roundTrip ? G.roundMiles(T.oneWay * 2) : T.oneWay) : null);
+    if (produced != null && Number(T.miles) === Number(produced)) return false;
+    if (T.method === 'gps') T.recordedMiles = null;
+    T.method = 'manual'; T.oneWay = null; T.result = '';
+    return true;
+  }
   function bindTripMode() {
     const T = state.trip;
     const root = $('#view-capture');
@@ -5389,13 +5483,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     $('#tripRound').onchange = (ev) => { T.roundTrip = ev.target.checked; if (T.oneWay) { T.miles = String(T.roundTrip ? G.roundMiles(T.oneWay * 2) : T.oneWay); $('#tripMiles').value = T.miles; } };
     $('#tripMiles').oninput = (ev) => {
       T.miles = ev.target.value;
-      // Miles typed over the ones that were measured or recorded are the user's own figure: the log must not still call them a road or GPS distance.
-      const produced = T.method === 'gps' ? T.recordedMiles : (T.oneWay ? (T.roundTrip ? G.roundMiles(T.oneWay * 2) : T.oneWay) : null);
-      if (produced == null || Number(T.miles) !== Number(produced)) {
-        if (T.method === 'gps') { T.points = null; T.startedAt = null; T.endedAt = null; T.recordedMiles = null; }
-        T.method = 'manual'; T.oneWay = null; T.result = '';
-        const res = $('#tripResult'); if (res) res.textContent = '';
-      }
+      if (retypeMiles(T)) { const res = $('#tripResult'); if (res) res.textContent = ''; }
     };
     $('#tripLine').onchange = (ev) => { T.lineId = ev.target.value; };
     $('#tripMeasure').onclick = measureTrip;
@@ -5478,7 +5566,6 @@ window.ITEMIZER_SINGLE_FILE = true;
       note: `${T.roundTrip ? 'Round trip, ' : ''}${METHOD_LABEL[T.method] || T.method}.`, hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false,
     };
     const trip = { id: DB.uid(), date: T.date, taxYear: entry.taxYear, fromId: T.fromId, toId: T.toId, fromLabel, toLabel, purpose: T.purpose.trim(), miles: G.roundMiles(miles), roundTrip: !!T.roundTrip, method: T.method, lineId: T.lineId, entryId: entry.id, points: T.points || null, startedAt: T.startedAt, endedAt: T.endedAt, createdAt: now };
-    entry.tripId = trip.id; // the edit path finds the drive from the entry, without scanning the whole log
     if (T.saving) return;
     T.saving = true;
     try {
@@ -5525,10 +5612,11 @@ window.ITEMIZER_SINGLE_FILE = true;
   }
   /** Stop a live recorder (GPS watch, wake lock, timer) and forget it; used wherever the trip form is thrown away. */
   function discardRecorder() {
+    const had = !!state.recorder; // start-up calls this with no recorder at all: the checkpoint of a drive the app was closed on has to survive that, to be offered back
     if (state.recorder && state.recorder.state !== 'idle') { try { state.recorder.stop(); } catch (e) { /* nothing to release */ } }
     clearInterval(state.recorderTimer); state.recorderTimer = null; state.recorder = null;
     window.removeEventListener('beforeunload', warnBeforeLeaving);
-    clearRecordingCheckpoint(); // the drive was thrown away on purpose: it must not come back at the next start
+    if (had) clearRecordingCheckpoint(); // the drive was thrown away on purpose: it must not come back at the next start
   }
   /** Work that exists only in memory: a live recording, a recorded drive not yet logged, or a capture form with typing or a photo in it. */
   function hasUnsavedWork() {
@@ -5854,9 +5942,12 @@ window.ITEMIZER_SINGLE_FILE = true;
       const years = [...new Set(entries.map((e) => e.taxYear))].sort();
       const cur = Number(state.settings.taxYear);
       if (years.length === 1 && years[0] !== cur) {
-        // otherwise the ledger opens on the selected year and says nothing is logged, right after a successful import
-        toast(`Added ${entries.length} ${noun} from the statement, all dated ${years[0]}. The tax year is now ${years[0]}.`, 10000);
-        await setTaxYear(years[0]).catch(() => {});
+        // otherwise the ledger opens on the selected year and says nothing is logged, right after a successful import.
+        // The switch is made first: it can be turned down or fail, and the message has to say what really happened.
+        const moved = await setTaxYear(years[0]).catch(() => false);
+        toast(moved
+          ? `Added ${entries.length} ${noun} from the statement, all dated ${years[0]}. The tax year is now ${years[0]}.`
+          : `Added ${entries.length} ${noun} from the statement, all dated ${years[0]}. The tax year is still ${cur}; use the tax year menu at the top to see them.`, 10000);
       } else if (years.some((y) => y !== cur)) {
         const other = entries.filter((e) => e.taxYear !== cur).length;
         toast(`Added ${entries.length} ${noun} from the statement. ${other} of them are dated outside ${cur}; use the tax year menu at the top to see those.`, 10000);
@@ -5941,15 +6032,17 @@ window.ITEMIZER_SINGLE_FILE = true;
       return;
     }
     const a = rec.action || {};
-    if (a.type === 'prefill') prefillCapture(a.entry);
+    if (a.type === 'prefill') await prefillCapture(a.entry);
     else if (a.type === 'edit') openEdit(a.entryId);
     else if (a.type === 'ledger') { state.ledger.filter = normalizeLedgerFilter(a.filter || 'all'); go('ledger', a.filter ? { filter: a.filter } : null); }
     else if (a.type === 'capture') { state.captureMode = 'expense'; go('capture'); if (state.view === 'capture') renderCapture(); setTimeout(() => { const q = $('#quickInput'); if (q) q.focus(); }, 50); }
     else if (a.type === 'settings') go('settings');
   }
 
-  /** Start a capture with the fields already filled; the user reviews and saves. */
-  function prefillCapture(entry) {
+  /** Start a capture with the fields already filled; the user reviews and saves. False when the form on screen was kept instead. */
+  async function prefillCapture(entry) {
+    // the form being replaced can hold typing or a receipt photo that is nowhere else yet
+    if (!(await confirmDiscardWork('The prefilled entry will be shown instead.'))) return false;
     state.captureMode = 'expense'; // the prefilled form lives in expense mode, wherever the user was
     const cap = freshCapture();
     cap.lineId = entry.lineId || null;
@@ -5962,11 +6055,13 @@ window.ITEMIZER_SINGLE_FILE = true;
     cap.dirty = true;
     ['line', 'description', 'date', 'amount'].forEach((k) => cap.pinned.add(k));
     cap.parsed = { raw: '', description: cap.description, miles: cap.lineId && S.isMiles(cap.lineId) ? Number(cap.miles) || null : null, amount: null, date: cap.date };
+    discardCapture(); // the photo of the form being replaced is released rather than left pinned for the session
     state.capture = cap;
     reclassify();
     if (state.view === 'capture') { renderCapture(); window.scrollTo({ top: 0 }); const a = $('#fAmount'); if (a) a.focus(); }
     else go('capture');
     toast('Prefilled. Check it, then save.');
+    return true;
   }
 
   function onQuickChange() {
@@ -6226,12 +6321,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (L.filter === 'noack') list = list.filter((e) => F.noAck.has(e.id));
     if (L.filter === 'dupes') list = list.filter((e) => F.dupeIds.has(e.id));
     if (L.filter === 'samples') list = list.filter((e) => e.sample);
-    if (L.section) list = list.filter((e) => S.getLine(e.lineId).sectionId === L.section);
+    if (L.section) list = list.filter((e) => lineOf(e).sectionId === L.section);
     if (L.from) list = list.filter((e) => e.date >= L.from);
     if (L.to) list = list.filter((e) => e.date <= L.to);
     if (L.q.trim()) {
       // the amount is searched as it is shown as well as as it is stored: "$1,200.00" is the only form the ledger ever displays
-      list = list.filter((e) => { const l = S.getLine(e.lineId); return searchMatch([e.description, e.note, l.label, l.sectionTitle, String(e.amount), fmtAmount(e)], L.q); });
+      list = list.filter((e) => { const l = lineOf(e); return searchMatch([e.description, e.note, l.label, l.sectionTitle, String(e.amount), fmtAmount(e)], L.q); });
     }
     list.sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     return list;
@@ -6273,7 +6368,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     // typing only refreshes the list below, so the search box keeps its focus and caret
     const q = $('#ledgerQ');
     // a changed filter is a new list, so it starts at the first page again
-    const refreshList = () => { L.shown = LEDGER_PAGE; renderLedgerBody(); };
+    const refreshList = () => { L.shown = LEDGER_PAGE; refreshLedgerBody(); };
     q.addEventListener('input', (ev) => { L.q = ev.target.value; if (ev.isComposing) return; clearTimeout(ledgerSearchTimer); ledgerSearchTimer = setTimeout(refreshList, 250); });
     q.addEventListener('compositionend', () => { L.q = q.value; clearTimeout(ledgerSearchTimer); refreshList(); });
     $('#ledgerSection').onchange = (ev) => { L.section = ev.target.value; refreshList(); };
@@ -6293,6 +6388,11 @@ window.ITEMIZER_SINGLE_FILE = true;
     renderLedgerBody();
     restoreFocus(fk);
   }
+  /** Redraw the list from an event handler. These run outside render()'s try/catch, so a failure here is reported rather than leaving the search box silently dead. */
+  function refreshLedgerBody() {
+    try { renderLedgerBody(); }
+    catch (err) { console.error(err); toast('Something went wrong drawing the list. Your entries are safe; try another tab or reload the page.', 8000); }
+  }
   function renderLedgerBody() {
     const body = $('#ledgerBody'); if (!body) return;
     const L = state.ledger;
@@ -6300,7 +6400,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const R0 = F.R0;
     const list = ledgerList(F);
     const totalUsd = list.filter((e) => !S.isMiles(e.lineId)).reduce((a, e) => a + Number(e.amount || 0), 0);
-    const totalMiles = list.filter((e) => S.isMiles(e.lineId) && S.getLine(e.lineId).treatment !== 'info').reduce((a, e) => a + Number(e.amount || 0), 0);
+    const totalMiles = list.filter((e) => S.isMiles(e.lineId) && lineOf(e).treatment !== 'info').reduce((a, e) => a + Number(e.amount || 0), 0);
     const allSamples = state.entries.filter((e) => e.sample).length; // the button below removes the examples of every year, so it has to count them all
     // Each month head shows that whole month's total, so the totals are summed over the filtered list before the rows are cut to a page.
     const monthUsd = new Map();
@@ -6361,7 +6461,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         await deleteWithUndo(items);
       };
     }
-    const more = $('#ledgerMore'); if (more) more.onclick = () => { L.shown += LEDGER_PAGE; renderLedgerBody(); const next = $('#ledgerMore'); if (next) next.focus(); };
+    const more = $('#ledgerMore'); if (more) more.onclick = () => { L.shown += LEDGER_PAGE; refreshLedgerBody(); const next = $('#ledgerMore'); if (next) next.focus(); };
     // the count is announced on its own; the list itself is not a live region, or every row would be read out on every keystroke
     const st = $('#ledgerStatus');
     if (st) st.textContent = `${list.length} ${list.length === 1 ? 'entry' : 'entries'}${totalMiles ? ` · ${fmtMiles(totalMiles)}` : ''} · ${moneyCents(totalUsd)}`;
@@ -6430,10 +6530,12 @@ window.ITEMIZER_SINGLE_FILE = true;
   }
 
   const UNDO_HINT = 'You can undo from the message that appears for a few seconds afterwards.';
-  /** Put back everything a batch of deletes took: the entries, their receipt photos and their rows in the mileage log. */
+  /** Put back everything a batch of deletes took: the entries, their receipt photos, their rows in the mileage log, and any places that went with them. */
   async function restoreDeleted(batch) {
     let lostPhotos = 0;
     for (const r of batch.receipts) { try { await DB.putReceipt(r); } catch (err) { lostPhotos++; } }
+    // the places go back first: a restored mileage entry names them
+    for (const pl of batch.places) { try { await DB.putPlace(pl); state.places.push(pl); } catch (err) { /* the entries come back; a place could not */ } }
     try { await DB.putEntries(batch.entries); }
     catch (err) { toast(`Could not restore: ${err && err.message ? err.message : 'storage error'}. Restore from a backup in Settings.`, 8000); return; }
     state.entries.push(...batch.entries);
@@ -6441,9 +6543,15 @@ window.ITEMIZER_SINGLE_FILE = true;
     render();
     toast(`Restored.${lostPhotos ? ` ${lostPhotos} photo${lostPhotos === 1 ? '' : 's'} could not be restored.` : ''}`);
   }
-  /** Delete entries (and their receipt photos) with a few seconds to undo. */
-  async function deleteWithUndo(entries) {
+  /**
+   * Delete entries (and their receipt photos) with a few seconds to undo. `alsoDeleted` carries rows the caller
+   * has already removed itself — the example places and the log rows that had no entry — so Undo puts back
+   * everything the dialog before it said would go.
+   */
+  async function deleteWithUndo(entries, alsoDeleted) {
     const list = entries.slice();
+    const also = alsoDeleted || {};
+    const alsoPlaces = also.places || [], alsoTrips = also.trips || [];
     const receipts = [];
     for (const e of list) if (e.receiptId) { try { const r = await DB.getReceipt(e.receiptId); if (r) receipts.push(r); } catch (err) { /* photo unavailable */ } }
     const ids = new Set(list.map((e) => e.id));
@@ -6462,10 +6570,10 @@ window.ITEMIZER_SINGLE_FILE = true;
     render();
     // a second delete inside the undo window joins the first: replacing the toast would otherwise drop the only copy of those rows
     const batch = pendingUndo
-      ? { entries: pendingUndo.entries.concat(list), receipts: pendingUndo.receipts.concat(receipts), trips: pendingUndo.trips.concat(trips) }
-      : { entries: list, receipts, trips };
+      ? { entries: pendingUndo.entries.concat(list), receipts: pendingUndo.receipts.concat(receipts), trips: pendingUndo.trips.concat(trips, alsoTrips), places: pendingUndo.places.concat(alsoPlaces) }
+      : { entries: list, receipts, trips: trips.concat(alsoTrips), places: alsoPlaces };
     pendingUndo = batch;
-    const what = batch.entries.length === 1 ? (batch.entries[0].description || S.getLine(batch.entries[0].lineId).label) : `${batch.entries.length} entries`;
+    const what = batch.entries.length === 1 ? (batch.entries[0].description || lineOf(batch.entries[0]).label) : `${batch.entries.length} entries`;
     toast(`Deleted ${what}.`, 8000, { label: 'Undo', altLabel: 'Undo delete', onClick: () => restoreDeleted(batch) });
   }
 
@@ -6525,7 +6633,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (openingEdit || !$('#modal').hidden) return;
     const e = state.entries.find((x) => x.id === id);
     if (!e) return;
-    const line = S.getLine(e.lineId);
+    const line = lineOf(e);
     const isMiles = S.isMiles(e.lineId);
     openingEdit = true;
     let url = null;
@@ -6540,7 +6648,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         <label class="field span-2"><span>Note</span><textarea id="eNote">${esc(e.note)}</textarea></label>
         ${e.items && e.items.length ? `<div class="field span-2"><span>Itemized donation record</span><div class="note small" style="white-space:pre-line">${esc(VAL.recordText(e.items, String(e.description || '').split(' — ')[0], e.date))}</div></div>` : ''}
       </div>
-      <div class="receipt-row" id="eReceiptRow" ${isMiles ? 'hidden' : ''}>
+      <div class="receipt-row" id="eReceiptRow" ${isMiles && !e.receiptId ? 'hidden' : ''}>
         ${receiptRowHTML(e, url)}
       </div>
       <div class="modal-actions">
@@ -6597,21 +6705,26 @@ window.ITEMIZER_SINGLE_FILE = true;
   // =====================================================================
   // INSIGHTS
   // =====================================================================
+  /** What has been added to the standard deduction, so the figure beside "standard deduction" is not taken for the plain one. */
+  function stdIncludes(SD) {
+    const parts = [];
+    if (SD.conditions.length) parts.push(`${money(SD.additional)} because ${esc(SD.conditions.join(' and '))}`);
+    if (SD.disasterLoss > 0) parts.push(`${money(SD.disasterLoss)} of qualified disaster loss, which counts without itemizing`);
+    if (SD.charity > 0) parts.push(`${money(SD.charity)} of cash gifts, which count without itemizing up to ${money(SD.charityCap)}`);
+    if (!parts.length) return '';
+    return ` (includes ${parts.join('; ')})`; // each part carries a comma of its own, so the list is separated with semicolons
+  }
   function renderInsights() {
     const R0 = state.computed;
     const A = R0.scheduleA, SD = R0.standardDeduction, V = R0.verdict, C0 = R0.scheduleC, SUB = R0.substantiation;
     const filing = R.FILING_STATUSES.find((f) => f.id === R0.filingStatus);
-    const hero = V.itemize ? `${money(V.difference)} <small>above the standard deduction</small>` : `${money(-V.difference)} <small>more to make itemizing pay</small>`;
+    const hero = V.itemize ? `${moneyNear(V.difference)} <small>above the standard deduction</small>` : `${moneyNear(-V.difference)} <small>more to make itemizing pay</small>`;
     // the Schedule C sub-label says what is actually in the figure: the meals share is a settable rate, and a business can have no meals at all
     const seCount = R0.sections.selfemp.count;
     const cSub = !C0.hasActivity ? 'no business entries'
       : C0.vehicle.miles ? `${fmtMiles(C0.vehicle.miles)} at ${R.perMileText(R0.params, 'business')}`
       : C0.meals.paid > 0 ? `meals counted at ${R.pct(C0.meals.rate)}`
       : `${seCount} business ${plural(seCount, 'entry', 'entries')}`;
-    // what has been added to the standard deduction, so the figure beside "standard deduction" is not taken for the plain one
-    const stdParts = [];
-    if (SD.conditions.length) stdParts.push(`${money(SD.additional)} because ${esc(SD.conditions.join(' and '))}`);
-    if (SD.charity > 0) stdParts.push(`${money(SD.charity)} of cash gifts, which count without itemizing up to ${money(SD.charityCap)}`);
     const kicker = `<span class="pill pill-accent">Tax year ${R0.taxYear}</span><span class="pill pill-info">${esc(filing ? filing.label : '')}</span>${R0.agi == null ? '<span class="pill pill-act">AGI not set</span>' : `<span class="pill pill-info">AGI ${money(R0.agi)}</span>`}`;
 
     const sectionRows = S.SECTIONS.filter((s) => R0.sections[s.id].count > 0).map((s) => {
@@ -6631,7 +6744,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         <div class="verdict-kicker">${kicker}</div>
         <h2 class="verdict-title">${V.itemize ? 'Itemizing wins' : 'The standard deduction still wins'}</h2>
         <div class="hero">${hero}</div>
-        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdParts.length ? ` (includes ${stdParts.join(' and ')})` : ''}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}${V.interestPending ? ' Investment interest is waiting on your net investment income.' : ''}</p>
+        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdIncludes(SD)}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}${V.interestPending ? ' Investment interest is waiting on your net investment income.' : ''}</p>
         ${meterHTML('')}
       </section>
 
@@ -6674,7 +6787,7 @@ window.ITEMIZER_SINGLE_FILE = true;
             <dt>Gambling losses (to winnings)</dt><dd>${moneyCents(A.other.deductible)}</dd>
             <dt>Casualty (${A.casualty.qualified ? 'qualified disaster loss' : 'declared disaster'})</dt><dd>${moneyCents(A.casualty.deductible)}</dd>
             <div class="total" style="display:contents"><dt>Itemized total</dt><dd>${moneyCents(A.total)}</dd></div>
-            <dt>Standard deduction${stdGiftClause(SD)}</dt><dd>${moneyCents(SD.total)}</dd>
+            <dt>Standard deduction${stdAddedClause(SD)}</dt><dd>${moneyCents(SD.total)}</dd>
           </dl>
         </section>
         <section class="card">
@@ -6853,7 +6966,7 @@ window.ITEMIZER_SINGLE_FILE = true;
           ${R0.scheduleA.taxes.withheld ? `<span>State and local income tax withheld per W-2 (from Settings)</span><span class="num">${esc(moneyCents(R0.scheduleA.taxes.withheld))}</span>` : ''}
           <span>Schedule A items entered${R0.scheduleA.taxes.withheld ? ', including that withholding' : ''}</span><span class="num">${esc(moneyCents(R0.scheduleA.grossEntered))}</span>
           <span>Counts after medical floor, tax cap, and gift limits</span><span class="num">${esc(moneyCents(R0.scheduleA.total))}</span>
-          <span>Standard deduction (${esc(filing ? filing.label : '')}${R0.standardDeduction.conditions.length ? ', with age/blind additions' : ''}${esc(stdGiftClause(R0.standardDeduction))})</span><span class="num">${esc(moneyCents(R0.standardDeduction.total))}</span>
+          <span>Standard deduction (${esc(filing ? filing.label : '')}${R0.standardDeduction.conditions.length ? ', with age/blind additions' : ''}${esc(stdAddedClause(R0.standardDeduction))})</span><span class="num">${esc(moneyCents(R0.standardDeduction.total))}</span>
           <span class="big">${R0.verdict.itemize ? 'Itemizing appears to win by' : 'Standard deduction appears to win by'}</span><span class="num big">${esc(moneyCents(Math.abs(R0.verdict.difference)))}</span>
           ${R0.scheduleC.hasActivity ? `<span>Schedule C expenses (business, not itemized)</span><span class="num">${esc(moneyCents(R0.scheduleC.total))}</span>` : ''}
           ${R0.adjustments.studentLoanInterest.paid ? `<span>Student loan interest (adjustment to income)</span><span class="num">${esc(moneyCents(R0.adjustments.studentLoanInterest.deductible))}</span>` : ''}
@@ -6882,13 +6995,13 @@ window.ITEMIZER_SINGLE_FILE = true;
     const withPhoto = yearEntries().filter((e) => e.receiptId).sort((a, b) => a.date.localeCompare(b.date));
     const paper = yearEntries().filter((e) => e.hasReceipt && !e.receiptId && !S.isMiles(e.lineId)).sort((a, b) => a.date.localeCompare(b.date));
     const groups = new Map();
-    for (const e of withPhoto) { const l = S.getLine(e.lineId); if (!groups.has(l.sectionTitle)) groups.set(l.sectionTitle, []); groups.get(l.sectionTitle).push(e); }
+    for (const e of withPhoto) { const l = lineOf(e); if (!groups.has(l.sectionTitle)) groups.set(l.sectionTitle, []); groups.get(l.sectionTitle).push(e); }
     const prepared = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
     return `<article class="sheet receipt-sheet" id="receiptSheet">
       <div class="sheet-bar">Receipts — tax year ${R0.taxYear}</div>
       <p class="sheet-sub">${state.settings.taxpayerName ? esc(state.settings.taxpayerName.trim()) + ' · ' : ''}${withPhoto.length} receipt ${withPhoto.length === 1 ? 'photo' : 'photos'} attached to entries and ${paper.length} paper ${paper.length === 1 ? 'receipt' : 'receipts'} on file. Prepared ${esc(prepared)}.</p>
-      ${[...groups.entries()].map(([title, list]) => `<h3 class="receipt-group">${esc(title)}</h3><div class="receipt-grid">${list.map((e) => `<figure class="receipt-fig"><img data-receipt="${esc(e.receiptId)}" decoding="async" alt="Receipt for ${esc(e.description || S.getLine(e.lineId).label)}"><figcaption><b>${esc(P.formatDate(e.date))}</b> · ${esc(fmtAmount(e))}<br>${esc(e.description || '')}<br><span class="muted">${esc(S.getLine(e.lineId).label)}</span></figcaption></figure>`).join('')}</div>`).join('')}
-      ${paper.length ? `<h3 class="receipt-group">Paper receipts on file</h3><table class="table-twin"><thead><tr><th>Date</th><th>Payee</th><th>Line</th><th class="num">Amount</th></tr></thead><tbody>${paper.map((e) => `<tr><td>${esc(P.formatDate(e.date, false))}</td><td>${esc(e.description || '')}</td><td>${esc(S.getLine(e.lineId).label)}</td><td class="num">${esc(moneyCents(e.amount))}</td></tr>`).join('')}</tbody></table>` : ''}
+      ${[...groups.entries()].map(([title, list]) => `<h3 class="receipt-group">${esc(title)}</h3><div class="receipt-grid">${list.map((e) => `<figure class="receipt-fig"><img data-receipt="${esc(e.receiptId)}" decoding="async" alt="Receipt for ${esc(e.description || lineOf(e).label)}"><figcaption><b>${esc(P.formatDate(e.date))}</b> · ${esc(fmtAmount(e))}<br>${esc(e.description || '')}<br><span class="muted">${esc(S.getLine(e.lineId).label)}</span></figcaption></figure>`).join('')}</div>`).join('')}
+      ${paper.length ? `<h3 class="receipt-group">Paper receipts on file</h3><table class="table-twin"><thead><tr><th>Date</th><th>Payee</th><th>Line</th><th class="num">Amount</th></tr></thead><tbody>${paper.map((e) => `<tr><td>${esc(P.formatDate(e.date, false))}</td><td>${esc(e.description || '')}</td><td>${esc(lineOf(e).label)}</td><td class="num">${esc(moneyCents(e.amount))}</td></tr>`).join('')}</tbody></table>` : ''}
       ${!withPhoto.length && !paper.length ? '<p class="note">No receipts yet. Attach photos from Capture or the ledger, or tick "paper receipt filed" on an entry.</p>' : ''}
     </article>`;
   }
@@ -6925,7 +7038,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (R0.scheduleA.taxes.withheld) out.push(pad('State and local income tax withheld per W-2', moneyCents(R0.scheduleA.taxes.withheld), 60));
     out.push(pad(R0.scheduleA.taxes.withheld ? 'Schedule A entered, including that withholding' : 'Schedule A entered', moneyCents(R0.scheduleA.grossEntered), 60));
     out.push(pad('Counts after floors and caps', moneyCents(R0.scheduleA.total), 60));
-    out.push(pad(`Standard deduction${stdGiftClause(R0.standardDeduction)}`, moneyCents(R0.standardDeduction.total), 60));
+    out.push(pad(`Standard deduction${stdAddedClause(R0.standardDeduction)}`, moneyCents(R0.standardDeduction.total), 60));
     out.push(pad(R0.verdict.itemize ? 'Itemizing wins by' : 'Standard deduction wins by', moneyCents(Math.abs(R0.verdict.difference)), 60));
     if (R0.scheduleC.hasActivity) out.push(pad('Schedule C expenses', moneyCents(R0.scheduleC.total), 60));
     if (R0.adjustments.studentLoanInterest.paid) out.push(pad('Student loan interest (adjustment)', moneyCents(R0.adjustments.studentLoanInterest.deductible), 60));
@@ -6958,7 +7071,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       <section class="card verdict">
         <div class="verdict-kicker"><span class="pill pill-accent">${closed ? 'Year in review' : 'Year-end forecast'}</span><span class="pill pill-info">${R0.taxYear}</span>${pr.projectedEntries ? `<span class="pill pill-info">${pr.projectedEntries} expected ${pr.projectedEntries === 1 ? 'entry' : 'entries'} still to come</span>` : ''}</div>
         <h2 class="verdict-title">${closed ? (pr.itemize ? 'Itemizing won' : 'The standard deduction won') : (pr.itemize ? 'On pace to itemize' : 'On pace for the standard deduction')}</h2>
-        <div class="hero">${pr.itemize ? `${money(pr.projectedTotal - pr.standardDeduction)} <small>${closed ? 'above' : 'projected above'} the standard deduction</small>` : `${money(pr.gap)} <small>${closed ? 'short' : 'projected short'} of itemizing</small>`}</div>
+        <div class="hero">${pr.itemize ? `${moneyNear(pr.projectedTotal - pr.standardDeduction)} <small>${closed ? 'above' : 'projected above'} the standard deduction</small>` : `${moneyNear(pr.gap)} <small>${closed ? 'short' : 'projected short'} of itemizing</small>`}</div>
         <p class="verdict-note">${closed ? `${money(pr.actual)} counted for ${R0.taxYear} against a ${money(pr.standardDeduction)} standard deduction.` : `${money(pr.actual)} counts so far.${pr.expectedMore > 0 ? ` Recurring payees found in your entries should add about ${money(pr.expectedMore)} by Dec 31, for a projected ${money(pr.projectedTotal)}` : ` Nothing more is expected from recurring payees, so the projection stays at ${money(pr.projectedTotal)}`} against a ${money(pr.standardDeduction)} standard deduction.`}${pr.calibration && pr.calibration.factor !== 1 ? ` The expected part is calibrated ×${pr.calibration.factor} from ${pr.calibration.n} past forecasts.` : ''}${pr.medicalPending ? ' Medical costs are waiting on your AGI in Settings.' : ''}</p>
         <div class="meter" role="img" aria-label="${esc(`${money(pr.actual)} so far, ${money(pr.projectedTotal)} projected, ${money(pr.standardDeduction)} standard deduction`)}">
           <div class="meter-track"><div class="meter-proj" style="width:${pct(pr.projectedTotal)}"></div><div class="meter-fill ${pr.actual > pr.standardDeduction ? 'is-over' : ''}" style="width:${pct(pr.actual)}"></div><div class="meter-marker" style="left:${pct(pr.standardDeduction)}"></div></div>
@@ -7440,12 +7553,14 @@ window.ITEMIZER_SINGLE_FILE = true;
     // the button removes the examples of every tax year, including any the user has attached a photo to since
     if (samples.length && !(await confirmDialog(`Remove ${samples.length} example ${plural(samples.length, 'entry', 'entries')}?`, `The examples of every tax year go, with the example places and the example trip. ${UNDO_HINT}`, 'Remove', true))) return;
     try {
-      const samplePlaceIds = new Set(state.places.filter((x) => x.sample).map((p) => p.id));
+      const removedPlaces = state.places.filter((x) => x.sample); // kept for the undo batch: the dialog promises the places come back too
+      const samplePlaceIds = new Set(removedPlaces.map((p) => p.id));
       for (const id of samplePlaceIds) await DB.deletePlace(id);
       state.places = state.places.filter((x) => !x.sample);
       // only the log rows left without an entry are removed here; the rest go with their entries below, and come back with them
       const sampleIds = new Set(samples.map((e) => e.id));
-      for (const t of state.trips.filter((x) => x.sample && !sampleIds.has(x.entryId))) await DB.deleteTrip(t.id);
+      const looseTrips = state.trips.filter((x) => x.sample && !sampleIds.has(x.entryId));
+      for (const t of looseTrips) await DB.deleteTrip(t.id);
       state.trips = state.trips.filter((x) => !x.sample || sampleIds.has(x.entryId));
       // a recording of a real drive has nothing to do with the examples: only the places it points at have gone
       if (state.trip) { if (samplePlaceIds.has(state.trip.fromId)) state.trip.fromId = ''; if (samplePlaceIds.has(state.trip.toId)) state.trip.toId = ''; }
@@ -7453,9 +7568,13 @@ window.ITEMIZER_SINGLE_FILE = true;
       const key = EXP.monthKey(P.todayISO()), year = Number(state.settings.taxYear);
       const emptied = new Set([...new Set(samples.map((e) => Number(e.taxYear)))].filter((y) => !state.entries.some((e) => !e.sample && Number(e.taxYear) === y)));
       const kept = state.snapshots.filter((sn) => !(sn.month === key && sn.taxYear === year) && !emptied.has(Number(sn.taxYear)));
-      if (kept.length !== state.snapshots.length) { state.snapshots = kept; await DB.syncSnapshots(state.snapshots).catch(() => {}); }
+      if (kept.length !== state.snapshots.length) {
+        const known = state.snapshots; // only the rows this tab started from may be deleted: another tab's month must survive
+        state.snapshots = kept;
+        await DB.syncSnapshots(kept, known).catch(() => {});
+      }
       // the same path as any other delete, so an example the user has since made their own can be brought back
-      if (samples.length) await deleteWithUndo(samples); else render();
+      if (samples.length) await deleteWithUndo(samples, { places: removedPlaces, trips: looseTrips }); else render();
     } catch (e) {
       toast(`Could not remove the examples: ${e && e.message ? e.message : 'storage error'}.`, 6000);
       // the rows go one at a time, so what is left is read back rather than guessed at; a live recording is left alone

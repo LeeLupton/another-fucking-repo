@@ -110,12 +110,12 @@ test('the soft chart fills get an accent edge, because the fill itself is 1.31:1
 
 test('the paper sheet re-points the ink tokens, so its captions read the same in both themes and in print', () => {
   const sheet = tokens('.sheet');
-  for (const [name, T] of themes) {
-    const paper = color(T['--paper'], T);
-    for (const k of ['--ink', '--ink-2', '--ink-3']) {
-      const ink = color(sheet[k], LIGHT); // the sheet's own values, not the theme's
-      assert.ok(ratio(ink, paper) >= 4.5, `${name}: ${k} on the sheet ${ratio(ink, paper)}:1`);
-    }
+  // --paper is declared once, on :root, so the sheet is the same white in both themes; checking it twice would prove nothing
+  assert.equal(DARK['--paper'], LIGHT['--paper'], 'the sheet is paper in both themes');
+  const paper = color(LIGHT['--paper'], LIGHT);
+  for (const k of ['--ink', '--ink-2', '--ink-3']) {
+    const ink = color(sheet[k], LIGHT); // the sheet's own values, not the theme's
+    assert.ok(ratio(ink, paper) >= 4.5, `${k} on the sheet ${ratio(ink, paper)}:1`);
   }
   assert.equal(sheet['--ink-2'], '#444444');
   assert.equal(sheet['--ink-3'], '#555555');

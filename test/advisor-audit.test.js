@@ -297,6 +297,28 @@ test('a suggested drive is rounded to a tenth of a mile and described the way th
   assert.match(one.body, /You logged 12\.3 mi for this trip before/);
 });
 
+test('the suggested drive quotes the mileage rate for its own date, not the January one', () => {
+  const before = [E('2026-01-05', 'med.miles', 24, 'Round trip — Dr Patel'), E('2026-01-05', 'med.doctor', 100, 'Dr Patel'), E('2026-02-10', 'med.doctor', 100, 'Dr Patel')];
+  const early = mustFind(run(before, { agi: 60000 }, '2026-09-20').recommendations, (x) => x.id.startsWith('miles:'), 'the drive to add');
+  assert.match(early.body, /At 20\.5¢\/mile /, 'a February drive is worth the January rate');
+  const after = before.slice(0, 2).concat([E('2026-08-10', 'med.doctor', 100, 'Dr Patel')]);
+  const late = mustFind(run(after, { agi: 60000 }, '2026-09-20').recommendations, (x) => x.id.startsWith('miles:'), 'the drive to add');
+  assert.match(late.body, /At 23\.5¢\/mile /, 'the rate changed on July 1, 2026, and the drive is in August');
+});
+
+test('an entry filed to this tax year but dated in the next one carries its year on every card', () => {
+  const pair = [];
+  for (const d of ['2026-02-01', '2026-03-01', '2026-04-01']) pair.push(E(d, 'ch.worship', 200, 'Tithe'), E(d, 'ch.org', 40, 'Food bank'));
+  pair.push(Object.assign(E('2027-01-03', 'ch.worship', 200, 'Tithe'), { taxYear: 2026 }));
+  const p = mustFind(run(pair, {}, '2026-12-20').recommendations, (x) => x.id.startsWith('pair:'), 'the pair suggestion');
+  assert.equal(p.title, 'Place of Worship on Jan 3, 2027 usually comes with Charity Organization');
+  const med = [];
+  for (const d of ['2026-02-01', '2026-03-01', '2026-04-01']) med.push(E(d, 'med.doctor', 100, 'Dr Patel'), E(d, 'med.miles', 12, 'Round trip — Dr Patel'));
+  med.push(Object.assign(E('2027-01-03', 'med.doctor', 100, 'Dr Patel'), { taxYear: 2026 }));
+  const m = mustFind(run(med, { agi: 60000 }, '2026-12-20').recommendations, (x) => x.id.startsWith('miles:'), 'the drive to add');
+  assert.equal(m.title, 'Add the drive to Dr Patel on Jan 3, 2027?');
+});
+
 test('bunching is priced through the tax engine, so a capped or floored payment is never suggested', () => {
   const capped = [E('2023-01-15', 'tax.real_estate', 6000, 'County property tax'), E('2023-07-15', 'tax.real_estate', 6000, 'County property tax'), E('2024-01-15', 'tax.real_estate', 6000, 'County property tax'), E('2024-07-15', 'tax.real_estate', 6000, 'County property tax'), E('2024-02-01', 'int.mortgage', 3500, 'Mortgage interest')];
   const c = run(capped, { taxYear: 2024, agi: 120000 }, '2024-09-20');
@@ -320,7 +342,8 @@ test('bunching is priced through the tax engine, so a capped or floored payment 
 
 test('the cadence nudge is keyed to the last logging day, so dismissing it lasts thirty days', () => {
   const entries = [];
-  for (let i = 0; i < 8; i++) entries.push(E('2026-05-01', 'se.supplies', 20 + i, 'Supplies', { createdAt: `2026-0${5 + Math.floor(i / 4)}-${String(1 + (i % 4) * 3).padStart(2, '0')}T10:00:00.000Z` }));
+  // the advisor reads createdAt as a local calendar day, so the stamps are built from local midday: 10:00 UTC would be the day before in Samoa
+  for (let i = 0; i < 8; i++) entries.push(E('2026-05-01', 'se.supplies', 20 + i, 'Supplies', { createdAt: new Date(2026, 4 + Math.floor(i / 4), 1 + (i % 4) * 3, 12).toISOString() }));
   const id = mustFind(run(entries, {}, '2026-09-29').recommendations, (x) => x.id.startsWith('habit:cadence'), 'the cadence nudge').id;
   assert.equal(id, 'habit:cadence:2026-06-10');
   const nextDay = run(entries, { advisorDismissed: { [id]: '2026-09-29' } }, '2026-10-01');
@@ -350,6 +373,24 @@ test('the anomaly rule sees the same outlier in a large ledger', () => {
   assert.equal(a.title, 'Dr Patel for $4,200 is far above its usual $100');
   assert.equal(a.because, '121 entries for the same payee');
   assert.deepEqual(r.recommendations.map((x) => x.id).sort(), [`anomaly:${outlier.id}`, 'plan:itemize:2026']);
+});
+
+test('the payee median is worked out once per payee, so thousands of entries for one payee stay quick', () => {
+  // the median was re-sorted for every entry, which made this quadratic: 5,000 entries for one payee took five seconds
+  // and takes about 70 ms now. The bound is generous because a slow machine is still nowhere near a second.
+  const entries = [];
+  for (let i = 0; i < 5000; i++) {
+    const d = new Date(2026, 0, 1 + (i % 300));
+    entries.push(E(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, 'med.doctor', 40 + ((i * 37) % 400) / 4, 'Dr Patel'));
+  }
+  const outlier = E('2026-06-15', 'med.doctor', 4200, 'Dr Patel');
+  entries.push(outlier);
+  const started = Date.now();
+  const r = run(entries, { agi: 90000 }, '2026-09-20');
+  const elapsed = Date.now() - started;
+  const a = mustFind(r.recommendations, (x) => x.id === `anomaly:${outlier.id}`, 'the outlier');
+  assert.equal(a.because, '5001 entries for the same payee');
+  assert.ok(elapsed < 2000, `5,001 entries for one payee took ${elapsed} ms`);
 });
 
 test('the stop-chasing-receipts plan waits until the year is far enough along', () => {

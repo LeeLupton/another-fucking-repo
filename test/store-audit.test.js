@@ -79,7 +79,7 @@ test('backup places and trips are validated too, and keep every field the app wr
   const cleaned = DB.sanitizeRow('trips', { id: 't2', date: '2026-03-01', miles: '12.34', taxYear: 'twenty26', lineId: 'med.miles', entryId: 5, roundTrip: 'maybe', method: '=cmd|calc', evil: 'x' }, Schema);
   assert.match(cleaned.createdAt, /^\d{4}-\d{2}-\d{2}T/, 'a trip with no createdAt is stamped as it comes in');
   assert.deepEqual(Object.assign({}, cleaned, { createdAt: 'stamped' }), {
-    id: 't2', date: '2026-03-01', taxYear: 2026, fromId: null, toId: null, fromLabel: '', toLabel: '', purpose: '', miles: 12.3,
+    id: 't2', date: '2026-03-01', taxYear: 2026, fromId: null, toId: null, fromLabel: '', toLabel: '', purpose: '', miles: 12.34,
     roundTrip: true, method: 'manual', lineId: 'med.miles', entryId: null, sample: false, points: null, startedAt: null, endedAt: null, createdAt: 'stamped',
   });
   const place = DB.sanitizeRow('places', { id: 'p1', name: 'Clinic', lat: 'north', lon: {}, category: 999, evil: '<script>' }, Schema);
@@ -97,6 +97,15 @@ test('backup places and trips are validated too, and keep every field the app wr
   };
   assert.deepEqual(DB.sanitizeRow('trips', trip, Schema), trip);
   assert.equal(DB.sanitizeRow('trips', Object.assign({}, trip, { sample: true }), Schema).sample, true, 'an example trip is still known to be one after a restore');
+});
+
+test('a restored trip keeps the miles its ledger entry keeps, so the mileage log and the entry still agree', () => {
+  // the ledger stores mileage to a hundredth, so rounding the trip to a tenth on the way in would change a tax record
+  const entry = DB.sanitizeEntry({ id: 'e1', date: '2026-03-01', taxYear: 2026, lineId: 'med.miles', amount: 12.34 }, Schema);
+  const trip = DB.sanitizeRow('trips', { id: 't1', date: '2026-03-01', taxYear: 2026, miles: 12.34, lineId: 'med.miles', entryId: 'e1' }, Schema);
+  assert.equal(entry.amount, 12.34);
+  assert.equal(trip.miles, 12.34);
+  assert.equal(DB.sanitizeRow('trips', { id: 't2', date: '2026-03-01', miles: 12.3456789, lineId: 'med.miles' }, Schema).miles, 12.35, 'more precision than the ledger can hold is still rounded away');
 });
 
 test('a snapshot keeps the settings its forecast was made under, and only ones the worksheet knows', async () => {

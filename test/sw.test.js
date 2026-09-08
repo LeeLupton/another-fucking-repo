@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const os = require('node:os');
+const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 
 /** Load sw.js into a fake service-worker global with an in-memory Cache Storage and a scripted fetch. */
 function loadSW(fetchImpl) {
@@ -198,6 +201,29 @@ test('the cache name is the stamp build.js wrote, with no fallback branch left o
   await Promise.all(waits);
   assert.deepEqual(await caches.keys(), [CACHE]);
   assert.doesNotMatch(SW_SOURCE, /startsWith\('__'\)/, 'the placeholder scheme is gone from the code as well as the comment');
+});
+
+test('the committed worker and single-file build are the ones build.js makes from these sources', () => {
+  // Only build.js writes the stamp, so a change to the app that skipped `npm run build` would ship a worker whose
+  // cache version never moved and returning browsers would keep the old shell. Building a copy proves both are current.
+  const build = repo('build.js');
+  const listed = (name) => [...build.match(new RegExp('const ' + name + ' = \\[([\\s\\S]*?)\\];'))[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  const sources = ['index.html', 'styles.css', 'manifest.webmanifest', 'sw.js', 'build.js', ...listed('SCRIPTS'), ...listed('ICONS')];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'itemizer-build-'));
+  try {
+    for (const p of sources) {
+      fs.mkdirSync(path.join(dir, path.dirname(p)), { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '..', p), path.join(dir, p));
+    }
+    execFileSync(process.execPath, [path.join(dir, 'build.js')], { stdio: 'ignore' });
+    const stampOf = (src) => src.match(/const STAMP = '([^']*)'/)[1];
+    // files are compared by hash so a failure reads as two short strings instead of a diff of the whole app
+    const digest = (text) => crypto.createHash('sha256').update(text).digest('hex').slice(0, 12);
+    assert.equal(stampOf(fs.readFileSync(path.join(dir, 'sw.js'), 'utf8')), stampOf(SW_SOURCE), 'the cache version is stale: run npm run build and commit sw.js');
+    for (const out of ['dist/itemizer.html', 'dist/itemizer.fragment.html']) {
+      assert.equal(digest(repo(out)), digest(fs.readFileSync(path.join(dir, out), 'utf8')), out + ' is stale: run npm run build and commit it');
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('the manifest describes an installable app that is not locked to one orientation', () => {

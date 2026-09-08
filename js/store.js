@@ -729,7 +729,8 @@
     return {
       id: t.id, date: t.date, taxYear: yearOf(t.taxYear) != null ? yearOf(t.taxYear) : Number(t.date.slice(0, 4)),
       fromId: ref(t.fromId), toId: ref(t.toId), fromLabel: str(t.fromLabel, 120), toLabel: str(t.toLabel, 120),
-      purpose: str(t.purpose, 300), miles: Math.round(miles * 10) / 10, roundTrip: !!t.roundTrip,
+      // miles keep the grain the ledger entry for the same drive keeps: rounding to a tenth here would quietly change a tax record on the way in
+      purpose: str(t.purpose, 300), miles: Math.round(miles * 100) / 100, roundTrip: !!t.roundTrip,
       method: TRIP_METHODS.includes(t.method) ? t.method : 'manual', lineId: lineId || null, entryId: ref(t.entryId), sample: !!t.sample,
       points: sanitizePoints(t.points), startedAt: time(t.startedAt), endedAt: time(t.endedAt), createdAt: str(t.createdAt, 40) || nowISO(),
     };

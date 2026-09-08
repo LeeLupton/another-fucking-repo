@@ -36,11 +36,21 @@
     el.addEventListener(type, fn);
   }
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const money = R.money, moneyCents = R.moneyCents;
+  const money = R.money, moneyCents = R.moneyCents, moneyNear = R.moneyNear; // moneyNear keeps the cents on a margin under a dollar, which is exactly where the verdict is decided
   const fmtMiles = (n) => `${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })} mi`;
   const fmtAmount = (entry) => (S.isMiles(entry.lineId) ? fmtMiles(entry.amount) : moneyCents(entry.amount));
-  /** From 2026 a non-itemizer's cash gifts sit on the standard-deduction side (§170(p)), so the figure is no longer only the standard deduction. */
-  const stdGiftClause = (SD) => (SD && SD.charity > 0 ? `, including ${moneyCents(SD.charity)} of cash gifts` : '');
+  /**
+   * What sits on the standard-deduction side of the comparison besides the standard deduction itself: a qualified
+   * disaster loss, and from 2026 a non-itemizer's cash gifts (§170(p)). Either can dwarf the plain figure, so the
+   * worksheet names them rather than printing a total the preparer cannot account for.
+   */
+  function stdAddedClause(SD) {
+    if (!SD) return '';
+    const parts = [];
+    if (SD.disasterLoss > 0) parts.push(`${moneyCents(SD.disasterLoss)} of qualified disaster loss`);
+    if (SD.charity > 0) parts.push(`${moneyCents(SD.charity)} of cash gifts`);
+    return parts.length ? `, including ${parts.join(' and ')}` : '';
+  }
   /** A count and its noun, so nothing on screen reads "1 entries". Same shape as the helper in rules.js. */
   const plural = (n, one, many) => (Number(n) === 1 ? one : many || one + 's');
   /** styles.css turns off transitions for "reduce motion"; a scroll asked for in script has to check the setting itself. */
@@ -135,10 +145,10 @@
     try { Object.assign(state.settings, await DB.updateSettings({ taxYear: now })); } catch (e) { /* the year still moves for this session */ }
     toast(`Tax year is now ${state.settings.taxYear}. Pick ${was} from the year menu to keep working on it.`, 12000, { label: `Back to ${was}`, onClick: () => setTaxYear(was) });
   }
-  /** Switch the year the app is working on. A choice made here survives the New Year roll-over. */
+  /** Switch the year the app is working on. A choice made here survives the New Year roll-over. True when the year really moved: the user can turn the switch down, and the write can fail. */
   async function setTaxYear(year) {
     // switching years throws away the capture form and any live recording, neither of which is stored anywhere else
-    if (!(await confirmDiscardWork(`Tax year ${Number(year)} will be shown instead.`))) { const sel = $('#yearSelect'); if (sel) sel.value = String(state.settings.taxYear); return; }
+    if (!(await confirmDiscardWork(`Tax year ${Number(year)} will be shown instead.`))) { const sel = $('#yearSelect'); if (sel) sel.value = String(state.settings.taxYear); return false; }
     const prev = { taxYear: state.settings.taxYear, taxYearPickedAt: state.settings.taxYearPickedAt };
     // the two keys this changes, not the whole row: another tab may have saved an AGI or a filing status since this one loaded
     try { Object.assign(state.settings, await DB.updateSettings({ taxYear: Number(year), taxYearPickedAt: P.todayISO() })); }
@@ -147,13 +157,14 @@
       Object.assign(state.settings, prev);
       const sel = $('#yearSelect'); if (sel) sel.value = String(prev.taxYear);
       toast(`Could not switch the year: ${e && e.message ? e.message : 'storage error'}.`, 6000);
-      return;
+      return false;
     }
     discardCapture();
     discardRecorder();
     state.trip = null;
     clearLedgerSelection(); // ticks on last year's rows would count towards actions that cannot reach them
     render();
+    return true;
   }
 
   /** Forget the ledger selection: used wherever the list under it is replaced wholesale. */
@@ -468,6 +479,8 @@
   }
 
   // ---- shared bits ----------------------------------------------------------
+  /** The worksheet line a row sits on. A row whose line a later schema no longer has stays listed, searchable and editable, rather than taking the view down with it. */
+  const lineOf = (e) => S.getLine(e.lineId) || { label: e.lineId, sectionId: '', sectionTitle: 'Unrecognised line', unit: 'usd', treatment: 'info' };
   function receiptIcon(entry) {
     const line = S.getLine(entry.lineId);
     if (!line || line.unit === 'miles') return '<span class="row-receipt rc-none"></span>';
@@ -478,8 +491,7 @@
     return '<span class="row-receipt rc-none"></span>';
   }
   function entryRow(e, opts) {
-    // a row whose line a later schema no longer has is still listed and editable, rather than taking the view down with it
-    const line = S.getLine(e.lineId) || { label: e.lineId, sectionId: '', sectionTitle: 'Unrecognised line', unit: 'usd', treatment: 'info' };
+    const line = lineOf(e);
     const dupe = opts && opts.dupes && opts.dupes.has(e.id);
     if (opts && opts.select) {
       return `<label class="row row-select">
@@ -745,7 +757,13 @@
     if (!sq) return;
     const calc = () => { const n = homeOfficeSqft(state.calc.sqft); const amt = n * 5; out.textContent = money(amt); btn.disabled = !(amt > 0); return { n, amt }; };
     sq.addEventListener('input', () => { state.calc.sqft = sq.value; calc(); });
-    btn.onclick = () => { const { n, amt } = calc(); if (!amt) return; state.calc.sqft = ''; prefillCapture({ lineId: 'se.other', amount: amt, description: `Home office, simplified method: ${n} sq ft × $5`, date: todayInYear() }); };
+    btn.onclick = async () => {
+      const { n, amt } = calc(); if (!amt) return;
+      const sqft = state.calc.sqft;
+      state.calc.sqft = '';
+      // the square feet stay in the calculator if the prefill was turned down
+      if (!(await prefillCapture({ lineId: 'se.other', amount: amt, description: `Home office, simplified method: ${n} sq ft × $5`, date: todayInYear() }))) { state.calc.sqft = sqft; renderCapture(); }
+    };
     bindDonationTool();
   }
   function bindDonationTool() {
@@ -776,11 +794,13 @@
       const next = $('#dnItem'); if (next) next.focus();
     };
     $$('[data-dn-remove]').forEach((b) => { b.onclick = () => { D.items.splice(Number(b.dataset.dnRemove), 1); renderCapture(); }; });
-    $('#dnLog').onclick = () => {
+    $('#dnLog').onclick = async () => {
       if (!D.items.length) return;
       const items = D.items.slice(), charity = D.charity.trim(), date = D.date || todayInYear();
+      const donation = state.donation;
       state.donation = null;
-      prefillCapture({ lineId: 'ch.noncash', amount: VAL.total(items), description: `${charity || 'Donated goods'} — ${VAL.summarize(items)}`, date, note: VAL.recordText(items, charity, date), items });
+      // the list of donated items stays put if the prefill was turned down
+      if (!(await prefillCapture({ lineId: 'ch.noncash', amount: VAL.total(items), description: `${charity || 'Donated goods'} — ${VAL.summarize(items)}`, date, note: VAL.recordText(items, charity, date), items }))) { state.donation = donation; renderCapture(); }
     };
   }
 
@@ -865,6 +885,19 @@
       </section>`;
   }
 
+  /**
+   * Miles typed over the ones that were measured or recorded are the user's own figure, so the log must not
+   * still call them a road or GPS distance. The recorded track and its times stay on the trip: they are the
+   * evidence of the drive, and dropping them on a keystroke would lose the drive itself. True when the trip
+   * has just stopped being a measured one.
+   */
+  function retypeMiles(T) {
+    const produced = T.method === 'gps' ? T.recordedMiles : (T.oneWay ? (T.roundTrip ? G.roundMiles(T.oneWay * 2) : T.oneWay) : null);
+    if (produced != null && Number(T.miles) === Number(produced)) return false;
+    if (T.method === 'gps') T.recordedMiles = null;
+    T.method = 'manual'; T.oneWay = null; T.result = '';
+    return true;
+  }
   function bindTripMode() {
     const T = state.trip;
     const root = $('#view-capture');
@@ -883,13 +916,7 @@
     $('#tripRound').onchange = (ev) => { T.roundTrip = ev.target.checked; if (T.oneWay) { T.miles = String(T.roundTrip ? G.roundMiles(T.oneWay * 2) : T.oneWay); $('#tripMiles').value = T.miles; } };
     $('#tripMiles').oninput = (ev) => {
       T.miles = ev.target.value;
-      // Miles typed over the ones that were measured or recorded are the user's own figure: the log must not still call them a road or GPS distance.
-      const produced = T.method === 'gps' ? T.recordedMiles : (T.oneWay ? (T.roundTrip ? G.roundMiles(T.oneWay * 2) : T.oneWay) : null);
-      if (produced == null || Number(T.miles) !== Number(produced)) {
-        if (T.method === 'gps') { T.points = null; T.startedAt = null; T.endedAt = null; T.recordedMiles = null; }
-        T.method = 'manual'; T.oneWay = null; T.result = '';
-        const res = $('#tripResult'); if (res) res.textContent = '';
-      }
+      if (retypeMiles(T)) { const res = $('#tripResult'); if (res) res.textContent = ''; }
     };
     $('#tripLine').onchange = (ev) => { T.lineId = ev.target.value; };
     $('#tripMeasure').onclick = measureTrip;
@@ -972,7 +999,6 @@
       note: `${T.roundTrip ? 'Round trip, ' : ''}${METHOD_LABEL[T.method] || T.method}.`, hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false,
     };
     const trip = { id: DB.uid(), date: T.date, taxYear: entry.taxYear, fromId: T.fromId, toId: T.toId, fromLabel, toLabel, purpose: T.purpose.trim(), miles: G.roundMiles(miles), roundTrip: !!T.roundTrip, method: T.method, lineId: T.lineId, entryId: entry.id, points: T.points || null, startedAt: T.startedAt, endedAt: T.endedAt, createdAt: now };
-    entry.tripId = trip.id; // the edit path finds the drive from the entry, without scanning the whole log
     if (T.saving) return;
     T.saving = true;
     try {
@@ -1019,10 +1045,11 @@
   }
   /** Stop a live recorder (GPS watch, wake lock, timer) and forget it; used wherever the trip form is thrown away. */
   function discardRecorder() {
+    const had = !!state.recorder; // start-up calls this with no recorder at all: the checkpoint of a drive the app was closed on has to survive that, to be offered back
     if (state.recorder && state.recorder.state !== 'idle') { try { state.recorder.stop(); } catch (e) { /* nothing to release */ } }
     clearInterval(state.recorderTimer); state.recorderTimer = null; state.recorder = null;
     window.removeEventListener('beforeunload', warnBeforeLeaving);
-    clearRecordingCheckpoint(); // the drive was thrown away on purpose: it must not come back at the next start
+    if (had) clearRecordingCheckpoint(); // the drive was thrown away on purpose: it must not come back at the next start
   }
   /** Work that exists only in memory: a live recording, a recorded drive not yet logged, or a capture form with typing or a photo in it. */
   function hasUnsavedWork() {
@@ -1348,9 +1375,12 @@
       const years = [...new Set(entries.map((e) => e.taxYear))].sort();
       const cur = Number(state.settings.taxYear);
       if (years.length === 1 && years[0] !== cur) {
-        // otherwise the ledger opens on the selected year and says nothing is logged, right after a successful import
-        toast(`Added ${entries.length} ${noun} from the statement, all dated ${years[0]}. The tax year is now ${years[0]}.`, 10000);
-        await setTaxYear(years[0]).catch(() => {});
+        // otherwise the ledger opens on the selected year and says nothing is logged, right after a successful import.
+        // The switch is made first: it can be turned down or fail, and the message has to say what really happened.
+        const moved = await setTaxYear(years[0]).catch(() => false);
+        toast(moved
+          ? `Added ${entries.length} ${noun} from the statement, all dated ${years[0]}. The tax year is now ${years[0]}.`
+          : `Added ${entries.length} ${noun} from the statement, all dated ${years[0]}. The tax year is still ${cur}; use the tax year menu at the top to see them.`, 10000);
       } else if (years.some((y) => y !== cur)) {
         const other = entries.filter((e) => e.taxYear !== cur).length;
         toast(`Added ${entries.length} ${noun} from the statement. ${other} of them are dated outside ${cur}; use the tax year menu at the top to see those.`, 10000);
@@ -1435,15 +1465,17 @@
       return;
     }
     const a = rec.action || {};
-    if (a.type === 'prefill') prefillCapture(a.entry);
+    if (a.type === 'prefill') await prefillCapture(a.entry);
     else if (a.type === 'edit') openEdit(a.entryId);
     else if (a.type === 'ledger') { state.ledger.filter = normalizeLedgerFilter(a.filter || 'all'); go('ledger', a.filter ? { filter: a.filter } : null); }
     else if (a.type === 'capture') { state.captureMode = 'expense'; go('capture'); if (state.view === 'capture') renderCapture(); setTimeout(() => { const q = $('#quickInput'); if (q) q.focus(); }, 50); }
     else if (a.type === 'settings') go('settings');
   }
 
-  /** Start a capture with the fields already filled; the user reviews and saves. */
-  function prefillCapture(entry) {
+  /** Start a capture with the fields already filled; the user reviews and saves. False when the form on screen was kept instead. */
+  async function prefillCapture(entry) {
+    // the form being replaced can hold typing or a receipt photo that is nowhere else yet
+    if (!(await confirmDiscardWork('The prefilled entry will be shown instead.'))) return false;
     state.captureMode = 'expense'; // the prefilled form lives in expense mode, wherever the user was
     const cap = freshCapture();
     cap.lineId = entry.lineId || null;
@@ -1456,11 +1488,13 @@
     cap.dirty = true;
     ['line', 'description', 'date', 'amount'].forEach((k) => cap.pinned.add(k));
     cap.parsed = { raw: '', description: cap.description, miles: cap.lineId && S.isMiles(cap.lineId) ? Number(cap.miles) || null : null, amount: null, date: cap.date };
+    discardCapture(); // the photo of the form being replaced is released rather than left pinned for the session
     state.capture = cap;
     reclassify();
     if (state.view === 'capture') { renderCapture(); window.scrollTo({ top: 0 }); const a = $('#fAmount'); if (a) a.focus(); }
     else go('capture');
     toast('Prefilled. Check it, then save.');
+    return true;
   }
 
   function onQuickChange() {
@@ -1720,12 +1754,12 @@
     if (L.filter === 'noack') list = list.filter((e) => F.noAck.has(e.id));
     if (L.filter === 'dupes') list = list.filter((e) => F.dupeIds.has(e.id));
     if (L.filter === 'samples') list = list.filter((e) => e.sample);
-    if (L.section) list = list.filter((e) => S.getLine(e.lineId).sectionId === L.section);
+    if (L.section) list = list.filter((e) => lineOf(e).sectionId === L.section);
     if (L.from) list = list.filter((e) => e.date >= L.from);
     if (L.to) list = list.filter((e) => e.date <= L.to);
     if (L.q.trim()) {
       // the amount is searched as it is shown as well as as it is stored: "$1,200.00" is the only form the ledger ever displays
-      list = list.filter((e) => { const l = S.getLine(e.lineId); return searchMatch([e.description, e.note, l.label, l.sectionTitle, String(e.amount), fmtAmount(e)], L.q); });
+      list = list.filter((e) => { const l = lineOf(e); return searchMatch([e.description, e.note, l.label, l.sectionTitle, String(e.amount), fmtAmount(e)], L.q); });
     }
     list.sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
     return list;
@@ -1767,7 +1801,7 @@
     // typing only refreshes the list below, so the search box keeps its focus and caret
     const q = $('#ledgerQ');
     // a changed filter is a new list, so it starts at the first page again
-    const refreshList = () => { L.shown = LEDGER_PAGE; renderLedgerBody(); };
+    const refreshList = () => { L.shown = LEDGER_PAGE; refreshLedgerBody(); };
     q.addEventListener('input', (ev) => { L.q = ev.target.value; if (ev.isComposing) return; clearTimeout(ledgerSearchTimer); ledgerSearchTimer = setTimeout(refreshList, 250); });
     q.addEventListener('compositionend', () => { L.q = q.value; clearTimeout(ledgerSearchTimer); refreshList(); });
     $('#ledgerSection').onchange = (ev) => { L.section = ev.target.value; refreshList(); };
@@ -1787,6 +1821,11 @@
     renderLedgerBody();
     restoreFocus(fk);
   }
+  /** Redraw the list from an event handler. These run outside render()'s try/catch, so a failure here is reported rather than leaving the search box silently dead. */
+  function refreshLedgerBody() {
+    try { renderLedgerBody(); }
+    catch (err) { console.error(err); toast('Something went wrong drawing the list. Your entries are safe; try another tab or reload the page.', 8000); }
+  }
   function renderLedgerBody() {
     const body = $('#ledgerBody'); if (!body) return;
     const L = state.ledger;
@@ -1794,7 +1833,7 @@
     const R0 = F.R0;
     const list = ledgerList(F);
     const totalUsd = list.filter((e) => !S.isMiles(e.lineId)).reduce((a, e) => a + Number(e.amount || 0), 0);
-    const totalMiles = list.filter((e) => S.isMiles(e.lineId) && S.getLine(e.lineId).treatment !== 'info').reduce((a, e) => a + Number(e.amount || 0), 0);
+    const totalMiles = list.filter((e) => S.isMiles(e.lineId) && lineOf(e).treatment !== 'info').reduce((a, e) => a + Number(e.amount || 0), 0);
     const allSamples = state.entries.filter((e) => e.sample).length; // the button below removes the examples of every year, so it has to count them all
     // Each month head shows that whole month's total, so the totals are summed over the filtered list before the rows are cut to a page.
     const monthUsd = new Map();
@@ -1855,7 +1894,7 @@
         await deleteWithUndo(items);
       };
     }
-    const more = $('#ledgerMore'); if (more) more.onclick = () => { L.shown += LEDGER_PAGE; renderLedgerBody(); const next = $('#ledgerMore'); if (next) next.focus(); };
+    const more = $('#ledgerMore'); if (more) more.onclick = () => { L.shown += LEDGER_PAGE; refreshLedgerBody(); const next = $('#ledgerMore'); if (next) next.focus(); };
     // the count is announced on its own; the list itself is not a live region, or every row would be read out on every keystroke
     const st = $('#ledgerStatus');
     if (st) st.textContent = `${list.length} ${list.length === 1 ? 'entry' : 'entries'}${totalMiles ? ` · ${fmtMiles(totalMiles)}` : ''} · ${moneyCents(totalUsd)}`;
@@ -1924,10 +1963,12 @@
   }
 
   const UNDO_HINT = 'You can undo from the message that appears for a few seconds afterwards.';
-  /** Put back everything a batch of deletes took: the entries, their receipt photos and their rows in the mileage log. */
+  /** Put back everything a batch of deletes took: the entries, their receipt photos, their rows in the mileage log, and any places that went with them. */
   async function restoreDeleted(batch) {
     let lostPhotos = 0;
     for (const r of batch.receipts) { try { await DB.putReceipt(r); } catch (err) { lostPhotos++; } }
+    // the places go back first: a restored mileage entry names them
+    for (const pl of batch.places) { try { await DB.putPlace(pl); state.places.push(pl); } catch (err) { /* the entries come back; a place could not */ } }
     try { await DB.putEntries(batch.entries); }
     catch (err) { toast(`Could not restore: ${err && err.message ? err.message : 'storage error'}. Restore from a backup in Settings.`, 8000); return; }
     state.entries.push(...batch.entries);
@@ -1935,9 +1976,15 @@
     render();
     toast(`Restored.${lostPhotos ? ` ${lostPhotos} photo${lostPhotos === 1 ? '' : 's'} could not be restored.` : ''}`);
   }
-  /** Delete entries (and their receipt photos) with a few seconds to undo. */
-  async function deleteWithUndo(entries) {
+  /**
+   * Delete entries (and their receipt photos) with a few seconds to undo. `alsoDeleted` carries rows the caller
+   * has already removed itself — the example places and the log rows that had no entry — so Undo puts back
+   * everything the dialog before it said would go.
+   */
+  async function deleteWithUndo(entries, alsoDeleted) {
     const list = entries.slice();
+    const also = alsoDeleted || {};
+    const alsoPlaces = also.places || [], alsoTrips = also.trips || [];
     const receipts = [];
     for (const e of list) if (e.receiptId) { try { const r = await DB.getReceipt(e.receiptId); if (r) receipts.push(r); } catch (err) { /* photo unavailable */ } }
     const ids = new Set(list.map((e) => e.id));
@@ -1956,10 +2003,10 @@
     render();
     // a second delete inside the undo window joins the first: replacing the toast would otherwise drop the only copy of those rows
     const batch = pendingUndo
-      ? { entries: pendingUndo.entries.concat(list), receipts: pendingUndo.receipts.concat(receipts), trips: pendingUndo.trips.concat(trips) }
-      : { entries: list, receipts, trips };
+      ? { entries: pendingUndo.entries.concat(list), receipts: pendingUndo.receipts.concat(receipts), trips: pendingUndo.trips.concat(trips, alsoTrips), places: pendingUndo.places.concat(alsoPlaces) }
+      : { entries: list, receipts, trips: trips.concat(alsoTrips), places: alsoPlaces };
     pendingUndo = batch;
-    const what = batch.entries.length === 1 ? (batch.entries[0].description || S.getLine(batch.entries[0].lineId).label) : `${batch.entries.length} entries`;
+    const what = batch.entries.length === 1 ? (batch.entries[0].description || lineOf(batch.entries[0]).label) : `${batch.entries.length} entries`;
     toast(`Deleted ${what}.`, 8000, { label: 'Undo', altLabel: 'Undo delete', onClick: () => restoreDeleted(batch) });
   }
 
@@ -2019,7 +2066,7 @@
     if (openingEdit || !$('#modal').hidden) return;
     const e = state.entries.find((x) => x.id === id);
     if (!e) return;
-    const line = S.getLine(e.lineId);
+    const line = lineOf(e);
     const isMiles = S.isMiles(e.lineId);
     openingEdit = true;
     let url = null;
@@ -2034,7 +2081,7 @@
         <label class="field span-2"><span>Note</span><textarea id="eNote">${esc(e.note)}</textarea></label>
         ${e.items && e.items.length ? `<div class="field span-2"><span>Itemized donation record</span><div class="note small" style="white-space:pre-line">${esc(VAL.recordText(e.items, String(e.description || '').split(' — ')[0], e.date))}</div></div>` : ''}
       </div>
-      <div class="receipt-row" id="eReceiptRow" ${isMiles ? 'hidden' : ''}>
+      <div class="receipt-row" id="eReceiptRow" ${isMiles && !e.receiptId ? 'hidden' : ''}>
         ${receiptRowHTML(e, url)}
       </div>
       <div class="modal-actions">
@@ -2091,21 +2138,26 @@
   // =====================================================================
   // INSIGHTS
   // =====================================================================
+  /** What has been added to the standard deduction, so the figure beside "standard deduction" is not taken for the plain one. */
+  function stdIncludes(SD) {
+    const parts = [];
+    if (SD.conditions.length) parts.push(`${money(SD.additional)} because ${esc(SD.conditions.join(' and '))}`);
+    if (SD.disasterLoss > 0) parts.push(`${money(SD.disasterLoss)} of qualified disaster loss, which counts without itemizing`);
+    if (SD.charity > 0) parts.push(`${money(SD.charity)} of cash gifts, which count without itemizing up to ${money(SD.charityCap)}`);
+    if (!parts.length) return '';
+    return ` (includes ${parts.join('; ')})`; // each part carries a comma of its own, so the list is separated with semicolons
+  }
   function renderInsights() {
     const R0 = state.computed;
     const A = R0.scheduleA, SD = R0.standardDeduction, V = R0.verdict, C0 = R0.scheduleC, SUB = R0.substantiation;
     const filing = R.FILING_STATUSES.find((f) => f.id === R0.filingStatus);
-    const hero = V.itemize ? `${money(V.difference)} <small>above the standard deduction</small>` : `${money(-V.difference)} <small>more to make itemizing pay</small>`;
+    const hero = V.itemize ? `${moneyNear(V.difference)} <small>above the standard deduction</small>` : `${moneyNear(-V.difference)} <small>more to make itemizing pay</small>`;
     // the Schedule C sub-label says what is actually in the figure: the meals share is a settable rate, and a business can have no meals at all
     const seCount = R0.sections.selfemp.count;
     const cSub = !C0.hasActivity ? 'no business entries'
       : C0.vehicle.miles ? `${fmtMiles(C0.vehicle.miles)} at ${R.perMileText(R0.params, 'business')}`
       : C0.meals.paid > 0 ? `meals counted at ${R.pct(C0.meals.rate)}`
       : `${seCount} business ${plural(seCount, 'entry', 'entries')}`;
-    // what has been added to the standard deduction, so the figure beside "standard deduction" is not taken for the plain one
-    const stdParts = [];
-    if (SD.conditions.length) stdParts.push(`${money(SD.additional)} because ${esc(SD.conditions.join(' and '))}`);
-    if (SD.charity > 0) stdParts.push(`${money(SD.charity)} of cash gifts, which count without itemizing up to ${money(SD.charityCap)}`);
     const kicker = `<span class="pill pill-accent">Tax year ${R0.taxYear}</span><span class="pill pill-info">${esc(filing ? filing.label : '')}</span>${R0.agi == null ? '<span class="pill pill-act">AGI not set</span>' : `<span class="pill pill-info">AGI ${money(R0.agi)}</span>`}`;
 
     const sectionRows = S.SECTIONS.filter((s) => R0.sections[s.id].count > 0).map((s) => {
@@ -2125,7 +2177,7 @@
         <div class="verdict-kicker">${kicker}</div>
         <h2 class="verdict-title">${V.itemize ? 'Itemizing wins' : 'The standard deduction still wins'}</h2>
         <div class="hero">${hero}</div>
-        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdParts.length ? ` (includes ${stdParts.join(' and ')})` : ''}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}${V.interestPending ? ' Investment interest is waiting on your net investment income.' : ''}</p>
+        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdIncludes(SD)}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}${V.interestPending ? ' Investment interest is waiting on your net investment income.' : ''}</p>
         ${meterHTML('')}
       </section>
 
@@ -2168,7 +2220,7 @@
             <dt>Gambling losses (to winnings)</dt><dd>${moneyCents(A.other.deductible)}</dd>
             <dt>Casualty (${A.casualty.qualified ? 'qualified disaster loss' : 'declared disaster'})</dt><dd>${moneyCents(A.casualty.deductible)}</dd>
             <div class="total" style="display:contents"><dt>Itemized total</dt><dd>${moneyCents(A.total)}</dd></div>
-            <dt>Standard deduction${stdGiftClause(SD)}</dt><dd>${moneyCents(SD.total)}</dd>
+            <dt>Standard deduction${stdAddedClause(SD)}</dt><dd>${moneyCents(SD.total)}</dd>
           </dl>
         </section>
         <section class="card">
@@ -2347,7 +2399,7 @@
           ${R0.scheduleA.taxes.withheld ? `<span>State and local income tax withheld per W-2 (from Settings)</span><span class="num">${esc(moneyCents(R0.scheduleA.taxes.withheld))}</span>` : ''}
           <span>Schedule A items entered${R0.scheduleA.taxes.withheld ? ', including that withholding' : ''}</span><span class="num">${esc(moneyCents(R0.scheduleA.grossEntered))}</span>
           <span>Counts after medical floor, tax cap, and gift limits</span><span class="num">${esc(moneyCents(R0.scheduleA.total))}</span>
-          <span>Standard deduction (${esc(filing ? filing.label : '')}${R0.standardDeduction.conditions.length ? ', with age/blind additions' : ''}${esc(stdGiftClause(R0.standardDeduction))})</span><span class="num">${esc(moneyCents(R0.standardDeduction.total))}</span>
+          <span>Standard deduction (${esc(filing ? filing.label : '')}${R0.standardDeduction.conditions.length ? ', with age/blind additions' : ''}${esc(stdAddedClause(R0.standardDeduction))})</span><span class="num">${esc(moneyCents(R0.standardDeduction.total))}</span>
           <span class="big">${R0.verdict.itemize ? 'Itemizing appears to win by' : 'Standard deduction appears to win by'}</span><span class="num big">${esc(moneyCents(Math.abs(R0.verdict.difference)))}</span>
           ${R0.scheduleC.hasActivity ? `<span>Schedule C expenses (business, not itemized)</span><span class="num">${esc(moneyCents(R0.scheduleC.total))}</span>` : ''}
           ${R0.adjustments.studentLoanInterest.paid ? `<span>Student loan interest (adjustment to income)</span><span class="num">${esc(moneyCents(R0.adjustments.studentLoanInterest.deductible))}</span>` : ''}
@@ -2376,13 +2428,13 @@
     const withPhoto = yearEntries().filter((e) => e.receiptId).sort((a, b) => a.date.localeCompare(b.date));
     const paper = yearEntries().filter((e) => e.hasReceipt && !e.receiptId && !S.isMiles(e.lineId)).sort((a, b) => a.date.localeCompare(b.date));
     const groups = new Map();
-    for (const e of withPhoto) { const l = S.getLine(e.lineId); if (!groups.has(l.sectionTitle)) groups.set(l.sectionTitle, []); groups.get(l.sectionTitle).push(e); }
+    for (const e of withPhoto) { const l = lineOf(e); if (!groups.has(l.sectionTitle)) groups.set(l.sectionTitle, []); groups.get(l.sectionTitle).push(e); }
     const prepared = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
     return `<article class="sheet receipt-sheet" id="receiptSheet">
       <div class="sheet-bar">Receipts — tax year ${R0.taxYear}</div>
       <p class="sheet-sub">${state.settings.taxpayerName ? esc(state.settings.taxpayerName.trim()) + ' · ' : ''}${withPhoto.length} receipt ${withPhoto.length === 1 ? 'photo' : 'photos'} attached to entries and ${paper.length} paper ${paper.length === 1 ? 'receipt' : 'receipts'} on file. Prepared ${esc(prepared)}.</p>
-      ${[...groups.entries()].map(([title, list]) => `<h3 class="receipt-group">${esc(title)}</h3><div class="receipt-grid">${list.map((e) => `<figure class="receipt-fig"><img data-receipt="${esc(e.receiptId)}" decoding="async" alt="Receipt for ${esc(e.description || S.getLine(e.lineId).label)}"><figcaption><b>${esc(P.formatDate(e.date))}</b> · ${esc(fmtAmount(e))}<br>${esc(e.description || '')}<br><span class="muted">${esc(S.getLine(e.lineId).label)}</span></figcaption></figure>`).join('')}</div>`).join('')}
-      ${paper.length ? `<h3 class="receipt-group">Paper receipts on file</h3><table class="table-twin"><thead><tr><th>Date</th><th>Payee</th><th>Line</th><th class="num">Amount</th></tr></thead><tbody>${paper.map((e) => `<tr><td>${esc(P.formatDate(e.date, false))}</td><td>${esc(e.description || '')}</td><td>${esc(S.getLine(e.lineId).label)}</td><td class="num">${esc(moneyCents(e.amount))}</td></tr>`).join('')}</tbody></table>` : ''}
+      ${[...groups.entries()].map(([title, list]) => `<h3 class="receipt-group">${esc(title)}</h3><div class="receipt-grid">${list.map((e) => `<figure class="receipt-fig"><img data-receipt="${esc(e.receiptId)}" decoding="async" alt="Receipt for ${esc(e.description || lineOf(e).label)}"><figcaption><b>${esc(P.formatDate(e.date))}</b> · ${esc(fmtAmount(e))}<br>${esc(e.description || '')}<br><span class="muted">${esc(S.getLine(e.lineId).label)}</span></figcaption></figure>`).join('')}</div>`).join('')}
+      ${paper.length ? `<h3 class="receipt-group">Paper receipts on file</h3><table class="table-twin"><thead><tr><th>Date</th><th>Payee</th><th>Line</th><th class="num">Amount</th></tr></thead><tbody>${paper.map((e) => `<tr><td>${esc(P.formatDate(e.date, false))}</td><td>${esc(e.description || '')}</td><td>${esc(lineOf(e).label)}</td><td class="num">${esc(moneyCents(e.amount))}</td></tr>`).join('')}</tbody></table>` : ''}
       ${!withPhoto.length && !paper.length ? '<p class="note">No receipts yet. Attach photos from Capture or the ledger, or tick "paper receipt filed" on an entry.</p>' : ''}
     </article>`;
   }
@@ -2419,7 +2471,7 @@
     if (R0.scheduleA.taxes.withheld) out.push(pad('State and local income tax withheld per W-2', moneyCents(R0.scheduleA.taxes.withheld), 60));
     out.push(pad(R0.scheduleA.taxes.withheld ? 'Schedule A entered, including that withholding' : 'Schedule A entered', moneyCents(R0.scheduleA.grossEntered), 60));
     out.push(pad('Counts after floors and caps', moneyCents(R0.scheduleA.total), 60));
-    out.push(pad(`Standard deduction${stdGiftClause(R0.standardDeduction)}`, moneyCents(R0.standardDeduction.total), 60));
+    out.push(pad(`Standard deduction${stdAddedClause(R0.standardDeduction)}`, moneyCents(R0.standardDeduction.total), 60));
     out.push(pad(R0.verdict.itemize ? 'Itemizing wins by' : 'Standard deduction wins by', moneyCents(Math.abs(R0.verdict.difference)), 60));
     if (R0.scheduleC.hasActivity) out.push(pad('Schedule C expenses', moneyCents(R0.scheduleC.total), 60));
     if (R0.adjustments.studentLoanInterest.paid) out.push(pad('Student loan interest (adjustment)', moneyCents(R0.adjustments.studentLoanInterest.deductible), 60));
@@ -2452,7 +2504,7 @@
       <section class="card verdict">
         <div class="verdict-kicker"><span class="pill pill-accent">${closed ? 'Year in review' : 'Year-end forecast'}</span><span class="pill pill-info">${R0.taxYear}</span>${pr.projectedEntries ? `<span class="pill pill-info">${pr.projectedEntries} expected ${pr.projectedEntries === 1 ? 'entry' : 'entries'} still to come</span>` : ''}</div>
         <h2 class="verdict-title">${closed ? (pr.itemize ? 'Itemizing won' : 'The standard deduction won') : (pr.itemize ? 'On pace to itemize' : 'On pace for the standard deduction')}</h2>
-        <div class="hero">${pr.itemize ? `${money(pr.projectedTotal - pr.standardDeduction)} <small>${closed ? 'above' : 'projected above'} the standard deduction</small>` : `${money(pr.gap)} <small>${closed ? 'short' : 'projected short'} of itemizing</small>`}</div>
+        <div class="hero">${pr.itemize ? `${moneyNear(pr.projectedTotal - pr.standardDeduction)} <small>${closed ? 'above' : 'projected above'} the standard deduction</small>` : `${moneyNear(pr.gap)} <small>${closed ? 'short' : 'projected short'} of itemizing</small>`}</div>
         <p class="verdict-note">${closed ? `${money(pr.actual)} counted for ${R0.taxYear} against a ${money(pr.standardDeduction)} standard deduction.` : `${money(pr.actual)} counts so far.${pr.expectedMore > 0 ? ` Recurring payees found in your entries should add about ${money(pr.expectedMore)} by Dec 31, for a projected ${money(pr.projectedTotal)}` : ` Nothing more is expected from recurring payees, so the projection stays at ${money(pr.projectedTotal)}`} against a ${money(pr.standardDeduction)} standard deduction.`}${pr.calibration && pr.calibration.factor !== 1 ? ` The expected part is calibrated ×${pr.calibration.factor} from ${pr.calibration.n} past forecasts.` : ''}${pr.medicalPending ? ' Medical costs are waiting on your AGI in Settings.' : ''}</p>
         <div class="meter" role="img" aria-label="${esc(`${money(pr.actual)} so far, ${money(pr.projectedTotal)} projected, ${money(pr.standardDeduction)} standard deduction`)}">
           <div class="meter-track"><div class="meter-proj" style="width:${pct(pr.projectedTotal)}"></div><div class="meter-fill ${pr.actual > pr.standardDeduction ? 'is-over' : ''}" style="width:${pct(pr.actual)}"></div><div class="meter-marker" style="left:${pct(pr.standardDeduction)}"></div></div>
@@ -2934,12 +2986,14 @@
     // the button removes the examples of every tax year, including any the user has attached a photo to since
     if (samples.length && !(await confirmDialog(`Remove ${samples.length} example ${plural(samples.length, 'entry', 'entries')}?`, `The examples of every tax year go, with the example places and the example trip. ${UNDO_HINT}`, 'Remove', true))) return;
     try {
-      const samplePlaceIds = new Set(state.places.filter((x) => x.sample).map((p) => p.id));
+      const removedPlaces = state.places.filter((x) => x.sample); // kept for the undo batch: the dialog promises the places come back too
+      const samplePlaceIds = new Set(removedPlaces.map((p) => p.id));
       for (const id of samplePlaceIds) await DB.deletePlace(id);
       state.places = state.places.filter((x) => !x.sample);
       // only the log rows left without an entry are removed here; the rest go with their entries below, and come back with them
       const sampleIds = new Set(samples.map((e) => e.id));
-      for (const t of state.trips.filter((x) => x.sample && !sampleIds.has(x.entryId))) await DB.deleteTrip(t.id);
+      const looseTrips = state.trips.filter((x) => x.sample && !sampleIds.has(x.entryId));
+      for (const t of looseTrips) await DB.deleteTrip(t.id);
       state.trips = state.trips.filter((x) => !x.sample || sampleIds.has(x.entryId));
       // a recording of a real drive has nothing to do with the examples: only the places it points at have gone
       if (state.trip) { if (samplePlaceIds.has(state.trip.fromId)) state.trip.fromId = ''; if (samplePlaceIds.has(state.trip.toId)) state.trip.toId = ''; }
@@ -2947,9 +3001,13 @@
       const key = EXP.monthKey(P.todayISO()), year = Number(state.settings.taxYear);
       const emptied = new Set([...new Set(samples.map((e) => Number(e.taxYear)))].filter((y) => !state.entries.some((e) => !e.sample && Number(e.taxYear) === y)));
       const kept = state.snapshots.filter((sn) => !(sn.month === key && sn.taxYear === year) && !emptied.has(Number(sn.taxYear)));
-      if (kept.length !== state.snapshots.length) { state.snapshots = kept; await DB.syncSnapshots(state.snapshots).catch(() => {}); }
+      if (kept.length !== state.snapshots.length) {
+        const known = state.snapshots; // only the rows this tab started from may be deleted: another tab's month must survive
+        state.snapshots = kept;
+        await DB.syncSnapshots(kept, known).catch(() => {});
+      }
       // the same path as any other delete, so an example the user has since made their own can be brought back
-      if (samples.length) await deleteWithUndo(samples); else render();
+      if (samples.length) await deleteWithUndo(samples, { places: removedPlaces, trips: looseTrips }); else render();
     } catch (e) {
       toast(`Could not remove the examples: ${e && e.message ? e.message : 'storage error'}.`, 6000);
       // the rows go one at a time, so what is left is read back rather than guessed at; a live recording is left alone

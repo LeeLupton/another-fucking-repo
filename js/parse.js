@@ -24,6 +24,10 @@
   // A bare integer followed by one of these is a quantity, not a dollar amount.
   // Units of time, distance and weight belong here too: "45 min" and "18 km" are measurements, not money.
   const COUNT_NOUNS = new Set(['bag', 'bags', 'box', 'boxes', 'item', 'items', 'piece', 'pieces', 'session', 'sessions', 'visit', 'visits', 'trip', 'trips', 'night', 'nights', 'day', 'days', 'week', 'weeks', 'month', 'months', 'hour', 'hours', 'people', 'kids', 'ticket', 'tickets', 'pair', 'pairs', 'unit', 'units', 'dose', 'doses', 'pill', 'pills', 'round', 'rounds', 'times', 'x', 'shirts', 'coats', 'shoes', 'books', 'chairs', 'tables', 'toys', 'gallons', 'gal', 'lbs', 'pounds', 'oz', 'pct', 'percent', '%', 'copies', 'pages', 'stamps', 'rolls', 'cans', 'bottles', 'cases', 'packs', 'meals', 'lunches', 'dinners', 'appointments', 'appts', 'prescriptions', 'refills', 'loads', 'cartons', 'min', 'mins', 'minute', 'minutes', 'hr', 'hrs', 'sec', 'secs', 'km', 'kms', 'lb', 'kg', 'yr', 'yrs', 'year', 'years', 'mo', 'mos', 'wk', 'wks', 'pants', 'socks']);
+  // Period words are the one ambiguous case: "3 mo supply" counts months, but "800 mo rent" is a
+  // price per month. Nobody counts a hundred months or years, so a bigger number is read as money.
+  const PERIOD_NOUNS = new Set(['mo', 'mos', 'wk', 'wks', 'yr', 'yrs', 'year', 'years']);
+  const COUNT_MAX = 100;
   // Number words accepted in "two days ago" and the like.
   const WORD_N = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 
@@ -169,11 +173,14 @@
 
     // ---- amount ------------------------------------------------------------
     // A period followed by a space or the end is punctuation ("Lunch 20."), so the lookaheads allow it.
+    // A rate written with a slash ("$800/mo rent") is one payment said another way: the suffix is taken
+    // with the amount so the description reads "Rent". Only period words follow, so a date cannot match.
+    const PER = '\\/(?:mo|month|wk|week|yr|year|day|hr|hour)s?\\b';
     const amountPatterns = [
-      /(^|\s)-?\$\s?(\d[\d,]*(?:\.\d{1,2})?|\.\d{1,2})(?!\.?\d)(?=[\s,.;)]|$)/, // $42.13 / $1,200 / $.50 — never truncates $42.135 or $1.2k
-      /(^|\s)(\d[\d,]*\.\d{1,2})(?=[\s,;)]|\.(?:\s|$)|$)/, // 42.13 / 12.5
+      new RegExp('(^|\\s)-?\\$\\s?(\\d[\\d,]*(?:\\.\\d{1,2})?|\\.\\d{1,2})(?!\\.?\\d)(?:' + PER + ')?(?=[\\s,.;)]|$)'), // $42.13 / $1,200 / $.50 — never truncates $42.135 or $1.2k
+      new RegExp('(^|\\s)(\\d[\\d,]*\\.\\d{1,2})(?:' + PER + ')?(?=[\\s,;)]|\\.(?:\\s|$)|$)'), // 42.13 / 12.5
       /(^|\s)(\d[\d,]*(?:\.\d+)?)\s*(?:dollars|bucks|usd)\b/i, // 40 dollars
-      /(^|\s)(\d[\d,]*)(?=[\s,;)]|\.(?:\s|$)|$)(?!\s*(?:st|nd|rd|th)\b)/g, // bare 40 (skipped when it is clearly a count: "4 bags")
+      new RegExp('(^|\\s)(\\d[\\d,]*)(?:' + PER + ')?(?=[\\s,;)]|\\.(?:\\s|$)|$)(?!\\s*(?:st|nd|rd|th)\\b)', 'g'), // bare 40 (skipped when it is clearly a count: "4 bags")
     ];
     const isBareYear = (str) => /^(19|20)\d{2}$/.test(str);
     // "Dec 2025 property tax": a year that names a bill period is never the amount. Only the word
@@ -188,7 +195,8 @@
         // Only the next word matters, so the remainder is not re-scanned for every candidate.
         const end = m.index + m[0].length;
         const after = (/^\s*(\S+)/.exec(s.slice(end, end + 64)) || [])[1] || '';
-        if (re.global && COUNT_NOUNS.has(after.toLowerCase().replace(/[.,;]+$/, ''))) continue;
+        const unit = after.toLowerCase().replace(/[.,;]+$/, '');
+        if (re.global && COUNT_NOUNS.has(unit) && !(PERIOD_NOUNS.has(unit) && toNumber(m[2]) >= COUNT_MAX)) continue;
         if (re.global && isBareYear(m[2]) && yearCtx.test(prevWord(m))) continue;
         candidates.push(m);
         if (!re.global) break;

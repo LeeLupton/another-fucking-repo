@@ -158,6 +158,10 @@
     { path: 'studentLoanPhaseout.single.end', label: 'Student loan interest phase-out ends', kind: 'usd' },
     { path: 'studentLoanPhaseout.mfj.start', label: 'Student loan interest phase-out starts (joint)', kind: 'usd' },
     { path: 'studentLoanPhaseout.mfj.end', label: 'Student loan interest phase-out ends (joint)', kind: 'usd' },
+    { path: 'educationCreditPhaseout.single.start', label: 'Education credit phase-out starts', kind: 'usd' },
+    { path: 'educationCreditPhaseout.single.end', label: 'Education credit phase-out ends', kind: 'usd' },
+    { path: 'educationCreditPhaseout.mfj.start', label: 'Education credit phase-out starts (joint)', kind: 'usd' },
+    { path: 'educationCreditPhaseout.mfj.end', label: 'Education credit phase-out ends (joint)', kind: 'usd' },
     { path: 'educatorExpenseCap', label: 'Educator classroom-expense deduction', kind: 'usd' },
     { path: 'ltcPremiumLimits.to40', label: 'Long-term-care premium limit — age 40 or under', kind: 'usd' },
     { path: 'ltcPremiumLimits.to50', label: 'Long-term-care premium limit — age 41 to 50', kind: 'usd' },
@@ -197,6 +201,9 @@
     { path: 'pmiPhaseout.default.end', label: 'Mortgage insurance phase-out ends', kind: 'usd' },
     { path: 'pmiPhaseout.mfs.start', label: 'Mortgage insurance phase-out starts (married filing separately)', kind: 'usd' },
     { path: 'pmiPhaseout.mfs.end', label: 'Mortgage insurance phase-out ends (married filing separately)', kind: 'usd' },
+    // A yes/no row: the qualified-disaster window has been reopened by Congress before, and a filer
+    // with a genuinely qualified loss needs a way to say so without waiting for a new release.
+    { path: 'qualifiedDisasterLoss', label: 'Qualified disaster loss treatment is available', kind: 'bool' },
   ];
 
   // ---- helpers -------------------------------------------------------------
@@ -214,8 +221,13 @@
   /** Margins decide the verdict, so print the cents when the whole-dollar figure would read as $0. */
   function moneyNear(n) { return Math.abs(Number(n) || 0) < 1 ? moneyCents(n) : money(n); }
   // Round the decimal figure half up, the way the IRS does, rather than the binary double:
-  // 101 miles at 72.5¢ is 73.225 on paper, and $73.23 on the return.
-  function cents(n) { const x = Number(n) || 0; return Math.round(Math.round(x * 1e6) / 1e4) / 100; }
+  // 101 miles at 72.5¢ is 73.225 on paper, and $73.23 on the return. Halves go away from zero,
+  // as in money(), so a gain and a loss of the same size round to the same figure.
+  function cents(n) {
+    const x = Number(n) || 0;
+    const r = (x < 0 ? -1 : 1) * Math.round(Math.round(Math.abs(x) * 1e6) / 1e4);
+    return r === 0 ? 0 : r / 100;
+  }
   function pct(rate) { const p = rate * 100; return (Number.isInteger(p) ? p : p.toFixed(1).replace(/\.0$/, '')) + '%'; }
   function perMile(rate) { return (rate * 100).toFixed(1).replace(/\.0$/, '') + '¢/mile'; }
   function plural(n, one, many) { return n === 1 ? one : (many || one + 's'); }
@@ -244,14 +256,22 @@
     const y = Number(taxYear);
     let baseYear = y;
     if (!PARAMS[y]) baseYear = y < KNOWN_YEARS[0] ? KNOWN_YEARS[0] : KNOWN_YEARS[KNOWN_YEARS.length - 1];
-    const merged = deepMerge(PARAMS[baseYear], overrides && overrides[y]);
+    // A mid-year rate change belongs to the year it was published for. Carried into a fallback year it
+    // would date every drive from another year's July 1, so drop it and let the January rates stand
+    // until the user enters that year's own figures.
+    const base = baseYear === y ? PARAMS[baseYear] : Object.assign({}, PARAMS[baseYear], { mileageJul: null });
+    const merged = deepMerge(base, overrides && overrides[y]);
     return Object.assign({}, merged, { year: y, baseYear, isFallback: baseYear !== y, hasOverrides: !!(overrides && overrides[y] && Object.keys(overrides[y]).length) });
   }
 
   /** The settings rows that apply to one year: the standing list plus whatever that year actually has. */
   function paramFields(taxYear, overrides) {
     const P = getParams(taxYear, overrides);
-    return PARAM_FIELDS.concat(CONDITIONAL_PARAM_FIELDS.filter((f) => getPath(P, f.path) != null));
+    // In a year with a mid-year change the January rows sit above the July rows, so say which half each governs.
+    const standing = P.mileageJul
+      ? PARAM_FIELDS.map((f) => (f.path.startsWith('mileage.') ? Object.assign({}, f, { label: f.label.replace(' (¢/mile)', ' to June 30 (¢/mile)') }) : f))
+      : PARAM_FIELDS;
+    return standing.concat(CONDITIONAL_PARAM_FIELDS.filter((f) => getPath(P, f.path) != null));
   }
 
   /**
@@ -261,7 +281,8 @@
    */
   function mileageRate(P, key, dateISO) {
     const late = P.mileageJul;
-    const from = late ? (late.from || `${P.baseYear || P.year}-07-01`) : null;
+    // A split entered in Settings carries no date, so it takes effect on July 1 of the year being computed.
+    const from = late ? (late.from || `${P.year}-07-01`) : null;
     if (late && dateISO && String(dateISO) >= from) return Number(late[key]) || 0;
     return (P.mileage && Number(P.mileage[key])) || 0;
   }
@@ -347,7 +368,10 @@
       let dollars = 0, miles = 0, milesValue = 0, count = 0, missingReceipts = 0;
       for (const l of secLines) {
         count += lines[l.id].count; missingReceipts += lines[l.id].missingReceipts;
-        if (l.unit === 'miles') { if (l.treatment !== 'info') { miles += T(l.id); milesValue += valueOf(l); } }
+        // An info line is a note for the preparer, not a deduction: it carries no value here and none
+        // in the month buckets either, so the section total and its monthly bars agree.
+        if (l.treatment === 'info') continue;
+        if (l.unit === 'miles') { miles += T(l.id); milesValue += valueOf(l); }
         else dollars += T(l.id);
       }
       sections[sec.id] = { id: sec.id, title: sec.title, dollars: cents(dollars), miles, milesValue: cents(milesValue), value: cents(dollars + milesValue), count, missingReceipts, months: monthsBySection[sec.id].map(cents) };
@@ -357,23 +381,30 @@
     const medicalLines = Schema.linesForSection('medical');
     // §213(d)(10) caps long-term-care premiums by age, and the cap belongs to each insured person. The age
     // band from Settings sets the taxpayer's own limit; with no band stated only an obviously excessive
-    // figure is trimmed, at the top band. A joint return is allowed the top band again on top, because one
-    // worksheet line cannot tell one spouse's policy from the other's and the spouse's age is not asked for.
+    // figure is trimmed, at the top band. A second limit is added for a spouse's own policy on a joint
+    // return, but only once that spouse's band is given: a couple with one policy is entitled to one limit.
     const ltcPaid = T('med.ltc');
     const ltcLimits = P.ltcPremiumLimits || null;
     const ltcBracket = LTC_BRACKET_BY_ID[s.ltcAgeBracket] || null;
-    const ltcOwnLimit = ltcLimits ? Number(ltcLimits[ltcBracket ? ltcBracket.key : (s.age65 ? 'over70' : 'to70')]) || 0 : null;
-    const ltcBound = ltcLimits ? cents(ltcOwnLimit + (s.filingStatus === 'mfj' ? Number(ltcLimits.over70) || 0 : 0)) : null;
+    const ltcSpouseBracket = s.filingStatus === 'mfj' ? (LTC_BRACKET_BY_ID[s.spouseLtcAgeBracket] || null) : null;
+    const ltcOwnLimit = ltcLimits ? Number(ltcLimits[ltcBracket ? ltcBracket.key : 'over70']) || 0 : null;
+    const ltcSpouseLimit = ltcLimits && ltcSpouseBracket ? Number(ltcLimits[ltcSpouseBracket.key]) || 0 : 0;
+    const ltcBound = ltcLimits ? cents(ltcOwnLimit + ltcSpouseLimit) : null;
     const ltcCounted = ltcBound == null ? ltcPaid : Math.min(ltcPaid, ltcBound);
-    const medGross = cents(medicalLines.reduce((a, l) => a + valueOf(l), 0) - (ltcPaid - ltcCounted));
+    // The medical figure people expect to see is what they logged; the limit shows up in `gross`.
+    const medEntered = cents(medicalLines.reduce((a, l) => a + valueOf(l), 0));
+    const medGross = cents(medEntered - (ltcPaid - ltcCounted));
     const medFloor = agi == null ? null : cents(agi * P.medicalFloorRate);
     const medical = {
+      entered: medEntered,
       gross: medGross,
       ltc: {
         paid: ltcPaid, counted: cents(ltcCounted), excess: cents(ltcPaid - ltcCounted),
         bracket: ltcBracket ? ltcBracket.id : '', bracketLabel: ltcBracket ? ltcBracket.label : null,
-        limit: ltcOwnLimit, bound: ltcBound, limits: ltcLimits,
+        spouseBracket: ltcSpouseBracket ? ltcSpouseBracket.id : '', spouseBracketLabel: ltcSpouseBracket ? ltcSpouseBracket.label : null,
+        limit: ltcOwnLimit, spouseLimit: ltcSpouseLimit, bound: ltcBound, limits: ltcLimits,
         capped: ltcCounted < ltcPaid, pending: !ltcBracket && ltcPaid > 0,
+        spousePending: s.filingStatus === 'mfj' && !ltcSpouseBracket && ltcPaid > 0,
       },
       milesValue: valueOf(Schema.getLine('med.miles')),
       floor: medFloor,
@@ -442,7 +473,8 @@
     const casGross = T('cas.loss');
     // A "qualified disaster loss" (declarations covered by P.L. 118-148 and P.L. 119-21) uses a $500 floor, no AGI reduction,
     // and counts on top of the standard deduction for non-itemizers. Those acts reach declarations made between
-    // January 2020 and September 2025, so a later year cannot use the treatment however the box is set.
+    // January 2020 and September 2025, so a later year cannot use the treatment unless Congress extends the
+    // window again — which is why the year's `qualifiedDisasterLoss` figure is editable in Settings.
     const qualifiedDisaster = P.qualifiedDisasterLoss !== false && !!s.casualtyFederalDisaster && !!s.casualtyQualifiedDisaster;
     const perEvent = qualifiedDisaster ? (P.casualtyQualifiedPerEvent || 500) : P.casualtyPerEvent;
     const casualty = {
@@ -461,7 +493,7 @@
     const scheduleA = { medical, taxes, interest, charity, other, casualty };
     scheduleA.total = cents((medical.deductible || 0) + taxes.deductible + interest.deductible + charity.deductible + other.deductible + casualty.deductible);
     // What the worksheet adds up to before any floor or cap — the number people expect to see.
-    scheduleA.grossEntered = cents(medGross + taxGross + interest.total + charGross + losses + casGross);
+    scheduleA.grossEntered = cents(medEntered + taxGross + interest.total + charGross + losses + casGross);
 
     // ---- standard deduction ----
     const conditions = [];
@@ -607,7 +639,9 @@
     const P = R.params, A = R.scheduleA, SD = R.standardDeduction, V = R.verdict, agi = R.agi;
     const T = (id) => R.lines[id].total;
     const today = s.today ? new Date(s.today + 'T00:00:00') : new Date();
+    // Three cases, not two: a year that has not started still takes the advice for a year you can act on.
     const inYear = today.getFullYear() === R.taxYear;
+    const yearOver = today.getFullYear() > R.taxYear;
     const isMFS0 = R.filingStatus === 'mfs';
     const month = today.getMonth() + 1;
     // What the standard-deduction side of the comparison is made of, when it is more than the table figure.
@@ -620,7 +654,7 @@
     if (R.entries.length === 0) {
       add('info', `Nothing logged for ${R.taxYear} yet`, `Your standard deduction is ${money(SD.total)}. Log expenses as they happen and this page will tell you the moment itemizing starts to pay.`);
     } else if (V.itemize) {
-      add('good', `Itemizing wins by ${moneyNear(V.difference)}`, `Schedule A deductions of ${money(A.total)} beat your ${stdPlus}.${inYear ? ' Every additional dollar you log now lowers your taxable income — keep the receipts.' : ' Keep the receipts with the return.'}${V.agiPending ? ' This assumes the full state-and-local cap and no income-based limits; enter your estimated AGI in Settings to confirm.' : ''}`, V.agiPending ? { view: 'settings' } : undefined);
+      add('good', `Itemizing wins by ${moneyNear(V.difference)}`, `Schedule A deductions of ${money(A.total)} beat your ${stdPlus}.${yearOver ? ' Keep the receipts with the return.' : ' Every additional dollar you log now lowers your taxable income — keep the receipts.'}${V.agiPending ? ' This assumes the full state-and-local cap and no income-based limits; enter your estimated AGI in Settings to confirm.' : ''}`, V.agiPending ? { view: 'settings' } : undefined);
     } else {
       const need = moneyNear(-V.difference);
       let body = `Your itemized deductions come to ${money(A.total)} after floors and caps, against a ${stdPlus}. You would need ${need} more for itemizing to help.`;
@@ -628,7 +662,7 @@
       if (!A.taxes.withheld && !noIncomeTax0 && T('tax.state_income') + T('tax.real_estate') > 0) body += ` State and local income tax withheld from your pay (W-2 boxes 17 and 19) also counts — enter it in Settings.`;
       add('info', 'Standard deduction still wins', body, { view: 'settings' });
       const closeEnough = -V.difference <= Math.max(3000, SD.total * 0.3);
-      if (closeEnough && A.total > 0 && inYear) {
+      if (closeEnough && A.total > 0 && !yearOver) {
         add('act', 'Close to the line — consider bunching', `Paying deductible bills before Dec 31 that you would otherwise pay in January (a property-tax installment, next year's charitable pledge, an elective medical procedure) can push ${R.taxYear} over the standard deduction. Then take the standard deduction the following year. Two years of bunched deductions beat two years of just missing.`);
       } else if (closeEnough && A.total > 0) {
         // The year is over, so this is history: say what happened and where bunching still helps.
@@ -638,9 +672,13 @@
 
     // Medical
     if (A.medical.gross > 0) {
+      // Once a long-term-care premium is trimmed, what was logged and what counts are two figures: name both.
+      const logged = A.medical.ltc.excess > 0
+        ? `${money(A.medical.entered)} logged, ${money(A.medical.gross)} of it after the long-term-care limit`
+        : `${money(A.medical.gross)} logged`;
       if (agi == null) add('act', 'Enter your estimated AGI', `Medical expenses only count above ${pct(P.medicalFloorRate)} of adjusted gross income. Without an AGI, ${money(A.medical.gross)} of medical costs cannot be evaluated and is left out of the itemized total.`, { view: 'settings' });
-      else if (A.medical.deductible === 0) add('info', `Medical costs are under the ${pct(P.medicalFloorRate)} floor`, `${money(A.medical.gross)} logged; the first ${money(A.medical.floor)} (${pct(P.medicalFloorRate)} of ${money(agi)}) never counts. ${A.medical.shortfall === 0 ? 'You are exactly on the floor, so the next dollar of medical spending starts to count' : `Another ${moneyNear(A.medical.shortfall)} of medical spending would start to count`} — dental work, glasses, and after-tax premiums add up faster than people expect.`);
-      else add('good', `${money(A.medical.deductible)} of medical costs count`, `${money(A.medical.gross)} logged, less the ${money(A.medical.floor)} floor (${pct(P.medicalFloorRate)} of AGI).`);
+      else if (A.medical.deductible === 0) add('info', `Medical costs are under the ${pct(P.medicalFloorRate)} floor`, `${logged}; the first ${money(A.medical.floor)} (${pct(P.medicalFloorRate)} of ${money(agi)}) never counts. ${A.medical.shortfall === 0 ? 'You are exactly on the floor, so the next dollar of medical spending starts to count' : `Another ${moneyNear(A.medical.shortfall)} of medical spending would start to count`} — dental work, glasses, and after-tax premiums add up faster than people expect.`);
+      else add('good', `${money(A.medical.deductible)} of medical costs count`, `${logged}, less the ${money(A.medical.floor)} floor (${pct(P.medicalFloorRate)} of AGI).`);
     }
     if (A.medical.gross > 0 && T('med.insurance') === 0) add('info', 'Check for after-tax insurance premiums', 'Medicare Part B/D, marketplace premiums you paid yourself, and dental or vision plans paid after tax all count on the Medical/Dental Insurance line. Premiums withheld pre-tax from a paycheck do not.');
     if (T('med.miles') > 0) add('info', `Medical miles are worth ${money(A.medical.milesValue)}`, `${T('med.miles').toLocaleString()} miles at ${perMileText(P, 'medical')}. Parking and tolls on those trips go under Other Medical Transportation.`);
@@ -648,20 +686,23 @@
     if (LTC && LTC.paid > 0 && LTC.limits) {
       const bands = `${money(LTC.limits.to40)} at age 40 or under, ${money(LTC.limits.to50)} at 41 to 50, ${money(LTC.limits.to60)} at 51 to 60, ${money(LTC.limits.to70)} at 61 to 70, and ${money(LTC.limits.over70)} over 70`;
       const perPerson = `The limit for ${R.taxYear} is ${bands} — per insured person, so a couple who each hold a policy get two limits.`;
+      // A spouse's own policy adds a second limit, and only their band can size it.
+      const spouseAdd = LTC.spouseBracketLabel ? `, plus the limit at age ${LTC.spouseBracketLabel} for your spouse's own policy` : '';
+      const askSpouse = LTC.spousePending ? ' If a second policy insures your spouse, set their age band in Settings as well and it gets its own limit.' : '';
       if (LTC.capped) {
         const held = LTC.bracket
-          ? `${money(LTC.counted)} is counted, which is the ${R.taxYear} limit at age ${LTC.bracketLabel}${R.filingStatus === 'mfj' ? ', plus room for a second policy on your spouse' : ''}`
-          : `${money(LTC.counted)} is counted, which is the most any one insured person of your age can claim in ${R.taxYear}`;
-        add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${held}, so ${money(LTC.excess)} is left out of the medical total. ${perPerson}${LTC.bracket ? '' : ' Tell your preparer the age of each insured person.'}`);
+          ? `${money(LTC.counted)} is counted, which is the ${R.taxYear} limit at age ${LTC.bracketLabel}${spouseAdd}`
+          : `${money(LTC.counted)} is counted, which is the most any one insured person can claim in ${R.taxYear}${spouseAdd}`;
+        add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${held}, so ${money(LTC.excess)} is left out of the medical total. ${perPerson}${LTC.bracket ? '' : ' Tell your preparer the age of each insured person.'}${askSpouse}`, LTC.spousePending ? { view: 'settings' } : undefined);
       }
-      if (LTC.pending) add('act', 'Tell Settings your age band for long-term-care premiums', `The limit on a long-term-care premium is set by your age at the end of the year, and without your age band the worksheet can only hold back what is above the highest limit${LTC.capped ? '' : ', which leaves the whole premium counted'}. ${perPerson} Choose your band under Age & vision in Settings and the right limit is applied.`, { view: 'settings' });
-      else if (!LTC.capped) add('info', 'Long-term-care premiums have an age limit', `All ${money(LTC.paid)} counts: the ${R.taxYear} limit at age ${LTC.bracketLabel} is ${money(LTC.limit)}. The limit is per insured person, so a second policy insuring someone in another band has its own limit — tell your preparer if there is one.`);
+      if (LTC.pending) add('act', 'Tell Settings your age band for long-term-care premiums', `The limit on a long-term-care premium is set by your age at the end of the year, and without your age band the worksheet can only hold back what is above the highest limit${LTC.capped ? '' : ', which leaves the whole premium counted'}. ${perPerson} Choose your band under Age & vision in Settings and the right limit is applied.${askSpouse}`, { view: 'settings' });
+      else if (!LTC.capped) add('info', 'Long-term-care premiums have an age limit', `All ${money(LTC.paid)} counts: the ${R.taxYear} limit at age ${LTC.bracketLabel} is ${money(LTC.limit)}${spouseAdd}. The limit is per insured person, so a second policy insuring someone in another band has its own limit — tell your preparer if there is one.${askSpouse}`);
     }
     if (R.scheduleC.hasActivity && T('med.insurance') > 0) add('act', 'Self-employed? Move health premiums above the line', `With self-employment profit, health, dental, and long-term-care premiums (${money(T('med.insurance') + (LTC ? LTC.counted : T('med.ltc')))}) can be deducted on Schedule 1 with no ${pct(P.medicalFloorRate)} floor — usually far better than Schedule A. The same age limit applies to the long-term-care part. Tell your preparer which it is.`);
 
     // Taxes
     if (A.taxes.withheld > 0) add('info', `${money(A.taxes.withheld)} of state tax withholding is counted`, 'Income tax withheld from your pay (W-2 boxes 17 and 19) counts toward the state-and-local deduction alongside the payments you log here.');
-    if (A.taxes.excess > 0) add('warn', 'State and local taxes hit the cap', `${money(A.taxes.gross)} ${A.taxes.withheld > 0 ? 'logged and withheld' : 'logged'} but only ${money(A.taxes.cap)} can be deducted${A.taxes.phasedOut ? ' (the cap is reduced at your income level)' : ''}. ${money(A.taxes.excess)} will not count${inYear ? ' — there is no reason to prepay more this year' : ''}.`);
+    if (A.taxes.excess > 0) add('warn', 'State and local taxes hit the cap', `${money(A.taxes.gross)} ${A.taxes.withheld > 0 ? 'logged and withheld' : 'logged'} but only ${money(A.taxes.cap)} can be deducted${A.taxes.phasedOut ? ' (the cap is reduced at your income level)' : ''}. ${money(A.taxes.excess)} will not count${yearOver ? '' : ` — there is no reason to prepay more for ${R.taxYear}`}.`);
     if (T('tax.personal_property') > 0) add('info', 'Only the value-based part of vehicle fees counts', 'Personal property tax must be based on the item\'s value (ad valorem). Flat registration or plate fees are not deductible — check the registration notice for the breakdown.');
     if (T('int.mortgage') > 0 && T('tax.real_estate') === 0) add('act', 'Mortgage interest logged but no property tax', 'If your lender pays property tax from escrow, the amount disbursed is on Form 1098 box 10 or your annual escrow statement — it belongs on the Real Estate Tax line.', { view: 'capture' });
     const noIncomeTax = NO_INCOME_TAX_STATES.has(R.state || '');
@@ -724,7 +765,8 @@
     if (R.credits.tuition > 0 && R.filingStatus === 'mfs') add('warn', 'Education credits are not allowed when married filing separately', `The American Opportunity and Lifetime Learning credits require a joint return for married couples, so ${money(R.credits.tuition)} of tuition earns no credit on a separate return. Filing jointly may be worth more than the separate returns — ask your preparer.`);
     else if (R.credits.tuition > 0) {
       const range = R.credits.educationCreditRange;
-      const band = range ? `${money(range.start)} and ${money(range.end)} of income (${money(P.educationCreditPhaseout.mfj.start)} to ${money(P.educationCreditPhaseout.mfj.end)} on a joint return)` : '';
+      // On a joint return `range` is already the joint one, so the aside would repeat the same two figures.
+      const band = range ? `${money(range.start)} and ${money(range.end)} of income${R.filingStatus === 'mfj' ? '' : ` (${money(P.educationCreditPhaseout.mfj.start)} to ${money(P.educationCreditPhaseout.mfj.end)} on a joint return)`}` : '';
       if (R.credits.educationCreditPhase === 'out') add('warn', 'Income is above the education-credit phase-out', `At ${money(agi)} of AGI both the American Opportunity and Lifetime Learning credits are fully phased out, so ${money(R.credits.tuition)} of tuition earns no credit on your return. It can still matter: a tax-free 529 withdrawal, employer tuition assistance, a state credit, or the student's own return if they are no longer your dependent. Ask your preparer.`);
       else if (R.credits.educationCreditPhase === 'partial') add('info', 'Education credits are partly phased out', `At ${money(agi)} of AGI the American Opportunity and Lifetime Learning credits are reduced; they phase out between ${band}. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged) so your preparer can work out what is left.`);
       else add('good', 'Tuition may qualify for an education credit', `The American Opportunity Credit (up to $2,500 per student, first four years) or Lifetime Learning Credit (up to $2,000) is usually worth far more than a deduction. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged).${R.credits.educationCreditPhase === 'unchecked' && range ? ` The credits phase out between ${band} — enter your estimated AGI in Settings to check.` : ''}`, R.credits.educationCreditPhase === 'unchecked' ? { view: 'settings' } : undefined);

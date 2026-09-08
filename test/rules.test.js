@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Rules = require('../js/rules.js');
+const Classify = require('../js/classify.js');
 
 const E = (date, lineId, amount, extra) => Object.assign({ id: `${lineId}-${date}-${amount}`, date, lineId, amount, hasReceipt: true }, extra || {});
 const base = { taxYear: 2026, filingStatus: 'single', agi: 80000, today: '2026-09-02' };
@@ -145,8 +146,12 @@ test('Schedule C: meals at 50%, vehicle method conflict, business-use share', ()
 });
 
 test('a miscellaneous business expense is not a car expense: miles alone raise no method conflict', () => {
-  const r = Rules.compute([E('2025-03-10', 'se.miles', 1000), E('2025-03-10', 'se.other', 12)], { ...base, taxYear: 2025, agi: 50000 });
+  // through the classifier, because the line the parking receipt lands on is what decides the conflict
+  const parking = Classify.classify('12 parking for work').suggestions[0].lineId;
+  assert.equal(parking, 'se.other');
+  const r = Rules.compute([E('2025-03-10', 'se.miles', 1000), E('2025-03-10', parking, 12)], { ...base, taxYear: 2025, agi: 50000 });
   assert.equal(r.scheduleC.total, 712);
+  assert.equal(r.scheduleC.vehicle.actual, 0);
   assert.equal(r.scheduleC.vehicle.methodConflict, false);
   assert.ok(r.insights.every((i) => !/Pick one vehicle method/.test(i.title)), 'no vehicle-method warning');
 });

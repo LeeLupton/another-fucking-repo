@@ -7,8 +7,9 @@ const vm = require('node:vm');
 // app.js is an IIFE over `document`, so the pieces under test are lifted out of the source and run against stubs.
 const SRC = fs.readFileSync(path.join(__dirname, '../js/app.js'), 'utf8');
 function fn(name) {
-  const at = SRC.indexOf(`\n  function ${name}(`);
-  assert.ok(at !== -1, `function ${name} not found in app.js`);
+  // an async function is lifted the same way: the body still starts at the first brace
+  const at = [`\n  function ${name}(`, `\n  async function ${name}(`].map((s) => SRC.indexOf(s)).find((i) => i !== -1);
+  assert.ok(at !== undefined, `function ${name} not found in app.js`);
   let depth = 0, i = SRC.indexOf('{', at);
   for (; i < SRC.length; i++) {
     if (SRC[i] === '{') depth++;
@@ -224,7 +225,7 @@ test('a drive is dated by the local calendar, not by UTC', () => {
   try {
     const ctx = load([fn('isoFromEpoch')], {});
     assert.equal(ctx.isoFromEpoch(Date.parse('2025-12-31T20:00:00-05:00')), '2025-12-31');
-    assert.equal(ctx.isoFromEpoch(Date.parse('2026-11-03T08:00:00-05:00')), '2026-11-03');
+    assert.equal(ctx.isoFromEpoch(Date.parse('2026-11-03T21:30:00-05:00')), '2026-11-03'); // 02:30 the next day in UTC
   } finally {
     if (wasTZ === undefined) delete process.env.TZ; else process.env.TZ = wasTZ;
   }
@@ -336,16 +337,18 @@ test('the hint for an amount below nought says a refund is not an expense', () =
   assert.equal(ctx.amountProblem('1e400', 'an amount', 'never mind'), 'enter a figure below a billion');
 });
 
-test('a mileage line shows both rates in a year the IRS changed them, and cash gifts are named on the standard deduction', () => {
+test('a mileage line shows both rates in a year the IRS changed them, and the standard deduction names what was added to it', () => {
   const Rules = require(path.join(__dirname, '../js/rules.js'));
-  const ctx = load([line(/^  const money = R\.money.*$/m), line(/^  const rateShort = .*$/m), line(/^  const rateShortFor = .*$/m), line(/^  const stdGiftClause = .*$/m)], { R: Rules });
+  const ctx = load([line(/^  const money = R\.money.*$/m), line(/^  const rateShort = .*$/m), line(/^  const rateShortFor = .*$/m), fn('stdAddedClause')], { R: Rules });
   assert.equal(run(ctx, 'rateShortFor(R.getParams(2025, {}), "medical")'), '21¢/mi');
   assert.equal(run(ctx, 'rateShortFor(R.getParams(2024, {}), "business")'), '67¢/mi');
   assert.equal(run(ctx, 'rateShortFor(R.getParams(2026, {}), "business")'), '72.5¢/mi to Jun 30, 76¢/mi from Jul 1');
   assert.equal(run(ctx, 'rateShortFor(R.getParams(2026, {}), "charity")'), '14¢/mi'); // the charity rate is fixed by statute: it did not change in July
-  assert.equal(run(ctx, 'stdGiftClause({ charity: 0 })'), '');
-  assert.equal(run(ctx, 'stdGiftClause(null)'), '');
-  assert.equal(run(ctx, 'stdGiftClause({ charity: 1000 })'), ', including $1,000.00 of cash gifts');
+  assert.equal(run(ctx, 'stdAddedClause({ charity: 0 })'), '');
+  assert.equal(run(ctx, 'stdAddedClause(null)'), '');
+  assert.equal(run(ctx, 'stdAddedClause({ charity: 1000 })'), ', including $1,000.00 of cash gifts');
+  assert.equal(run(ctx, 'stdAddedClause({ charity: 0, disasterLoss: 49500 })'), ', including $49,500.00 of qualified disaster loss');
+  assert.equal(run(ctx, 'stdAddedClause({ charity: 1000, disasterLoss: 49500 })'), ', including $49,500.00 of qualified disaster loss and $1,000.00 of cash gifts');
 });
 
 test('the calendar file gives the estimated-tax dates the Advisor gives, rolled off weekends and holidays', () => {
@@ -374,4 +377,203 @@ test('the calendar file gives the estimated-tax dates the Advisor gives, rolled 
   // nothing self-employed and no state income tax logged: no estimated payments are named at all
   state.computed.scheduleC.hasActivity = false;
   assert.doesNotMatch(ctx.icsText(), /20290417/);
+});
+
+test('miles typed over a recorded drive keep the track, so the drive is not thrown away on a keystroke', () => {
+  const T = { method: 'gps', miles: '12.4', recordedMiles: 12.4, points: [{ lat: 35.7, lon: -78.8 }, { lat: 35.8, lon: -78.9 }], startedAt: 1700000000000, endedAt: 1700003600000, oneWay: null, roundTrip: false, result: 'Recorded 12.4 mi' };
+  const ctx = load([fn('retypeMiles'), fn('hasUnsavedWork')], { G: { roundMiles: (n) => Math.round(n * 10) / 10 }, state: { trip: T, recorder: null, capture: null } });
+  assert.equal(ctx.retypeMiles(T), false, 'the figure the recorder itself produced is not a hand edit');
+  T.miles = '1'; // the first keystroke of a correction
+  assert.equal(ctx.retypeMiles(T), true);
+  assert.equal(T.method, 'manual');
+  assert.equal(T.recordedMiles, null);
+  assert.equal(T.points.length, 2);
+  assert.equal(T.startedAt, 1700000000000);
+  assert.equal(T.endedAt, 1700003600000);
+  assert.equal(ctx.hasUnsavedWork(), true); // the guard before a year switch still has a drive to ask about
+  const road = { method: 'road', miles: '24', oneWay: 12, roundTrip: true, points: null, recordedMiles: null, result: '12 mi by road' };
+  assert.equal(ctx.retypeMiles(road), false, 'doubling a measured distance for the round trip is not a hand edit');
+  road.miles = '25';
+  assert.equal(ctx.retypeMiles(road), true);
+  assert.equal(road.method, 'manual');
+  assert.equal(road.oneWay, null);
+  assert.equal(road.result, '');
+});
+
+test('the checkpoint of a drive the app was closed on survives start-up, and goes when a recorder is really discarded', () => {
+  const store = new Map([['itemizer:recording', JSON.stringify({ points: [{ lat: 1, lon: 2 }], state: 'idle' })]]);
+  const ctx = load([line(/^  const RECORDING_KEY = .*$/m), fn('clearRecordingCheckpoint'), fn('warnBeforeLeaving'), fn('discardRecorder')], {
+    state: { recorder: null, recorderTimer: null },
+    localStorage: { removeItem: (k) => store.delete(k) },
+    clearInterval: () => {},
+    window: { removeEventListener: () => {} },
+  });
+  ctx.discardRecorder(); // start-up: reloadState throws away a recorder that was never there
+  assert.equal(store.has('itemizer:recording'), true);
+  ctx.state.recorder = { state: 'idle', stop() {} };
+  ctx.discardRecorder();
+  assert.equal(store.has('itemizer:recording'), false);
+  assert.equal(ctx.state.recorder, null);
+});
+
+test('the ledger lists, filters and searches a row whose worksheet line the schema no longer has', () => {
+  const entries = [
+    { id: 'e1', date: '2026-03-01', lineId: 'med.dental', description: 'City Clinic', note: '', amount: 120 },
+    { id: 'e2', date: '2026-04-01', lineId: 'med.gone', description: 'Row from a newer version', note: '', amount: 90 },
+  ];
+  const L = { filter: 'all', section: '', from: '', to: '', q: '' };
+  const ctx = load([line(/^  const foldText = .*$/m), fn('searchMatch'), line(/^  const lineOf = .*$/m), fn('ledgerList')], {
+    state: { ledger: L },
+    S: { getLine: (id) => (id === 'med.dental' ? { label: 'Doctors and dentists', sectionId: 'medical', sectionTitle: 'Medical and Dental Expenses', unit: 'usd', treatment: 'schedA' } : null) },
+    yearEntries: () => entries,
+    fmtAmount: (e) => `$${e.amount}`,
+  });
+  const F = { noReceipt: new Set(), noAck: new Set(), dupeIds: new Set() };
+  assert.deepEqual(ctx.ledgerList(F).map((e) => e.id), ['e2', 'e1']);
+  L.q = 'clinic';
+  assert.deepEqual(ctx.ledgerList(F).map((e) => e.id), ['e1']);
+  L.q = 'unrecognised'; // the row is searchable by the stand-in title it is shown under
+  assert.deepEqual(ctx.ledgerList(F).map((e) => e.id), ['e2']);
+  L.q = '';
+  L.section = 'medical';
+  assert.deepEqual(ctx.ledgerList(F).map((e) => e.id), ['e1']);
+});
+
+test('removing the examples hands the places and the loose trips to Undo, and leaves another tab\'s forecast alone', async () => {
+  const deleted = { places: [], trips: [] };
+  const synced = [];
+  let undo = null;
+  const ctx = load([line(/^  const UNDO_HINT = .*$/m), fn('removeSampleData')], {
+    state: {
+      entries: [{ id: 'e1', taxYear: 2026, sample: true }, { id: 'e2', taxYear: 2026, sample: false }],
+      places: [{ id: 'p1', name: 'Dr. Patel', sample: true }, { id: 'p2', name: 'Home', sample: false }],
+      trips: [{ id: 't1', entryId: 'e1', sample: true }, { id: 't2', entryId: null, sample: true }],
+      snapshots: [{ id: 's-2026-09', month: '2026-09', taxYear: 2026 }, { id: 's-2026-08', month: '2026-08', taxYear: 2026 }],
+      settings: { taxYear: 2026 },
+      trip: null,
+    },
+    DB: {
+      deletePlace: async (id) => { deleted.places.push(id); },
+      deleteTrip: async (id) => { deleted.trips.push(id); },
+      syncSnapshots: async (rows, known) => { synced.push({ rows, known }); },
+    },
+    EXP: { monthKey: () => '2026-09' },
+    P: { todayISO: () => '2026-09-08' },
+    confirmDialog: async () => true,
+    plural: (n, one, many) => (n === 1 ? one : many),
+    deleteWithUndo: async (entries, also) => { undo = { entries, also }; },
+    render: () => {},
+    toast: () => {},
+  });
+
+  await ctx.removeSampleData();
+  assert.deepEqual(deleted.places, ['p1']);
+  assert.deepEqual(deleted.trips, ['t2']); // t1 goes with its entry, and comes back with it
+  assert.deepEqual(undo.entries.map((e) => e.id), ['e1']);
+  assert.deepEqual(undo.also.places.map((p) => p.id), ['p1']);
+  assert.deepEqual(undo.also.trips.map((t) => t.id), ['t2']);
+  assert.equal(synced.length, 1);
+  assert.deepEqual(synced[0].rows.map((r) => r.id), ['s-2026-08']);
+  // the scope of the sync: a month another tab wrote is not among the rows this tab knew, so it is not deleted
+  assert.deepEqual(synced[0].known.map((r) => r.id), ['s-2026-09', 's-2026-08']);
+});
+
+test('Undo after "remove the examples" puts the places and the loose trips back too', async () => {
+  const put = { entries: [], places: [], trips: [] };
+  let action = null;
+  const ctx = load([line(/^  let pendingUndo = .*$/m), fn('restoreDeleted'), fn('deleteWithUndo')], {
+    state: { entries: [{ id: 'e1', description: 'Example' }], places: [], trips: [{ id: 't1', entryId: 'e1' }] },
+    DB: {
+      getReceipt: async () => null,
+      deleteEntries: async () => [{ id: 't1', entryId: 'e1' }],
+      putEntries: async (rows) => { put.entries.push(...rows); },
+      putPlace: async (p) => { put.places.push(p); },
+      putTrip: async (t) => { put.trips.push(t); },
+      putReceipt: async () => {},
+    },
+    dropReceiptURL: () => {},
+    lineOf: () => ({ label: 'Doctors and dentists' }),
+    render: () => {},
+    toast: (msg, ms, act) => { action = act; },
+  });
+
+  const place = { id: 'p1', name: 'Dr. Patel', sample: true };
+  const loose = { id: 't2', entryId: null, sample: true };
+  await ctx.deleteWithUndo([{ id: 'e1', description: 'Example' }], { places: [place], trips: [loose] });
+  assert.deepEqual(ctx.state.entries, []);
+  await action.onClick();
+  assert.deepEqual(put.entries.map((e) => e.id), ['e1']);
+  assert.deepEqual(put.places, [place]);
+  assert.deepEqual(ctx.state.places, [place]);
+  assert.deepEqual(put.trips.map((t) => t.id), ['t1', 't2']);
+});
+
+test('the standard deduction says what has been added to it, a disaster loss included', () => {
+  const Rules = require(path.join(__dirname, '../js/rules.js'));
+  const ctx = load([line(/^  const money = R\.money.*$/m), line(/^  const esc = .*$/m), fn('stdIncludes')], { R: Rules });
+  assert.equal(ctx.stdIncludes({ conditions: [], disasterLoss: 0, charity: 0 }), '');
+  assert.equal(ctx.stdIncludes({ conditions: [], additional: 0, disasterLoss: 49500, charity: 0 }), ' (includes $49,500 of qualified disaster loss, which counts without itemizing)');
+  assert.equal(ctx.stdIncludes({ conditions: ['you are 65 or older'], additional: 2050, disasterLoss: 0, charity: 0 }), ' (includes $2,050 because you are 65 or older)');
+  assert.equal(
+    ctx.stdIncludes({ conditions: ['you are 65 or older'], additional: 2050, disasterLoss: 49500, charity: 1000, charityCap: 1000 }),
+    ' (includes $2,050 because you are 65 or older; $49,500 of qualified disaster loss, which counts without itemizing; $1,000 of cash gifts, which count without itemizing up to $1,000)'
+  );
+});
+
+test('the verdict hero prints the cents when the whole-dollar figure would read as $0', () => {
+  const Rules = require(path.join(__dirname, '../js/rules.js'));
+  const src = [line(/^  const money = R\.money.*$/m), line(/^    const hero = V\.itemize .*$/m)];
+  const wins = load(src, { R: Rules, V: { itemize: true, difference: 0.4 } });
+  assert.equal(run(wins, 'hero'), '$0.40 <small>above the standard deduction</small>');
+  const short = load(src, { R: Rules, V: { itemize: false, difference: -0.4 } });
+  assert.equal(run(short, 'hero'), '$0.40 <small>more to make itemizing pay</small>');
+  const clear = load(src, { R: Rules, V: { itemize: true, difference: 1240.5 } });
+  assert.equal(run(clear, 'hero'), '$1,241 <small>above the standard deduction</small>');
+});
+
+test('the tax year switch says whether the year really moved', async () => {
+  const base = () => ({
+    state: { settings: { taxYear: 2026, taxYearPickedAt: '' }, trip: {}, ledger: { selected: new Set(), selectMode: false } },
+    $: () => null,
+    P: { todayISO: () => '2026-09-08' },
+    discardCapture: () => {}, discardRecorder: () => {}, clearLedgerSelection: () => {}, render: () => {}, toast: () => {},
+  });
+  const moved = load([fn('setTaxYear')], Object.assign(base(), { confirmDiscardWork: async () => true, DB: { updateSettings: async (patch) => patch } }));
+  assert.equal(await moved.setTaxYear(2025), true);
+  assert.equal(moved.state.settings.taxYear, 2025);
+
+  const declined = load([fn('setTaxYear')], Object.assign(base(), { confirmDiscardWork: async () => false, DB: { updateSettings: async () => { throw new Error('must not be written'); } } }));
+  assert.equal(await declined.setTaxYear(2025), false);
+  assert.equal(declined.state.settings.taxYear, 2026);
+
+  const failed = load([fn('setTaxYear')], Object.assign(base(), { confirmDiscardWork: async () => true, DB: { updateSettings: async () => { throw new Error('storage error'); } } }));
+  assert.equal(await failed.setTaxYear(2025), false);
+  assert.equal(failed.state.settings.taxYear, 2026);
+});
+
+test('prefilling asks before it replaces a capture, and releases the photo it drops', async () => {
+  const revoked = [];
+  const base = () => ({
+    state: { view: 'capture', captureMode: 'expense', settings: { taxYear: 2026 }, capture: { receiptURL: 'blob:one', receiptBlob: {}, dirty: true, pinned: new Set() } },
+    P: { todayISO: () => '2026-09-08' },
+    S: { isMiles: () => false },
+    URL: { revokeObjectURL: (u) => revoked.push(u) },
+    $: () => null,
+    window: { scrollTo: () => {} },
+    todayInYear: () => '2026-09-08', reclassify: () => {}, renderCapture: () => {}, go: () => {}, toast: () => {},
+  });
+  const sources = [fn('discardCapture'), fn('freshCapture'), fn('prefillCapture')];
+
+  const kept = load(sources, Object.assign(base(), { confirmDiscardWork: async () => false }));
+  const before = kept.state.capture;
+  assert.equal(await kept.prefillCapture({ lineId: 'ch.noncash', amount: 40, description: 'Donated goods' }), false);
+  assert.equal(kept.state.capture, before); // the typing and the photo are still on screen
+  assert.deepEqual(revoked, []);
+
+  const replaced = load(sources, Object.assign(base(), { confirmDiscardWork: async () => true }));
+  assert.equal(await replaced.prefillCapture({ lineId: 'ch.noncash', amount: 40, description: 'Donated goods' }), true);
+  assert.deepEqual(revoked, ['blob:one']);
+  assert.equal(replaced.state.capture.amount, '40');
+  assert.equal(replaced.state.capture.description, 'Donated goods');
+  assert.equal(replaced.state.capture.receiptBlob, null);
 });
