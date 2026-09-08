@@ -40,6 +40,28 @@
   // State estimated payments follow the IRS calendar, not a fixed interval.
   const ESTIMATED = { id: 'estimated', label: 'each estimated-tax deadline', days: 91.3, tol: 20, min: 3, perYear: 4 };
   const ESTIMATED_DEADLINES = ['01-15', '04-15', '06-15', '09-15'];
+  /**
+   * The day an estimated-tax payment is actually due. The IRS moves a due date that falls on a
+   * Saturday, Sunday or legal holiday to the next business day, and only two holidays can meet
+   * these dates: Martin Luther King Day (the third Monday in January) and Emancipation Day in
+   * Washington DC (April 16, kept on the Friday before when it falls on a Saturday and the Monday
+   * after when it falls on a Sunday). UTC throughout, so the answer never depends on the reader's
+   * time zone.
+   */
+  function dueDate(year, monthDay) {
+    const utcIso = (d) => d.toISOString().slice(0, 10);
+    const jan1 = new Date(Date.UTC(year, 0, 1)).getUTCDay();
+    const holidays = new Set([`${year}-01-${String(1 + ((8 - jan1) % 7) + 14).padStart(2, '0')}`]);
+    const apr16 = new Date(Date.UTC(year, 3, 16)).getUTCDay();
+    holidays.add(apr16 === 6 ? `${year}-04-15` : apr16 === 0 ? `${year}-04-17` : `${year}-04-16`);
+    let d = new Date(`${year}-${monthDay}T00:00:00Z`);
+    for (let i = 0; i < 7; i++) {
+      const day = d.getUTCDay();
+      if (day !== 0 && day !== 6 && !holidays.has(utcIso(d))) break;
+      d = new Date(d.getTime() + DAY);
+    }
+    return utcIso(d);
+  }
   const MONTHS_PER = { monthly: 1, quarterly: 3, semiannual: 6, annual: 12 };
   const VISIT_LINES = ['med.doctor', 'med.dental', 'med.therapy', 'med.lab', 'med.hospital', 'med.operations', 'med.glasses', 'med.dentures', 'med.hearing'];
   const STATUS_ORDER = { overdue: 0, due: 1, upcoming: 2, lapsed: 3 };
@@ -79,8 +101,9 @@
   /** The next estimated-tax deadline strictly after a date (Sep 15 rolls to Jan 15 of the next year). */
   function nextDeadline(iso) {
     const y = Number(iso.slice(0, 4));
-    for (const md of ESTIMATED_DEADLINES) { const d = `${y}-${md}`; if (d > iso) return d; }
-    return `${y + 1}-${ESTIMATED_DEADLINES[0]}`;
+    // compare against the calendar 15th, which is what a payment is measured from, but hand back the day it is actually due
+    for (const md of ESTIMATED_DEADLINES) { const d = `${y}-${md}`; if (d > iso) return dueDate(y, md); }
+    return dueDate(y + 1, ESTIMATED_DEADLINES[0]);
   }
   /** The estimated-tax deadline a payment on this date satisfies, or null: quarterly payments are often made early. */
   function nearestDeadline(iso) {
@@ -318,10 +341,13 @@
         for (const e of missing.slice(0, 2)) {
           if (pairCount++ >= 3) break;
           const yl = Schema.getLine(y);
+          const xl = Schema.getLine(x);
+          // an old entry can carry a line the schema no longer has, and a pair with no label to show is no advice
+          if (!yl || !xl) continue;
           const yTypical = median(entries.filter((z) => z.lineId === y).map((z) => Number(z.amount) || 0));
           recs.push({
             id: `pair:${e.id}:${y}`, kind: 'log', priority: 35,
-            title: `${Schema.getLine(x).label} on ${fmtDate(e.date)} usually comes with ${yl.label}`,
+            title: `${xl.label} on ${fmtDate(e.date)} usually comes with ${yl.label}`,
             body: `On ${dates.size} dates you logged both lines together; that day has nothing on the ${yl.label} line.`,
             because: 'a pattern in your own entries',
             action: { type: 'prefill', entry: { description: '', lineId: y, amount: yTypical || '', date: e.date } },
@@ -337,19 +363,21 @@
     const medByKey = new Map();
     for (const [k, arr] of amountsByKey) if (arr.length >= 4) medByKey.set(k, median(arr));
     for (const e of yearEntries) {
+      const el = Schema.getLine(e.lineId);
+      if (!el) continue;
       const kk = keyOf(e);
       const amounts = amountsByKey.get(kk);
       if (!amounts || amounts.length < 4) continue;
       const med = medByKey.get(kk), amt = Number(e.amount) || 0;
       // entries with no description are one pool per line, not one payee: demand a much clearer outlier and say so
       const dk = Classify.keyFor(e.description || '');
-      const undescribed = !dk || dk === Classify.keyFor(Schema.getLine(e.lineId).label);
+      const undescribed = !dk || dk === Classify.keyFor(el.label);
       const outlier = undescribed ? (amounts.length >= 6 && amt > 5 * med && amt - med > 50) : (amt > 3 * med && amt - med > 50);
       if (outlier) recs.push({
         id: `anomaly:${e.id}`, kind: 'check', priority: 45,
-        title: `${e.description || Schema.getLine(e.lineId).label} for ${fmtValue(e.lineId, amt)} is far above its usual ${fmtValue(e.lineId, med)}`,
+        title: `${e.description || el.label} for ${fmtValue(e.lineId, amt)} is far above its usual ${fmtValue(e.lineId, med)}`,
         body: undescribed ? 'Worth a second look against the other entries on this line. If it is right, dismiss this.' : 'Worth a second look; a missing decimal point is the usual cause. If it is right, dismiss this.',
-        because: undescribed ? `${amounts.length} undescribed entries on the ${Schema.getLine(e.lineId).label} line` : `${amounts.length} entries for the same payee`,
+        because: undescribed ? `${amounts.length} undescribed entries on the ${el.label} line` : `${amounts.length} entries for the same payee`,
         action: { type: 'edit', entryId: e.id },
       });
     }
@@ -518,5 +546,5 @@
     return { recommendations: recommendations.slice(0, 12), dismissed, recurrences, projection, habits, aggregate: aggregateProfile(computed, habits, recurrences, today) };
   }
 
-  return { analyze, detectRecurrences, aggregateProfile, addMonths, CADENCES, DISMISS_DAYS, VISIT_LINES };
+  return { analyze, detectRecurrences, aggregateProfile, addMonths, dueDate, CADENCES, DISMISS_DAYS, VISIT_LINES };
 });

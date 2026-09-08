@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- Everything the app needs comes from this origin, so an escaping slip in a description or a receipt name cannot run as script. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-vycPWbrWRbbhkqfQXcas65F16u+t1feGSrUduqnTq4k='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-bkTmqRzDO/pzZcBfCeD3fLznUX+c5mLbeJhDPEdZQZ4='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Itemizer</title>
 <meta name="description" content="Keep track of deductible expenses through the year, know the moment itemizing beats the standard deduction, and hand your preparer a filled-in worksheet.">
@@ -190,7 +190,9 @@ img { max-width: 100%; display: block; }
 /* ---- components ---- */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.card-head h2, .card-head h3 { line-height: 1.2; }
+/* min-width:0 drops the flex item's min-content floor and overflow-wrap lets a long space-free heading
+   (an imported file name such as Chase1234_Activity20250101_20251231.CSV) wrap instead of widening the page. */
+.card-head h2, .card-head h3 { min-width: 0; overflow-wrap: anywhere; line-height: 1.2; }
 .eyebrow { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-weight: 600; line-height: 1.2; }
@@ -674,7 +676,9 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   // Treatments — how a line enters the return.
   const TREATMENTS = {
-    'A-medical':  { schedule: 'Schedule A', label: 'Medical (above 7.5% of AGI)' },
+    // No figures in these labels: the floors and caps behind them are editable in Settings and change by
+    // year, so the app quotes the rate in force rather than the one that was true when this was written.
+    'A-medical':  { schedule: 'Schedule A', label: 'Medical (above the AGI floor)' },
     'A-tax':      { schedule: 'Schedule A', label: 'State & local taxes (capped)' },
     'A-interest': { schedule: 'Schedule A', label: 'Interest you paid' },
     'A-charity':  { schedule: 'Schedule A', label: 'Gifts to charity' },
@@ -698,7 +702,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         { id: 'med.operations', label: 'Operations', keywords: ['surgery', 'surgeon', 'operation', 'surgical', 'procedure', 'anesthesia', 'anesthesiologist', 'outpatient surgery'] },
         { id: 'med.prescriptions', label: 'Prescription Drugs', keywords: ['prescription', 'prescriptions', 'rx', 'pharmacy', 'cvs', 'walgreens', 'rite aid', 'medication', 'meds', 'insulin', 'refill', 'goodrx', 'express scripts', 'optumrx', 'caremark'] },
         { id: 'med.insurance', label: 'Medical/Dental Insurance', hint: 'After-tax premiums only. Premiums taken pre-tax from a paycheck are already excluded from income and cannot be deducted again. Medicare Part B/D premiums count.', keywords: ['health insurance', 'health insurance premium', 'medical insurance', 'medical premium', 'health premium', 'dental insurance', 'dental premium', 'vision insurance', 'delta dental', 'blue cross', 'bcbs', 'aetna', 'cigna', 'unitedhealthcare', 'united healthcare', 'kaiser', 'humana', 'anthem', 'tricare', 'fehb', 'medicare part b', 'medicare part d', 'medicare premium', 'medigap', 'cobra'] },
-        { id: 'med.ltc', label: 'Long-term Care Insurance', hint: 'Deductible only up to an annual limit that depends on your age at the end of the year. This worksheet counts the whole premium, so tell your preparer your age and let them apply the limit.', keywords: ['long-term care', 'long term care', 'ltc', 'ltci', 'genworth', 'fltcip'] },
+        { id: 'med.ltc', label: 'Long-term Care Insurance', hint: 'Deductible only up to an annual limit set by your age at the end of the year. There are five age bands, and the limit belongs to each insured person, so on a joint return each spouse\'s policy has its own. This worksheet holds back only an amount above the highest limit, so tell your preparer the age of everyone insured and let them apply the right limit to each policy.', keywords: ['long-term care', 'long term care', 'ltc', 'ltci', 'genworth', 'fltcip'] },
         { id: 'med.hospital', label: 'Hospital & Emergency', keywords: ['hospital', 'emergency room', 'emergency dept', 'emergency department', 'er visit', 'er', 'inpatient', 'hospital admission', 'trauma', 'medical center', 'health system'] },
         { id: 'med.lab', label: 'Lab & X-Ray', keywords: ['lab', 'labs', 'labcorp', 'quest diagnostics', 'x-ray', 'xray', 'mri', 'ct scan', 'imaging', 'ultrasound', 'blood test', 'bloodwork', 'radiology', 'mammogram', 'biopsy', 'colonoscopy', 'ekg', 'echocardiogram'] },
         { id: 'med.nurses', label: 'Visiting Nurses/In-home Care', keywords: ['nurse', 'nursing', 'home health', 'in-home care', 'in home care', 'caregiver', 'home care', 'hospice', 'aide', 'respite care'] },
@@ -767,7 +771,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       lines: [
         { id: 'ch.worship', label: 'Place of Worship', keywords: ['church', 'tithe', 'tithes', 'tithing', 'offering', 'offertory', 'parish', 'chapel', 'synagogue', 'temple', 'mosque', 'masjid', 'ministry', 'congregation', 'diocese', 'lds', 'ward', 'stake', 'cathedral', 'zakat', 'gurdwara', 'building fund', 'faith promise', 'pushpay', 'tithe.ly', 'givelify', 'episcopal', 'baptist', 'lutheran', 'methodist', 'presbyterian', 'catholic', 'pentecostal', 'assembly of god', 'adventist', 'orthodox', 'evangelical', 'community church', 'bible church', 'fellowship', 'calvary', 'church of christ', 'umc', 'archdiocese', 'chabad', 'islamic center', 'vineyard church', 'anglican', 'nazarene', 'mennonite', 'quaker meeting', 'friends meeting'] },
         { id: 'ch.college', label: 'College', hint: 'Gifts to a college or university (not tuition). Payments that buy athletic seating rights are not deductible.', keywords: ['alumni', 'alumni fund', 'alumni association', 'university foundation', 'college fund', 'booster club', 'endowment', 'annual fund', 'scholarship fund', 'university gift', 'college donation'] },
-        { id: 'ch.org', label: 'Charity Organization', keywords: ['donation', 'donate', 'donated', 'charity', 'charitable', 'nonprofit', 'non-profit', 'red cross', 'united way', 'st. jude', 'st jude', 'humane society', 'aspca', 'wounded warrior', 'food bank', 'habitat for humanity', 'doctors without borders', 'unicef', 'fundraiser', '501c3', '501(c)(3)', 'shriners', 'toys for tots', 'march of dimes', 'american cancer society', 'heart association', 'fisher house', 'uso', 'npr', 'public radio', 'pbs', 'wikipedia', 'wikimedia', 'salvation army', 'goodwill', 'rescue mission', 'animal shelter', 'planned parenthood', 'sierra club foundation', 'nature conservancy', 'special olympics', 'make-a-wish', 'ymca', 'boys and girls club', 'library foundation', 'hospital foundation', 'meals on wheels', 'donations'] },
+        { id: 'ch.org', label: 'Charity Organization', hint: 'A gift to a donor-advised fund (Fidelity Charitable, Schwab Charitable, Vanguard Charitable) is a deductible gift when you itemize, but it does not count toward the cash-gift deduction you can take without itemizing.', keywords: ['donation', 'donate', 'donated', 'charity', 'charitable', 'nonprofit', 'non-profit', 'red cross', 'united way', 'st. jude', 'st jude', 'humane society', 'aspca', 'wounded warrior', 'food bank', 'habitat for humanity', 'doctors without borders', 'unicef', 'fundraiser', '501c3', '501(c)(3)', 'shriners', 'toys for tots', 'march of dimes', 'american cancer society', 'heart association', 'fisher house', 'uso', 'npr', 'public radio', 'pbs', 'wikipedia', 'wikimedia', 'salvation army', 'goodwill', 'rescue mission', 'animal shelter', 'planned parenthood', 'sierra club foundation', 'nature conservancy', 'special olympics', 'make-a-wish', 'ymca', 'boys and girls club', 'library foundation', 'hospital foundation', 'meals on wheels', 'donations'] },
         { id: 'ch.cfc', label: 'CFC', hint: 'Combined Federal Campaign payroll pledges. Keep your pledge confirmation and final pay statement of the year.', keywords: ['cfc', 'combined federal campaign', 'cfc pledge', 'payroll pledge', 'givecfc', 'cfc payroll'] },
         { id: 'ch.other', label: 'Other', keywords: ['other charity', 'benefit dinner', 'gala', 'charity auction', 'charity golf', 'charity run', 'walkathon', 'walk-a-thon', 'memorial fund', 'in memory of', 'in lieu of flowers', 'benevolence fund'] },
         { id: 'ch.noncash', label: 'Value of furniture/clothing donated', hint: 'Fair-market (thrift-shop) value of items in good used condition or better. Over $500 total requires Form 8283; over $5,000 for one item or group requires a qualified appraisal.', keywords: ['clothing donation', 'clothes donated', 'donated clothes', 'furniture donated', 'donated furniture', 'goodwill drop', 'goodwill drop-off', 'goodwill dropoff', 'salvation army drop-off', 'thrift donation', 'household items', 'donated items', 'non-cash', 'noncash', 'in-kind', 'in kind', 'bags of clothes', 'purple heart pickup', 'vietnam veterans of america', 'vva pickup', 'amvets', 'habitat restore', 'car donation', 'vehicle donation', 'kars4kids', 'donated books', 'donated toys', 'donated a couch', 'donated tv'] },
@@ -949,6 +953,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       nonItemizerCharity: null,
       casualtyPerEvent: 100,
       casualtyQualifiedPerEvent: 500,
+      qualifiedDisasterLoss: true,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
@@ -978,6 +983,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       nonItemizerCharity: null,
       casualtyPerEvent: 100,
       casualtyQualifiedPerEvent: 500,
+      qualifiedDisasterLoss: true,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
@@ -1006,6 +1012,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       nonItemizerCharity: { single: 1000, mfj: 2000 },
       casualtyPerEvent: 100,
       casualtyQualifiedPerEvent: 500,
+      qualifiedDisasterLoss: false,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
@@ -1025,7 +1032,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     { path: 'standardDeduction.qss', label: 'Standard deduction — Qualifying surviving spouse', kind: 'usd' },
     { path: 'additionalStdDed.married', label: 'Extra standard deduction per 65+/blind condition (married)', kind: 'usd' },
     { path: 'additionalStdDed.unmarried', label: 'Extra standard deduction per 65+/blind condition (unmarried)', kind: 'usd' },
-    { path: 'medicalFloorRate', label: 'Medical floor (share of AGI)', kind: 'rate' },
+    { path: 'medicalFloorRate', label: 'Medical floor (% of AGI)', kind: 'rate' },
     { path: 'saltCap.default', label: 'State & local tax cap', kind: 'usd' },
     { path: 'saltCap.mfs', label: 'State & local tax cap (married filing separately)', kind: 'usd' },
     { path: 'mileage.business', label: 'Business mileage rate (¢/mile)', kind: 'permile' },
@@ -1042,13 +1049,13 @@ window.ITEMIZER_SINGLE_FILE = true;
     { path: 'ltcPremiumLimits.to60', label: 'Long-term-care premium limit — age 51 to 60', kind: 'usd' },
     { path: 'ltcPremiumLimits.to70', label: 'Long-term-care premium limit — age 61 to 70', kind: 'usd' },
     { path: 'ltcPremiumLimits.over70', label: 'Long-term-care premium limit — over 70', kind: 'usd' },
-    { path: 'mealsDeductibleRate', label: 'Business meals deductible share', kind: 'rate' },
-    { path: 'gamblingLossRate', label: 'Share of gambling losses allowed', kind: 'rate' },
-    { path: 'charityFloorRate', label: 'Charitable floor for itemizers (share of AGI)', kind: 'rate' },
-    { path: 'charityCashAgiLimit', label: 'Charitable gift limit (share of AGI)', kind: 'rate' },
+    { path: 'mealsDeductibleRate', label: 'Business meals deductible share (%)', kind: 'rate' },
+    { path: 'gamblingLossRate', label: 'Share of gambling losses allowed (%)', kind: 'rate' },
+    { path: 'charityFloorRate', label: 'Charitable floor for itemizers (% of AGI)', kind: 'rate' },
+    { path: 'charityCashAgiLimit', label: 'Charitable gift limit (% of AGI)', kind: 'rate' },
     { path: 'casualtyPerEvent', label: 'Casualty loss reduction per event', kind: 'usd' },
     { path: 'casualtyQualifiedPerEvent', label: 'Qualified disaster loss reduction per event', kind: 'usd' },
-    { path: 'casualtyAgiRate', label: 'Casualty loss reduction (share of AGI)', kind: 'rate' },
+    { path: 'casualtyAgiRate', label: 'Casualty loss reduction (% of AGI)', kind: 'rate' },
     { path: 'nonCashForm8283', label: 'Non-cash gifts needing Form 8283', kind: 'usd' },
     { path: 'nonCashAppraisal', label: 'Non-cash gifts needing a qualified appraisal', kind: 'usd' },
     { path: 'acknowledgmentThreshold', label: 'Gift size needing written acknowledgment', kind: 'usd' },
@@ -1062,7 +1069,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     { path: 'mileageJul.charity', label: 'Charitable mileage rate from July 1 (¢/mile)', kind: 'permile' },
     { path: 'saltPhaseout.start.default', label: 'State & local cap phase-down starts', kind: 'usd' },
     { path: 'saltPhaseout.start.mfs', label: 'State & local cap phase-down starts (married filing separately)', kind: 'usd' },
-    { path: 'saltPhaseout.rate', label: 'State & local cap phase-down (share of income above the threshold)', kind: 'rate' },
+    { path: 'saltPhaseout.rate', label: 'State & local cap phase-down (% of income above the threshold)', kind: 'rate' },
     { path: 'saltPhaseout.floor.default', label: 'State & local cap floor', kind: 'usd' },
     { path: 'saltPhaseout.floor.mfs', label: 'State & local cap floor (married filing separately)', kind: 'usd' },
     { path: 'nonItemizerCharity.single', label: 'Cash gift deduction without itemizing', kind: 'usd' },
@@ -1070,7 +1077,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     { path: 'seniorDeduction.perPerson', label: 'Senior deduction per person aged 65 or older', kind: 'usd' },
     { path: 'seniorDeduction.phaseoutStart.default', label: 'Senior deduction phase-out starts', kind: 'usd' },
     { path: 'seniorDeduction.phaseoutStart.mfj', label: 'Senior deduction phase-out starts (joint)', kind: 'usd' },
-    { path: 'seniorDeduction.rate', label: 'Senior deduction phase-out (share of income above the threshold)', kind: 'rate' },
+    { path: 'seniorDeduction.rate', label: 'Senior deduction phase-out (% of income above the threshold)', kind: 'rate' },
     { path: 'pmiPhaseout.default.start', label: 'Mortgage insurance phase-out starts', kind: 'usd' },
     { path: 'pmiPhaseout.default.end', label: 'Mortgage insurance phase-out ends', kind: 'usd' },
     { path: 'pmiPhaseout.mfs.start', label: 'Mortgage insurance phase-out starts (married filing separately)', kind: 'usd' },
@@ -1091,7 +1098,9 @@ window.ITEMIZER_SINGLE_FILE = true;
   function moneyCents(n) { return usdCents.format(n || 0); }
   /** Margins decide the verdict, so print the cents when the whole-dollar figure would read as $0. */
   function moneyNear(n) { return Math.abs(Number(n) || 0) < 1 ? moneyCents(n) : money(n); }
-  function cents(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+  // Round the decimal figure half up, the way the IRS does, rather than the binary double:
+  // 101 miles at 72.5¢ is 73.225 on paper, and $73.23 on the return.
+  function cents(n) { const x = Number(n) || 0; return Math.round(Math.round(x * 1e6) / 1e4) / 100; }
   function pct(rate) { const p = rate * 100; return (Number.isInteger(p) ? p : p.toFixed(1).replace(/\.0$/, '')) + '%'; }
   function perMile(rate) { return (rate * 100).toFixed(1).replace(/\.0$/, '') + '¢/mile'; }
   function plural(n, one, many) { return n === 1 ? one : (many || one + 's'); }
@@ -1150,6 +1159,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     return `${perMile(early)} before July 1 and ${perMile(late)} after`;
   }
 
+  /** An amount from an old backup or a hand-edited import can be Infinity or NaN; one of those would poison every total it touches. */
+  function amountOf(entry) {
+    const n = Number(entry && entry.amount);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   function taxYearOf(entry) {
     if (entry.taxYear) return Number(entry.taxYear);
     return Number(String(entry.date || '').slice(0, 4)) || null;
@@ -1183,7 +1198,7 @@ window.ITEMIZER_SINGLE_FILE = true;
 
     for (const e of entries) {
       const line = Schema.getLine(e.lineId);
-      const amt = Number(e.amount) || 0;
+      const amt = amountOf(e);
       const L = lines[line.id];
       L.total += amt; L.count += 1; L.entries.push(e);
       // Miles are valued one entry at a time, because the rate can change during the year.
@@ -1205,7 +1220,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       if (line.treatment === 'info') continue;
       const m = Number(String(e.date || '').slice(5, 7)) - 1;
       if (m < 0 || m > 11) continue;
-      const v = line.unit === 'miles' ? (Number(e.amount) || 0) * mileageRate(P, line.rate, e.date) : (Number(e.amount) || 0);
+      const v = line.unit === 'miles' ? amountOf(e) * mileageRate(P, line.rate, e.date) : amountOf(e);
       months[m] += v;
       monthsBySection[line.sectionId][m] += v;
     }
@@ -1288,13 +1303,15 @@ window.ITEMIZER_SINGLE_FILE = true;
 
     const casGross = T('cas.loss');
     // A "qualified disaster loss" (declarations covered by P.L. 118-148 and P.L. 119-21) uses a $500 floor, no AGI reduction,
-    // and counts on top of the standard deduction for non-itemizers.
-    const qualifiedDisaster = !!s.casualtyFederalDisaster && !!s.casualtyQualifiedDisaster;
+    // and counts on top of the standard deduction for non-itemizers. Those acts reach declarations made between
+    // January 2020 and September 2025, so a later year cannot use the treatment however the box is set.
+    const qualifiedDisaster = P.qualifiedDisasterLoss !== false && !!s.casualtyFederalDisaster && !!s.casualtyQualifiedDisaster;
     const perEvent = qualifiedDisaster ? (P.casualtyQualifiedPerEvent || 500) : P.casualtyPerEvent;
     const casualty = {
       gross: casGross,
       federalDisaster: !!s.casualtyFederalDisaster,
       qualified: qualifiedDisaster,
+      qualifiedRequested: !!s.casualtyQualifiedDisaster,
       perEvent,
       afterLimits: qualifiedDisaster ? cents(Math.max(0, casGross - perEvent)) : (agi == null ? null : cents(Math.max(0, casGross - perEvent - agi * P.casualtyAgiRate))),
       deductible: 0,
@@ -1540,8 +1557,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (A.casualty.gross > 0) {
       if (!A.casualty.federalDisaster) add('warn', 'Casualty losses count only for declared disasters', `${money(A.casualty.gross)} logged. Personal casualty and theft losses are deductible only when attributable to a ${R.taxYear >= 2026 ? 'federally or state-declared disaster (from 2026 a governor\'s declaration also qualifies)' : 'federally declared disaster'}. If yours was, turn that on in Settings and keep the declaration number.`, { view: 'settings' });
       else if (A.casualty.afterLimits == null) add('act', 'Enter AGI to size the casualty loss', 'Disaster losses are reduced by insurance reimbursement, $100 per event, and 10% of AGI (Form 4684).', { view: 'settings' });
+      else if (A.casualty.qualifiedRequested && !A.casualty.qualified) add('warn', 'This is not a qualified disaster loss', `That treatment covers federal disasters declared between January 2020 and September 2025, so the loss has been worked with the ${money(P.casualtyPerEvent)} floor and ${pct(P.casualtyAgiRate)} of your AGI: ${money(A.casualty.deductible)} counts.`, { view: 'settings' });
       else if (A.casualty.qualified) add('info', `${money(A.casualty.deductible)} of the qualified disaster loss counts`, `After a ${money(A.casualty.perEvent)} per-event reduction and with no AGI reduction. A qualified disaster loss counts on top of the standard deduction if you do not itemize, so it is included in your ${money(SD.total)} standard deduction figure. Log only the unreimbursed loss (Form 4684).`);
-      else add('info', `${money(A.casualty.deductible)} of the disaster loss counts`, `After the ${money(P.casualtyPerEvent)} per-event reduction and ${pct(P.casualtyAgiRate)} of AGI. Log only the unreimbursed loss (Form 4684).${R.taxYear <= 2025 ? ' If FEMA declared this disaster between 2020 and early 2025 it is probably a "qualified disaster loss": a $500 floor, no AGI reduction, and it counts even without itemizing — turn that on in Settings.' : ''}`, { view: 'settings' });
+      else add('info', `${money(A.casualty.deductible)} of the disaster loss counts`, `After the ${money(P.casualtyPerEvent)} per-event reduction and ${pct(P.casualtyAgiRate)} of AGI. Log only the unreimbursed loss (Form 4684).${R.taxYear <= 2025 ? ' If FEMA declared this disaster between January 2020 and September 2025 it is probably a "qualified disaster loss": a $500 floor, no AGI reduction, and it counts even without itemizing — turn that on in Settings.' : ''}`, { view: 'settings' });
     }
 
     // Above the line & credits
@@ -2062,6 +2080,28 @@ window.ITEMIZER_SINGLE_FILE = true;
   // State estimated payments follow the IRS calendar, not a fixed interval.
   const ESTIMATED = { id: 'estimated', label: 'each estimated-tax deadline', days: 91.3, tol: 20, min: 3, perYear: 4 };
   const ESTIMATED_DEADLINES = ['01-15', '04-15', '06-15', '09-15'];
+  /**
+   * The day an estimated-tax payment is actually due. The IRS moves a due date that falls on a
+   * Saturday, Sunday or legal holiday to the next business day, and only two holidays can meet
+   * these dates: Martin Luther King Day (the third Monday in January) and Emancipation Day in
+   * Washington DC (April 16, kept on the Friday before when it falls on a Saturday and the Monday
+   * after when it falls on a Sunday). UTC throughout, so the answer never depends on the reader's
+   * time zone.
+   */
+  function dueDate(year, monthDay) {
+    const utcIso = (d) => d.toISOString().slice(0, 10);
+    const jan1 = new Date(Date.UTC(year, 0, 1)).getUTCDay();
+    const holidays = new Set([`${year}-01-${String(1 + ((8 - jan1) % 7) + 14).padStart(2, '0')}`]);
+    const apr16 = new Date(Date.UTC(year, 3, 16)).getUTCDay();
+    holidays.add(apr16 === 6 ? `${year}-04-15` : apr16 === 0 ? `${year}-04-17` : `${year}-04-16`);
+    let d = new Date(`${year}-${monthDay}T00:00:00Z`);
+    for (let i = 0; i < 7; i++) {
+      const day = d.getUTCDay();
+      if (day !== 0 && day !== 6 && !holidays.has(utcIso(d))) break;
+      d = new Date(d.getTime() + DAY);
+    }
+    return utcIso(d);
+  }
   const MONTHS_PER = { monthly: 1, quarterly: 3, semiannual: 6, annual: 12 };
   const VISIT_LINES = ['med.doctor', 'med.dental', 'med.therapy', 'med.lab', 'med.hospital', 'med.operations', 'med.glasses', 'med.dentures', 'med.hearing'];
   const STATUS_ORDER = { overdue: 0, due: 1, upcoming: 2, lapsed: 3 };
@@ -2101,8 +2141,9 @@ window.ITEMIZER_SINGLE_FILE = true;
   /** The next estimated-tax deadline strictly after a date (Sep 15 rolls to Jan 15 of the next year). */
   function nextDeadline(iso) {
     const y = Number(iso.slice(0, 4));
-    for (const md of ESTIMATED_DEADLINES) { const d = `${y}-${md}`; if (d > iso) return d; }
-    return `${y + 1}-${ESTIMATED_DEADLINES[0]}`;
+    // compare against the calendar 15th, which is what a payment is measured from, but hand back the day it is actually due
+    for (const md of ESTIMATED_DEADLINES) { const d = `${y}-${md}`; if (d > iso) return dueDate(y, md); }
+    return dueDate(y + 1, ESTIMATED_DEADLINES[0]);
   }
   /** The estimated-tax deadline a payment on this date satisfies, or null: quarterly payments are often made early. */
   function nearestDeadline(iso) {
@@ -2340,10 +2381,13 @@ window.ITEMIZER_SINGLE_FILE = true;
         for (const e of missing.slice(0, 2)) {
           if (pairCount++ >= 3) break;
           const yl = Schema.getLine(y);
+          const xl = Schema.getLine(x);
+          // an old entry can carry a line the schema no longer has, and a pair with no label to show is no advice
+          if (!yl || !xl) continue;
           const yTypical = median(entries.filter((z) => z.lineId === y).map((z) => Number(z.amount) || 0));
           recs.push({
             id: `pair:${e.id}:${y}`, kind: 'log', priority: 35,
-            title: `${Schema.getLine(x).label} on ${fmtDate(e.date)} usually comes with ${yl.label}`,
+            title: `${xl.label} on ${fmtDate(e.date)} usually comes with ${yl.label}`,
             body: `On ${dates.size} dates you logged both lines together; that day has nothing on the ${yl.label} line.`,
             because: 'a pattern in your own entries',
             action: { type: 'prefill', entry: { description: '', lineId: y, amount: yTypical || '', date: e.date } },
@@ -2359,19 +2403,21 @@ window.ITEMIZER_SINGLE_FILE = true;
     const medByKey = new Map();
     for (const [k, arr] of amountsByKey) if (arr.length >= 4) medByKey.set(k, median(arr));
     for (const e of yearEntries) {
+      const el = Schema.getLine(e.lineId);
+      if (!el) continue;
       const kk = keyOf(e);
       const amounts = amountsByKey.get(kk);
       if (!amounts || amounts.length < 4) continue;
       const med = medByKey.get(kk), amt = Number(e.amount) || 0;
       // entries with no description are one pool per line, not one payee: demand a much clearer outlier and say so
       const dk = Classify.keyFor(e.description || '');
-      const undescribed = !dk || dk === Classify.keyFor(Schema.getLine(e.lineId).label);
+      const undescribed = !dk || dk === Classify.keyFor(el.label);
       const outlier = undescribed ? (amounts.length >= 6 && amt > 5 * med && amt - med > 50) : (amt > 3 * med && amt - med > 50);
       if (outlier) recs.push({
         id: `anomaly:${e.id}`, kind: 'check', priority: 45,
-        title: `${e.description || Schema.getLine(e.lineId).label} for ${fmtValue(e.lineId, amt)} is far above its usual ${fmtValue(e.lineId, med)}`,
+        title: `${e.description || el.label} for ${fmtValue(e.lineId, amt)} is far above its usual ${fmtValue(e.lineId, med)}`,
         body: undescribed ? 'Worth a second look against the other entries on this line. If it is right, dismiss this.' : 'Worth a second look; a missing decimal point is the usual cause. If it is right, dismiss this.',
-        because: undescribed ? `${amounts.length} undescribed entries on the ${Schema.getLine(e.lineId).label} line` : `${amounts.length} entries for the same payee`,
+        because: undescribed ? `${amounts.length} undescribed entries on the ${el.label} line` : `${amounts.length} entries for the same payee`,
         action: { type: 'edit', entryId: e.id },
       });
     }
@@ -2540,7 +2586,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     return { recommendations: recommendations.slice(0, 12), dismissed, recurrences, projection, habits, aggregate: aggregateProfile(computed, habits, recurrences, today) };
   }
 
-  return { analyze, detectRecurrences, aggregateProfile, addMonths, CADENCES, DISMISS_DAYS, VISIT_LINES };
+  return { analyze, detectRecurrences, aggregateProfile, addMonths, dueDate, CADENCES, DISMISS_DAYS, VISIT_LINES };
 });
 
 ;
@@ -3415,16 +3461,24 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   // ---- forecast snapshots ---------------------------------------------------------
 
+  // The settings a forecast was made under. They ride along on the snapshot so a finished year is graded the way it
+  // was projected: a filing status or an AGI entered later must not change what a past forecast is compared with.
+  const CARRIED_SETTINGS = ['agi', 'filingStatus', 'age65', 'blind', 'spouseAge65', 'spouseBlind'];
+
   /**
    * Add or refresh this month's snapshot for a tax year and drop stale ones.
    * @param {Array} list  existing snapshots
    * @param {{today, taxYear, actual, expectedMore, projectedTotal, standardDeduction, itemize}} s
+   *   may also carry the settings of CARRIED_SETTINGS; the ones it does not carry are left off the row
    * @returns {Array} a new list
    */
   function snapshot(list, s) {
     const key = monthKey(s.today);
     const rest = (list || []).filter((x) => !(x.month === key && x.taxYear === s.taxYear));
-    rest.push({ month: key, taxYear: Number(s.taxYear), takenOn: s.today, actual: r2(s.actual), expectedMore: r2(s.expectedMore), projectedTotal: r2(s.projectedTotal), standardDeduction: r2(s.standardDeduction), itemize: !!s.itemize });
+    const row = { month: key, taxYear: Number(s.taxYear), takenOn: s.today, actual: r2(s.actual), expectedMore: r2(s.expectedMore), projectedTotal: r2(s.projectedTotal), standardDeduction: r2(s.standardDeduction), itemize: !!s.itemize };
+    // a setting that is not there says nothing, so it is left off: an old row and a new one then look the same
+    for (const k of CARRIED_SETTINGS) if (s[k] !== undefined && s[k] !== null && s[k] !== '') row[k] = s[k];
+    rest.push(row);
     rest.sort((a, b) => a.month.localeCompare(b.month) || a.taxYear - b.taxYear);
     return rest.filter((x) => monthsBetween(x.month, key) <= KEEP_MONTHS);
   }
@@ -3504,7 +3558,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   /** Keywords the classifier reports as reasons; pseudo reasons are not weights. */
   const isKeyword = (k) => typeof k === 'string' && !/here before|section context|^miles|odometer|^title and name$/.test(k);
 
-  return { KEEP_MONTHS, WEIGHT_FLOOR, WEIGHT_CAP, ACCEPT_CAP, monthKey, snapshot, changed, validate, calibration, summary, applyCorrection, isKeyword };
+  return { KEEP_MONTHS, WEIGHT_FLOOR, WEIGHT_CAP, ACCEPT_CAP, CARRIED_SETTINGS, monthKey, snapshot, changed, validate, calibration, summary, applyCorrection, isKeyword };
 });
 
 ;
@@ -3517,7 +3571,7 @@ window.ITEMIZER_SINGLE_FILE = true;
  * to be rewritten whole; JSON is used only for the backup file.
  *
  *   store        key         row
- *   entries      id          { id, date, taxYear, lineId, amount, description, note, hasReceipt, receiptId, createdAt, updatedAt, sample, source?, items?, tripId?, fullAmount?, share? }
+ *   entries      id          { id, date, taxYear, lineId, amount, description, note, hasReceipt, receiptId, createdAt, updatedAt, sample, source?, items?, fullAmount?, share? }
  *   receipts     id          { id, entryId, type, createdAt, blob }
  *   places       id          { id, name, category, address, lat, lon, note, sample, updatedAt }
  *   trips        id          { id, date, taxYear, fromId, toId, fromLabel, toLabel, purpose, miles, roundTrip, method, lineId, entryId, sample, points, startedAt, endedAt, createdAt }
@@ -3526,12 +3580,14 @@ window.ITEMIZER_SINGLE_FILE = true;
  *   weights      keyword     { keyword, weight, updatedAt }                   a classifier keyword and its learned multiplier
  *   dismissals   id          { id, dismissedAt }                              an advisor recommendation the user dismissed
  *   layouts      signature   { signature, map, spendIsNegative, updatedAt }   a statement header and the column layout chosen for it
- *   snapshots    id          { id: 'taxYear:month', taxYear, month, takenOn, actual, expectedMore, projectedTotal, standardDeduction, itemize }
+ *   snapshots    id          { id: 'taxYear:month', taxYear, month, takenOn, actual, expectedMore, projectedTotal, standardDeduction, itemize,
+ *                              filingStatus?, agi?, age65?, blind?, spouseAge65?, spouseBlind? }   the settings the forecast was made under
  *   overrides    id          { id: 'taxYear:path', taxYear, path, value, updatedAt }   one overridden tax parameter
  *
  * Records reference other records by id (lineId, entryId, receiptId, fromId, toId); display labels are looked up
  * from the schema or the referenced row when shown. The two labels a trip keeps (fromLabel, toLabel) are the
- * mileage log's own record of where it went, kept so the log survives a deleted place.
+ * mileage log's own record of where it went, kept so the log survives a deleted place. An entry's `source` is
+ * where the row came from; only rows read from a statement carry one ('import').
  *
  * Version 3 of the database split the settings document of versions 1 and 2, which carried six of these
  * collections inside one JSON value, into the six stores above; the upgrade does that in place and loses nothing.
@@ -3568,6 +3624,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   /** The settings row: scalar configuration only. Collections have their own stores. */
   const DEFAULT_SETTINGS = {
     taxYear: new Date().getFullYear(),
+    taxYearPickedAt: '', // the day the user last chose a tax year by hand; the New Year roll-over leaves that choice alone
     taxpayerName: '', // the name on the return, printed on the worksheet so the preparer knows whose sheet it is
     filingStatus: 'single',
     agi: '',
@@ -3605,6 +3662,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   const okId = (v) => typeof v === 'string' && ID.test(v) && !RESERVED_KEY.test(v);
   const okKey = (v) => !!v && !RESERVED_KEY.test(v);
   const TRIP_METHODS = ['road', 'estimate', 'gps', 'manual']; // METHOD_LABEL in app.js
+  const FILING_STATUSES = ['single', 'mfj', 'mfs', 'hoh', 'qss'];
   const PLACE_CATEGORIES = ['home', 'medical', 'business', 'charity', 'school', 'other']; // PLACE_CATEGORIES in geo.js
   const MAX_POINTS = 5000; // a recorded track is thinned to about one point per ten metres, so this is a very long drive
   const yearOf = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 2000 && n <= 2100 ? n : null; };
@@ -3627,7 +3685,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       for (const [old, flat] of Object.entries(LEGACY_EXPERIMENT_FLAGS)) if (!(flat in raw) && old in raw.experiments) out[flat] = raw.experiments[old] !== false;
     }
     if (!(out.taxYear >= 2000 && out.taxYear <= 2100)) out.taxYear = DEFAULT_SETTINGS.taxYear;
-    if (!['single', 'mfj', 'mfs', 'hoh', 'qss'].includes(out.filingStatus)) out.filingStatus = 'single';
+    if (!FILING_STATUSES.includes(out.filingStatus)) out.filingStatus = 'single';
     if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
     return out;
   }
@@ -3669,7 +3727,14 @@ window.ITEMIZER_SINGLE_FILE = true;
         const nums = ['actual', 'expectedMore', 'projectedTotal', 'standardDeduction'].map((k) => finite(r[k]));
         if (taxYear == null || !MONTH.test(month) || nums.some((n) => n == null)) return null;
         const [actual, expectedMore, projectedTotal, standardDeduction] = nums.map((n) => Math.round(n * 100) / 100);
-        return { id: `${taxYear}:${month}`, taxYear, month, takenOn: ISO_DAY.test(str(r.takenOn, 10)) ? str(r.takenOn, 10) : `${month}-01`, actual, expectedMore, projectedTotal, standardDeduction, itemize: !!r.itemize };
+        const out = { id: `${taxYear}:${month}`, taxYear, month, takenOn: ISO_DAY.test(str(r.takenOn, 10)) ? str(r.takenOn, 10) : `${month}-01`, actual, expectedMore, projectedTotal, standardDeduction, itemize: !!r.itemize };
+        // the settings the forecast was made under, when the snapshot carries them: a finished year has to be graded the
+        // way it was projected, not the way the settings read today. Snapshots taken before this are still good rows.
+        if (FILING_STATUSES.includes(r.filingStatus)) out.filingStatus = r.filingStatus;
+        const agi = r.agi === '' || r.agi == null ? null : finite(r.agi); // an empty AGI is not an AGI of zero
+        if (agi != null) out.agi = agi;
+        for (const flag of ['age65', 'blind', 'spouseAge65', 'spouseBlind']) if (flag in r) out[flag] = !!r[flag];
+        return out;
       }
       case 'overrides': {
         const taxYear = yearOf(r.taxYear), path = str(r.path, 80), value = finite(r.value);
@@ -3794,7 +3859,8 @@ window.ITEMIZER_SINGLE_FILE = true;
         if (!retried && e && e.name === 'InvalidStateError') { dbPromise = null; openDB().then((db2) => tx(db2, store, modeName, fn, true)).then(resolve, reject); return; }
         reject(e); return;
       }
-      const os = t.objectStore(store);
+      // one name gives the object store, a list gives them by name: writes that belong together share a transaction
+      const os = Array.isArray(store) ? Object.fromEntries(store.map((n) => [n, t.objectStore(n)])) : t.objectStore(store);
       let result;
       // a request that throws leaves the ones already queued in the transaction; abort so the caller's "nothing was
       // changed" is true, whichever row of a batch was the bad one
@@ -3815,14 +3881,14 @@ window.ITEMIZER_SINGLE_FILE = true;
     // rows are keyed by ids that came out of a backup, so the container has no prototype: a row keyed '__proto__' is
     // then an ordinary property instead of a write that disappears
     read(store) { try { const o = JSON.parse(storageArea().getItem(LS_PREFIX + store) || '{}'); return Object.assign(Object.create(null), o && typeof o === 'object' && !Array.isArray(o) ? o : null); } catch (e) { return Object.create(null); } },
-    write(store, obj) { try { storageArea().setItem(LS_PREFIX + store, JSON.stringify(obj)); } catch (e) { throw new Error('Storage is full or unavailable; nothing was saved. Download a backup and free some space.'); } },
+    write(store, obj) { try { storageArea().setItem(LS_PREFIX + store, JSON.stringify(obj)); } catch (e) { throw new Error('Storage is full or unavailable; that change was not saved. Download a backup and free some space.'); } },
     all(store) { return Object.values(this.read(store)); },
     get(store, key) { const o = this.read(store); return o[key] === undefined ? null : o[key]; },
     put(store, row) { const o = this.read(store); o[row[STORES[store].key]] = row; this.write(store, o); },
     putMany(store, rows) { const o = this.read(store); for (const r of rows) o[r[STORES[store].key]] = r; this.write(store, o); },
     del(store, key) { const o = this.read(store); if (key in o) { delete o[key]; this.write(store, o); } },
     delMany(store, keys) { const o = this.read(store); let hit = false; for (const k of keys) if (k in o) { delete o[k]; hit = true; } if (hit) this.write(store, o); },
-    clear(store) { try { storageArea().removeItem(LS_PREFIX + store); } catch (e) { /* nothing to clear */ } },
+    clear(store) { try { storageArea().removeItem(LS_PREFIX + store); } catch (e) { throw new Error('Storage is unavailable; that store could not be cleared.'); } },
     count(store) { return Object.keys(this.read(store)).length; },
   };
   /** The fallback's pre-v3 single document becomes one key per store. */
@@ -3982,6 +4048,35 @@ window.ITEMIZER_SINGLE_FILE = true;
   async function deleteReceipt(id) { if (!id) return; const db = await openDB(); if (!db) { memoryReceipts.delete(id); return; } await tx(db, 'receipts', 'readwrite', (os) => os.delete(id)); }
   async function getAllReceipts() { const db = await openDB(); if (!db) return receiptsInMemory() ? Array.from(memoryReceipts.values()) : []; return (await tx(db, 'receipts', 'readonly', (os) => os.getAll())) || []; }
 
+  /**
+   * Entries and the receipt photo one of them names, written together. With IndexedDB both go in one transaction, so a
+   * failure leaves neither and no compensating delete is needed. The fallback has no transactions, so it writes the
+   * photo first and takes it back by hand if the entries do not land.
+   */
+  async function putEntriesWithReceipt(entries, receipt) {
+    const rows = Array.isArray(entries) ? entries : [entries];
+    if (!receipt) return putEntries(rows);
+    const db = await openDB();
+    if (!db) {
+      await putReceipt(receipt);
+      try { await putEntries(rows); } catch (e) { await deleteReceipt(receipt.id).catch(() => {}); throw e; }
+      return rows;
+    }
+    await tx(db, ['entries', 'receipts'], 'readwrite', (os) => { rows.forEach((r) => os.entries.put(r)); os.receipts.put(receipt); });
+    return rows;
+  }
+  /** An entry and the trip logged for it, written together: the mileage log must never name an entry that is not there. */
+  async function putTripWithEntry(entry, trip) {
+    const db = await openDB();
+    if (!db) {
+      await putEntry(entry);
+      try { await putTrip(trip); } catch (e) { await deleteRow('entries', entry.id).catch(() => {}); throw e; }
+      return { entry, trip };
+    }
+    await tx(db, ['entries', 'trips'], 'readwrite', (os) => { os.entries.put(entry); os.trips.put(trip); });
+    return { entry, trip };
+  }
+
   const getPlaces = () => allRows('places');
   const putPlace = (place) => putRow('places', place);
   const deletePlace = (id) => deleteRow('places', id);
@@ -4083,13 +4178,22 @@ window.ITEMIZER_SINGLE_FILE = true;
     return new Blob([bytes], { type: m[1].toLowerCase().replace('jpg', 'jpeg') });
   }
 
+  /** Ids of receipts that name an entry the ledger no longer has: nothing will ever show them, so a backup leaves them behind. */
+  function orphanReceiptIds(receipts, entries) {
+    const ids = new Set((entries || []).map((e) => e && e.id));
+    return (receipts || []).filter((r) => r && r.entryId && !ids.has(r.entryId)).map((r) => r.id);
+  }
+
   /** The backup without receipts: the settings row, then every other store as an array of rows. Receipts are appended by exportBackup. */
   async function exportJSON(opts) {
     opts = opts || {};
     const [settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips] = await Promise.all([getSettings(), ...ROW_STORES.map(allRows), getEntries(), getPlaces(), getTrips()]);
     const out = { app: 'itemizer', version: 3, exportedAt: nowISO(), settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips, receipts: [] };
     if (opts.includeReceipts !== false) {
-      for (const r of await getAllReceipts()) {
+      const all = await getAllReceipts();
+      const orphans = new Set(orphanReceiptIds(all, entries));
+      for (const r of all) {
+        if (orphans.has(r.id)) continue;
         try { out.receipts.push({ id: r.id, entryId: r.entryId, type: r.type, createdAt: r.createdAt, dataURL: await blobToDataURL(r.blob) }); } catch (e) { /* skip unreadable */ }
       }
     }
@@ -4106,7 +4210,10 @@ window.ITEMIZER_SINGLE_FILE = true;
     const parts = [json.slice(0, json.lastIndexOf('"receipts":[]') + '"receipts":['.length)];
     let count = 0, failed = 0;
     if (opts.includeReceipts !== false) {
-      for (const r of await getAllReceipts()) {
+      const all = await getAllReceipts();
+      const orphans = new Set(orphanReceiptIds(all, head.entries));
+      for (const r of all) {
+        if (orphans.has(r.id)) continue;
         try {
           const dataURL = await blobToDataURL(r.blob);
           parts.push((count ? ',' : '') + JSON.stringify({ id: r.id, entryId: r.entryId, type: r.type, createdAt: r.createdAt }).slice(0, -1) + ',"dataURL":"', dataURL, '"}');
@@ -4131,7 +4238,6 @@ window.ITEMIZER_SINGLE_FILE = true;
     };
     if (typeof e.source === 'string') out.source = e.source.slice(0, 40);
     if (Array.isArray(e.items)) out.items = e.items.filter((x) => x && typeof x === 'object').slice(0, 200);
-    if (typeof e.tripId === 'string') out.tripId = e.tripId.slice(0, 64);
     if (e.fullAmount != null && Number.isFinite(Number(e.fullAmount))) out.fullAmount = Number(e.fullAmount);
     if (e.share != null && Number.isFinite(Number(e.share))) out.share = Number(e.share);
     return out;
@@ -4223,47 +4329,63 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (!replaced) for (const k of await allKeys('entries')) known.add(k);
     let receipts = 0, badReceipts = 0, orphanReceipts = 0;
     const stored = new Set();
-    for (const r of data.receipts || []) {
-      if (!r || typeof r.id !== 'string' || !r.dataURL) { badReceipts++; continue; }
-      const id = r.id.slice(0, 64), entryId = typeof r.entryId === 'string' ? r.entryId : null;
-      if (entryId && !known.has(entryId)) { orphanReceipts++; continue; }
-      try {
-        await putReceipt({ id, entryId, type: /^image\//.test(r.type) ? r.type : 'image/jpeg', createdAt: typeof r.createdAt === 'string' ? r.createdAt : nowISO(), blob: await dataURLToBlob(r.dataURL) });
-        receipts++; stored.add(id);
-      } catch (e) { if (isStorageFull(e)) throw e; badReceipts++; }
-    }
-    if (!replaced) for (const k of await allKeys('receipts')) stored.add(k);
-    let dangling = 0;
-    // hasReceipt is left alone: it can mean a paper receipt. Only the claim to a photo has to be true.
-    for (const e of entries) if (e.receiptId && !stored.has(e.receiptId)) { e.receiptId = null; dangling++; }
-    await putEntries(entries);
-    await putRows('places', places);
-    await putRows('trips', trips);
-    for (const store of ROW_STORES) await putRows(store, rows[store]);
-    if (replaced) {
-      const fresh = { entries: entries.map((e) => e.id), receipts: Array.from(stored), places: places.map((p) => p.id), trips: trips.map((t) => t.id) };
-      for (let i = 0; i < DATA_STORES.length; i++) {
-        const store = DATA_STORES[i], kept = new Set(fresh[store]);
-        await deleteRows(store, replaced[i].filter((k) => !kept.has(k)));
+    // what has actually been committed, so a restore that fails part-way can say what landed instead of leaving the user guessing
+    const written = { entries: 0, receipts: 0, places: 0, trips: 0, rows: {} };
+    try {
+      for (const r of data.receipts || []) {
+        if (!r || typeof r.id !== 'string' || !r.dataURL) { badReceipts++; continue; }
+        const id = r.id.slice(0, 64), entryId = typeof r.entryId === 'string' ? r.entryId : null;
+        if (entryId && !known.has(entryId)) { orphanReceipts++; continue; }
+        try {
+          await putReceipt({ id, entryId, type: /^image\//.test(r.type) ? r.type : 'image/jpeg', createdAt: typeof r.createdAt === 'string' ? r.createdAt : nowISO(), blob: await dataURLToBlob(r.dataURL) });
+          receipts++; written.receipts++; stored.add(id);
+        } catch (e) { if (isStorageFull(e)) throw e; badReceipts++; }
       }
-    }
-    if (data.settings && typeof data.settings === 'object' && opts.settings !== false) {
-      // only the settings the file actually carries: an older backup has fewer keys, and the rest must survive it
-      const incoming = {};
-      for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in data.settings) incoming[k] = data.settings[k];
-      if (data.settings.experiments && typeof data.settings.experiments === 'object') {
-        for (const [old, flat] of Object.entries(LEGACY_EXPERIMENT_FLAGS)) if (!(flat in incoming) && old in data.settings.experiments) incoming[flat] = data.settings.experiments[old] !== false;
+      if (!replaced) for (const k of await allKeys('receipts')) stored.add(k);
+      let dangling = 0;
+      // hasReceipt is left alone: it can mean a paper receipt. Only the claim to a photo has to be true.
+      for (const e of entries) if (e.receiptId && !stored.has(e.receiptId)) { e.receiptId = null; dangling++; }
+      await putEntries(entries); written.entries = entries.length;
+      await putRows('places', places); written.places = places.length;
+      await putRows('trips', trips); written.trips = trips.length;
+      for (const store of ROW_STORES) { await putRows(store, rows[store]); written.rows[store] = rows[store].length; }
+      if (replaced) {
+        const fresh = { entries: entries.map((e) => e.id), receipts: Array.from(stored), places: places.map((p) => p.id), trips: trips.map((t) => t.id) };
+        for (let i = 0; i < DATA_STORES.length; i++) {
+          const store = DATA_STORES[i], kept = new Set(fresh[store]);
+          await deleteRows(store, replaced[i].filter((k) => !kept.has(k)));
+        }
       }
-      await updateSettings(incoming);
+      if (data.settings && typeof data.settings === 'object' && opts.settings !== false) {
+        // only the settings the file actually carries: an older backup has fewer keys, and the rest must survive it
+        const incoming = {};
+        for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in data.settings) incoming[k] = data.settings[k];
+        if (data.settings.experiments && typeof data.settings.experiments === 'object') {
+          for (const [old, flat] of Object.entries(LEGACY_EXPERIMENT_FLAGS)) if (!(flat in incoming) && old in data.settings.experiments) incoming[flat] = data.settings.experiments[old] !== false;
+        }
+        await updateSettings(incoming);
+      }
+      const counts = {}; for (const store of ROW_STORES) counts[store] = rows[store].length;
+      return { entries: entries.length, skipped, receipts, badReceipts, dangling, orphanReceipts, rows: counts };
+    } catch (err) {
+      // the rows already written stay: the caller re-reads the store and shows whatever landed, and `written` says what that was
+      const n = written.entries;
+      const detail = String((err && err.message) || 'storage error').replace(/\.$/, ''); // it is quoted mid-sentence, so it does not keep its full stop
+      const e = new Error(`Only part of the backup could be saved: ${n} ${n === 1 ? 'entry was' : 'entries were'} written before storage failed (${detail}). Nothing after that was saved.`);
+      e.written = written;
+      throw e;
     }
-    const counts = {}; for (const store of ROW_STORES) counts[store] = rows[store].length;
-    return { entries: entries.length, skipped, receipts, badReceipts, dangling, orphanReceipts, rows: counts };
   }
 
   /** Remove everything; with keepSettings, only the ledger (entries, receipts, places, trips) goes and what the app has learned stays. */
   async function clearAll(opts) {
     opts = opts || {};
-    for (const store of opts.keepSettings ? DATA_STORES : STORE_NAMES) await clearStore(store);
+    // one store at a time: a store that will not clear must not stop the others, and the user has to be told what is left
+    const failed = [];
+    for (const store of opts.keepSettings ? DATA_STORES : STORE_NAMES) {
+      try { await clearStore(store); } catch (e) { failed.push(store); }
+    }
+    if (failed.length) throw new Error(`These were not cleared: ${failed.join(', ')}.`);
   }
 
   function csvEscape(v) {
@@ -4319,9 +4441,9 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   root.ItemizerStore = {
     DB_VERSION, STORES, STORE_NAMES, DATA_STORES, ROW_STORES, DEFAULT_SETTINGS,
-    sanitizeSettings, sanitizeRow, sanitizeEntry, sanitizePlace, sanitizeTrip, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides,
+    sanitizeSettings, sanitizeRow, sanitizeEntry, sanitizePlace, sanitizeTrip, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides, orphanReceiptIds,
     openDB, allRows, getRow, putRow, putRows, deleteRow, clearStore, syncRows, countRows, counts,
-    getEntries, putEntry, putEntries, deleteEntry, deleteEntries, putReceipt, getReceipt, deleteReceipt, getAllReceipts,
+    getEntries, putEntry, putEntries, deleteEntry, deleteEntries, putReceipt, getReceipt, deleteReceipt, getAllReceipts, putEntriesWithReceipt, putTripWithEntry,
     getPlaces, putPlace, deletePlace, getTrips, putTrip, deleteTrip, getSettings, saveSettings, updateSettings,
     getLearned, putLearned, deleteLearned, clearLearned, getWeights, syncWeights, clearWeights, getDismissals, putDismissal, clearDismissals,
     getLayouts, putLayout, clearLayouts, getSnapshots, syncSnapshots, clearSnapshots, getOverrides, syncOverrides, clearOverrides,
@@ -4374,11 +4496,15 @@ window.ITEMIZER_SINGLE_FILE = true;
   const money = R.money, moneyCents = R.moneyCents;
   const fmtMiles = (n) => `${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 1 })} mi`;
   const fmtAmount = (entry) => (S.isMiles(entry.lineId) ? fmtMiles(entry.amount) : moneyCents(entry.amount));
+  /** From 2026 a non-itemizer's cash gifts sit on the standard-deduction side (§170(p)), so the figure is no longer only the standard deduction. */
+  const stdGiftClause = (SD) => (SD && SD.charity > 0 ? `, including ${moneyCents(SD.charity)} of cash gifts` : '');
   /** A count and its noun, so nothing on screen reads "1 entries". Same shape as the helper in rules.js. */
   const plural = (n, one, many) => (Number(n) === 1 ? one : many || one + 's');
   /** styles.css turns off transitions for "reduce motion"; a scroll asked for in script has to check the setting itself. */
   const prefersReducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const rateShort = (r) => R.perMile(r || 0).replace('/mile', '/mi'); // "70¢/mi" beside converted miles on the worksheet, so the preparer can check the figure
+  /** The same label for a whole line, which in a year like 2026 was driven under two rates. */
+  const rateShortFor = (P, key) => (P.mileageJul ? `${rateShort(P.mileage[key])} to Jun 30, ${rateShort(P.mileageJul[key])} from Jul 1` : rateShort(P.mileage[key]));
   const mixedTreatments = (lines) => new Set(lines.filter((l) => l.treatment !== 'info').map((l) => l.treatment)).size > 1; // Education mixes a credit with an adjustment: no single total lands anywhere on the return
   const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const LEVEL_LABEL = { act: 'To do', warn: 'Heads up', good: 'Good news', info: 'Note' };
@@ -4460,8 +4586,10 @@ window.ITEMIZER_SINGLE_FILE = true;
   async function maybeRollYear() {
     if (!shouldAdvanceTaxYear(state.settings.taxYear, state.settings.taxYearPickedAt, P.todayISO())) return;
     const was = Number(state.settings.taxYear);
-    state.settings.taxYear = Number(P.todayISO().slice(0, 4));
-    try { await DB.saveSettings(state.settings); } catch (e) { /* the year still moves for this session */ }
+    const now = Number(P.todayISO().slice(0, 4));
+    state.settings.taxYear = now;
+    // only the year is written: this tab's copy of every other setting may be an hour old, and another tab may have saved since
+    try { Object.assign(state.settings, await DB.updateSettings({ taxYear: now })); } catch (e) { /* the year still moves for this session */ }
     toast(`Tax year is now ${state.settings.taxYear}. Pick ${was} from the year menu to keep working on it.`, 12000, { label: `Back to ${was}`, onClick: () => setTaxYear(was) });
   }
   /** Switch the year the app is working on. A choice made here survives the New Year roll-over. */
@@ -4469,9 +4597,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     // switching years throws away the capture form and any live recording, neither of which is stored anywhere else
     if (!(await confirmDiscardWork(`Tax year ${Number(year)} will be shown instead.`))) { const sel = $('#yearSelect'); if (sel) sel.value = String(state.settings.taxYear); return; }
     const prev = { taxYear: state.settings.taxYear, taxYearPickedAt: state.settings.taxYearPickedAt };
-    state.settings.taxYear = Number(year);
-    state.settings.taxYearPickedAt = P.todayISO();
-    try { await DB.saveSettings(state.settings); }
+    // the two keys this changes, not the whole row: another tab may have saved an AGI or a filing status since this one loaded
+    try { Object.assign(state.settings, await DB.updateSettings({ taxYear: Number(year), taxYearPickedAt: P.todayISO() })); }
     catch (e) {
       // the year the views work on is the stored one: a year that could not be written must not stay on screen
       Object.assign(state.settings, prev);
@@ -4512,8 +4639,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (!pr || Number(state.settings.taxYear) !== Number(today.slice(0, 4)) || !state.computed.entries.length) return;
     const s = { today, taxYear: state.computed.taxYear, actual: pr.actual, expectedMore: pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore, projectedTotal: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore), standardDeduction: pr.standardDeduction, itemize: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore) > pr.standardDeduction };
     if (!EXP.changed(state.snapshots, s)) return;
+    const known = state.snapshots; // only the rows this tab started from may be deleted: another tab's month must survive
     state.snapshots = EXP.snapshot(state.snapshots, s);
-    DB.syncSnapshots(state.snapshots).catch(() => {}); // one row per month per year; only the changed month is written
+    DB.syncSnapshots(state.snapshots, known).catch(() => {}); // one row per month per year; only the changed month is written
   }
   const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
   /** The keyword weights in force. With the experiment off the stored ones are kept but not applied, so the switch really does turn the effect off. */
@@ -4523,8 +4651,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (state.settings.experimentCorrections === false || !suggestions || !suggestions.length || !chosenLineId) return;
     const top = suggestions[0];
     const chosen = suggestions.find((x) => x.lineId === chosenLineId);
+    const known = state.weights; // a keyword another tab has just learned is not this tab's to delete
     state.weights = EXP.applyCorrection(state.weights, top.lineId, (top.because || []).filter(EXP.isKeyword), chosenLineId, chosen ? (chosen.because || []).filter(EXP.isKeyword) : []);
-    DB.syncWeights(state.weights).catch(() => {}); // only the keywords whose weight changed are written
+    DB.syncWeights(state.weights, known).catch(() => {}); // only the keywords whose weight changed are written
   }
   /** Remember which line a payee was filed on: one row per payee key. */
   function rememberLine(text, lineId) {
@@ -4803,7 +4932,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     return `<button class="row" data-edit="${esc(e.id)}" type="button">
       <span class="row-date">${esc(P.formatDate(e.date, false))}</span>
       <span class="row-main"><span class="row-desc"><span class="row-text">${esc(e.description || line.label)}</span>${e.sample ? '<span class="sample-tag">EXAMPLE</span>' : ''}${dupe ? ' <span class="dupe-mark" title="Possible duplicate"><span aria-hidden="true">⧉</span><span class="sr-only">Possible duplicate</span></span>' : ''}</span><span class="row-line">${esc(line.label)} · ${esc(line.sectionTitle)}</span></span>
-      <span class="row-amt">${esc(fmtAmount(e))}${line.unit === 'miles' && line.treatment !== 'info' ? `<small>${esc(money(R.cents(Number(e.amount) * (state.computed.params.mileage[line.rate] || 0))))}</small>` : ''}</span>
+      <span class="row-amt">${esc(fmtAmount(e))}${line.unit === 'miles' && line.treatment !== 'info' ? `<small>${esc(money(R.cents(Number(e.amount) * R.mileageRate(state.computed.params, line.rate, e.date))))}</small>` : ''}</span>
       ${receiptIcon(e)}
     </button>`;
   }
@@ -4830,7 +4959,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const R0 = state.computed;
     const ye = yearEntries();
     const recent = ye.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || b.date.localeCompare(a.date)).slice(0, 6);
-    const verdict = R0.verdict.itemize ? `<span class="pill pill-good">Itemizing wins by ${money(R0.verdict.difference)}</span>` : `<span class="pill pill-info">${money(-R0.verdict.difference)} to itemizing</span>`;
+    const verdict = R0.verdict.itemize ? `<span class="pill pill-good">Itemizing wins by ${R.moneyNear(R0.verdict.difference)}</span>` : `<span class="pill pill-info">${R.moneyNear(-R0.verdict.difference)} to itemizing</span>`;
     const filing = R.FILING_STATUSES.find((f) => f.id === state.settings.filingStatus);
     const strip = `<a class="year-strip" href="#insights"><span class="sr-only">Open insights: </span>
         <div class="strip-top"><div class="strip-title">${R0.taxYear} · ${esc(filing ? filing.label : '')}</div><div class="strip-verdict">${verdict}</div></div>
@@ -5046,7 +5175,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       </div>
       <p class="note small" id="dnHint" style="margin-top:8px">Pick an item to see its typical thrift-shop range.</p>
       ${D.items.length ? `<div class="table-wrap"><table class="table-twin donation"><thead><tr><th>Item</th><th class="num">Qty</th><th>Condition</th><th class="num">Each</th><th class="num">Total</th><th></th></tr></thead><tbody>${D.items.map((it, i) => `<tr><td>${esc(it.name)}</td><td class="num">${it.qty}</td><td>${esc((VAL.CONDITIONS.find((c) => c.id === it.condition) || {}).label || it.condition)}</td><td class="num">${esc(moneyCents(it.value))}</td><td class="num">${esc(moneyCents(VAL.lineTotal(it)))}</td><td><button class="btn btn-ghost btn-sm" type="button" data-dn-remove="${i}" aria-label="Remove item">✕</button></td></tr>`).join('')}</tbody></table></div>` : ''}
-      <div class="actions"><span><b>Total ${esc(moneyCents(dnTotal))}</b> · ${VAL.count(D.items)} ${VAL.count(D.items) === 1 ? 'item' : 'items'}${th.appraisal ? ' · <span class="pill pill-warn">appraisal needed over $5,000</span>' : th.form8283 ? ' · <span class="pill pill-act">Form 8283 over $500</span>' : ''}</span><button class="btn btn-primary btn-sm" type="button" id="dnLog" ${D.items.length ? '' : 'disabled'}>Log donation</button></div>
+      <div class="actions"><span><b>Total ${esc(moneyCents(dnTotal))}</b> · ${VAL.count(D.items)} ${VAL.count(D.items) === 1 ? 'item' : 'items'}${th.appraisal ? ' · <span class="pill pill-warn">check the appraisal rule over $5,000</span>' : th.form8283 ? ' · <span class="pill pill-act">Form 8283 over $500</span>' : ''}</span><button class="btn btn-primary btn-sm" type="button" id="dnLog" ${D.items.length ? '' : 'disabled'}>Log donation</button></div>
       <p class="note small" style="margin-top:8px">Values are typical thrift-shop ranges, the kind Goodwill and The Salvation Army publish, for items in good used condition or better, which is the IRS minimum for clothing and household goods. You set each value; the itemized list is saved with the entry as your record. Keep the charity's receipt too.</p>
     </details>`;
   }
@@ -5204,7 +5333,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     $('#tripLine').onchange = (ev) => { T.lineId = ev.target.value; };
     $('#tripMeasure').onclick = measureTrip;
     $('#tripLog').onclick = logTrip;
-    $('#recStart').onclick = startRecording;
+    $('#recStart').onclick = () => startRecording();
     $('#recPause').onclick = () => { if (state.recorder) { state.recorder.pause(); renderCapture(); } };
     $('#recStop').onclick = stopRecording;
     $('#addPlace').onclick = () => openPlaceModal(null);
@@ -5282,6 +5411,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       note: `${T.roundTrip ? 'Round trip, ' : ''}${METHOD_LABEL[T.method] || T.method}.`, hasReceipt: false, receiptId: null, createdAt: now, updatedAt: now, sample: false,
     };
     const trip = { id: DB.uid(), date: T.date, taxYear: entry.taxYear, fromId: T.fromId, toId: T.toId, fromLabel, toLabel, purpose: T.purpose.trim(), miles: G.roundMiles(miles), roundTrip: !!T.roundTrip, method: T.method, lineId: T.lineId, entryId: entry.id, points: T.points || null, startedAt: T.startedAt, endedAt: T.endedAt, createdAt: now };
+    entry.tripId = trip.id; // the edit path finds the drive from the entry, without scanning the whole log
     if (T.saving) return;
     T.saving = true;
     try {
@@ -5353,22 +5483,34 @@ window.ITEMIZER_SINGLE_FILE = true;
       `${subject}${photo ? ', including the receipt photo you just took,' : ''} will be lost. ${what}`,
       recording ? 'Stop and discard' : 'Discard', true);
   }
-  /** Offer a recording the browser interrupted, so the drive is not lost in silence. */
+  /** Offer back a drive the app was closed on: one still being recorded is resumed, one already stopped goes into the trip form. */
   function offerUnfinishedRecording(cp) {
-    if (!cp || !cp.points.length || cp.state === 'idle') return;
+    if (!cp || !cp.points.length) return;
     const miles = G.roundMiles(G.trackMiles(cp.points));
     const started = cp.startedAt ? new Date(cp.startedAt) : null;
     const when = started ? started.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'earlier';
-    toast(`A recording from ${when} was interrupted: ${fmtMiles(miles)} kept.`, 60000, { label: 'Use it', onClick: () => {
-      clearRecordingCheckpoint();
+    const openTripForm = () => {
       state.captureMode = 'trip';
       if (!state.trip) state.trip = freshTrip();
-      const T = state.trip;
-      T.points = cp.points; T.miles = String(miles); T.recordedMiles = miles; T.method = 'gps'; T.roundTrip = false; T.oneWay = null;
-      T.startedAt = cp.startedAt || null; T.endedAt = null;
-      if (cp.startedAt && !T.dateTouched) T.date = isoFromEpoch(cp.startedAt);
-      T.result = `Recovered ${miles} mi from a recording that was interrupted. Check the miles against what you drove before you log it.`;
-      if (state.view === 'capture') renderCapture(); else go('capture');
+      if (cp.startedAt && !state.trip.dateTouched) state.trip.date = isoFromEpoch(cp.startedAt);
+    };
+    if (cp.state === 'idle') {
+      // stopped with "Stop and use", then closed before the trip was logged: the track is nowhere but in the checkpoint
+      toast(`A drive of ${fmtMiles(miles)} recorded from ${when} was never logged.`, 60000, { label: 'Use it', onClick: () => {
+        clearRecordingCheckpoint();
+        openTripForm();
+        const T = state.trip;
+        T.points = cp.points; T.miles = String(miles); T.recordedMiles = miles; T.method = 'gps'; T.roundTrip = false; T.oneWay = null;
+        T.startedAt = cp.startedAt || null; T.endedAt = null;
+        T.result = `Recovered ${miles} mi from a drive that was recorded but never logged. Check the miles against what you drove before you log it.`;
+        if (state.view === 'capture') renderCapture(); else go('capture');
+      } });
+      return;
+    }
+    toast(`The drive from ${when} was interrupted: ${fmtMiles(miles)} so far.`, 60000, { label: 'Resume', altLabel: 'Resume the drive', onClick: () => {
+      openTripForm();
+      if (state.view !== 'capture') go('capture');
+      startRecording(cp); // the miles so far are kept; the stretch the app was closed for is marked as a gap, not driven
     } });
   }
   function drawTrack() {
@@ -5386,9 +5528,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     const e = $('#recError'); if (e) e.textContent = rec.error || (rec.waiting && rec.state === 'recording' ? 'Waiting for a GPS fix…' : '');
     drawTrack();
   }
-  function startRecording() {
-    if (!state.recorder || state.recorder.state === 'idle') {
-      state.recorder = G.createRecorder({ onUpdate: updateRecorderUI, onCheckpoint: saveRecordingCheckpoint, onError: (msg, rec) => { updateRecorderUI(rec); toast(msg); if (rec.state === 'idle') { clearInterval(state.recorderTimer); renderCapture(); } } });
+  const recorderHandlers = () => ({ onUpdate: updateRecorderUI, onCheckpoint: saveRecordingCheckpoint, onError: (msg, rec) => { updateRecorderUI(rec); toast(msg); if (rec.state === 'idle') { clearInterval(state.recorderTimer); renderCapture(); } } });
+  /** `resumeFrom` is a checkpoint of a drive the app was closed on: the recorder carries that same trip on rather than starting a new one. */
+  function startRecording(resumeFrom) {
+    if (resumeFrom) state.recorder = G.createRecorder(recorderHandlers(), resumeFrom);
+    else if (!state.recorder || state.recorder.state === 'idle') {
+      state.recorder = G.createRecorder(recorderHandlers());
     }
     const ok = state.recorder.start();
     if (!ok) { toast(state.recorder.error || 'Location is not available.'); return; }
@@ -5410,7 +5555,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     const drivenOn = result.startedAt ? isoFromEpoch(result.startedAt) : '';
     if (drivenOn && !T.dateTouched) T.date = drivenOn;
     if (T.date && Number(T.date.slice(0, 4)) !== Number(state.settings.taxYear)) T.result += ` This trip is dated ${P.formatDate(T.date)}, which is not in tax year ${state.settings.taxYear}; change the year in the header to deduct it.`;
-    clearRecordingCheckpoint(); // the drive is in the form now, so no unfinished recording is left to offer back
+    // The checkpoint stays: between "Stop and use" and "Log trip" the track is still only in this tab's memory, and
+    // stop() has just written it back with state 'idle' so a reload can offer it again. logTrip and discardRecorder clear it.
     window.removeEventListener('beforeunload', warnBeforeLeaving);
     toast(result.miles > 0 ? `Recorded ${result.miles} mi.` : 'No movement was recorded.');
     renderCapture();
@@ -5485,13 +5631,14 @@ window.ITEMIZER_SINGLE_FILE = true;
     const rows = [['date', 'from', 'to', 'round_trip', 'purpose', 'miles', 'how_measured', 'worksheet_line', 'rate_per_mile', 'dollar_value'].join(',')];
     const covered = new Set();
     for (const t of liveTrips(state.trips).filter((x) => Number(x.taxYear) === year).sort((a, b) => a.date.localeCompare(b.date))) {
-      const line = S.getLine(t.lineId); const rate = line && line.rate ? P0.mileage[line.rate] || 0 : 0;
+      // the rate is the one in force on the day of the drive: 2026 changed its rates on July 1
+      const line = S.getLine(t.lineId); const rate = R.mileageRate(P0, line && line.rate, t.date);
       covered.add(t.entryId);
-      rows.push([DB.csvEscape(t.date), DB.csvText(t.fromLabel), DB.csvText(t.toLabel), t.roundTrip ? 'yes' : 'no', DB.csvText(t.purpose), Number(t.miles) || 0, DB.csvEscape(METHOD_LABEL[t.method] || t.method), DB.csvEscape(line ? line.label : ''), rate, R.cents(t.miles * rate).toFixed(2)].join(','));
+      rows.push([DB.csvEscape(t.date), DB.csvText(t.fromLabel), DB.csvText(t.toLabel), t.roundTrip ? 'yes' : 'no', DB.csvText(t.purpose), Number(t.miles) || 0, DB.csvText(METHOD_LABEL[t.method] || t.method), DB.csvEscape(line ? line.label : ''), rate, R.cents((Number(t.miles) || 0) * rate).toFixed(2)].join(','));
     }
     for (const e of yearEntries().filter((x) => S.isMiles(x.lineId) && !covered.has(x.id)).sort((a, b) => a.date.localeCompare(b.date))) {
-      const line = S.getLine(e.lineId); const rate = line.rate ? P0.mileage[line.rate] || 0 : 0;
-      rows.push([DB.csvEscape(e.date), '', '', '', DB.csvText(e.description), Number(e.amount) || 0, 'entered by hand', DB.csvEscape(line.label), rate, R.cents(Number(e.amount) * rate).toFixed(2)].join(','));
+      const line = S.getLine(e.lineId); const rate = R.mileageRate(P0, line.rate, e.date);
+      rows.push([DB.csvEscape(e.date), '', '', '', DB.csvText(e.description), Number(e.amount) || 0, 'entered by hand', DB.csvEscape(line.label), rate, R.cents((Number(e.amount) || 0) * rate).toFixed(2)].join(','));
     }
     downloadText(`itemizer-mileage-log-${year}.csv`, rows.join('\r\n'), 'text/csv');
   }
@@ -5843,8 +5990,10 @@ window.ITEMIZER_SINGLE_FILE = true;
   /** An amount as people write it: "1,200", "$40", " 40 ". The quick box already accepts all three, so the fields have to as well. */
   const amountTyped = (v) => Number(String(v == null ? '' : v).replace(/[$,\s]/g, ''));
   /** The problem with a typed figure, or null: used wherever an amount, a mileage or a value is read from a box. */
-  function amountProblem(v, noun) {
+  function amountProblem(v, noun, negativeHint) {
     const n = amountTyped(v);
+    // a figure that was typed but came out below nought needs its own words: "enter an amount" reads as though nothing was typed
+    if (n < 0 && negativeHint) return negativeHint;
     if (!(n > 0)) return `enter ${noun}`; // empty, nought, negative, or not a number at all
     if (!(n <= MAX_AMOUNT)) return 'enter a figure below a billion'; // "1e400" and "Infinity" land here rather than on the worksheet
     return null;
@@ -5870,7 +6019,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const problems = [];
     if (!cap.lineId) problems.push('pick a worksheet line');
     const isMiles = cap.lineId && S.isMiles(cap.lineId);
-    const amountIssue = amountProblem(isMiles ? cap.miles : cap.amount, isMiles ? 'the miles' : 'an amount');
+    const amountIssue = amountProblem(isMiles ? cap.miles : cap.amount, isMiles ? 'the miles' : 'an amount', isMiles ? null : 'a refund is not a deductible expense, so enter a positive amount');
     if (amountIssue) problems.push(amountIssue);
     if (!cap.date || !/^\d{4}-\d{2}-\d{2}$/.test(cap.date)) problems.push('pick a date');
     // a share that cannot be read would otherwise file the whole bill at 100% without saying so
@@ -6416,9 +6565,13 @@ window.ITEMIZER_SINGLE_FILE = true;
     // the Schedule C sub-label says what is actually in the figure: the meals share is a settable rate, and a business can have no meals at all
     const seCount = R0.sections.selfemp.count;
     const cSub = !C0.hasActivity ? 'no business entries'
-      : C0.vehicle.miles ? `${fmtMiles(C0.vehicle.miles)} at ${R.perMile(R0.params.mileage.business)}`
+      : C0.vehicle.miles ? `${fmtMiles(C0.vehicle.miles)} at ${R.perMileText(R0.params, 'business')}`
       : C0.meals.paid > 0 ? `meals counted at ${R.pct(C0.meals.rate)}`
       : `${seCount} business ${plural(seCount, 'entry', 'entries')}`;
+    // what has been added to the standard deduction, so the figure beside "standard deduction" is not taken for the plain one
+    const stdParts = [];
+    if (SD.conditions.length) stdParts.push(`${money(SD.additional)} because ${esc(SD.conditions.join(' and '))}`);
+    if (SD.charity > 0) stdParts.push(`${money(SD.charity)} of cash gifts, which count without itemizing up to ${money(SD.charityCap)}`);
     const kicker = `<span class="pill pill-accent">Tax year ${R0.taxYear}</span><span class="pill pill-info">${esc(filing ? filing.label : '')}</span>${R0.agi == null ? '<span class="pill pill-act">AGI not set</span>' : `<span class="pill pill-info">AGI ${money(R0.agi)}</span>`}`;
 
     const sectionRows = S.SECTIONS.filter((s) => R0.sections[s.id].count > 0).map((s) => {
@@ -6438,7 +6591,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         <div class="verdict-kicker">${kicker}</div>
         <h2 class="verdict-title">${V.itemize ? 'Itemizing wins' : 'The standard deduction still wins'}</h2>
         <div class="hero">${hero}</div>
-        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${SD.conditions.length ? ` (includes ${money(SD.additional)} because ${esc(SD.conditions.join(' and '))})` : ''}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}</p>
+        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdParts.length ? ` (includes ${stdParts.join(' and ')})` : ''}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}</p>
         ${meterHTML('')}
       </section>
 
@@ -6481,7 +6634,7 @@ window.ITEMIZER_SINGLE_FILE = true;
             <dt>Gambling losses (to winnings)</dt><dd>${moneyCents(A.other.deductible)}</dd>
             <dt>Casualty (${A.casualty.qualified ? 'qualified disaster loss' : 'declared disaster'})</dt><dd>${moneyCents(A.casualty.deductible)}</dd>
             <div class="total" style="display:contents"><dt>Itemized total</dt><dd>${moneyCents(A.total)}</dd></div>
-            <dt>Standard deduction</dt><dd>${moneyCents(SD.total)}</dd>
+            <dt>Standard deduction${stdGiftClause(SD)}</dt><dd>${moneyCents(SD.total)}</dd>
           </dl>
         </section>
         <section class="card">
@@ -6511,7 +6664,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (!state.entries.some((e) => R.taxYearOf(e) === prevYear)) return '';
     const prev = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: prevYear, today: P.todayISO(), paramOverrides: state.overrides }));
     const rows = S.SECTIONS.filter((s) => R0.sections[s.id].count || prev.sections[s.id].count).map((s) => ({ title: s.title, now: R0.sections[s.id].value, before: prev.sections[s.id].value }));
-    const delta = (a, b) => { const d = Math.round((a - b) * 100) / 100; return `<span class="${d > 0 ? 'delta-up' : d < 0 ? 'delta-down' : ''}">${d > 0 ? '+' : ''}${money(d)}</span>`; };
+    // money() rounds to the dollar, so a 30-cent fall would otherwise print "$0" in red
+    const delta = (a, b) => { const d = Math.round((a - b) * 100) / 100; const shown = Math.abs(d) < 0.5 ? 0 : d; return `<span class="${shown > 0 ? 'delta-up' : shown < 0 ? 'delta-down' : ''}">${shown > 0 ? '+' : ''}${money(shown)}</span>`; };
     return `<section class="card">
         <div class="card-head"><h2>Compared with ${prevYear}</h2><span class="muted small">dollar value by section</span></div>
         <div class="table-wrap"><table class="table-twin yoy"><thead><tr><th>Section</th><th class="num">${prevYear}</th><th class="num">${R0.taxYear}</th><th class="num">Change</th></tr></thead><tbody>
@@ -6574,6 +6728,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (R0.scheduleA.casualty.gross) notes.push(`Casualty loss ${R0.scheduleA.casualty.federalDisaster ? 'IS' : 'is NOT'} marked as a declared disaster${state.settings.disasterNumber ? ` (FEMA ${state.settings.disasterNumber})` : ''}${R0.scheduleA.casualty.qualified ? '; taxpayer marked it a qualified disaster loss ($500 floor, no AGI reduction)' : ''}.`);
     if (R0.scheduleA.taxes.withheld) notes.push(`State and local income tax withheld per W-2 (boxes 17 and 19), as entered by taxpayer: ${money(R0.scheduleA.taxes.withheld)} — included in the state-and-local total above the cap.`);
     if (R0.scheduleA.charity.carryforward) notes.push(`Charitable gifts exceed the AGI limit by ${money(R0.scheduleA.charity.carryforward)}; carry the excess forward.`);
+    // an above-the-line figure the insights only ever report as good news, so the act/warn sweep above never picks it up
+    const senior = R0.adjustments.seniorDeduction;
+    if (senior && senior.amount > 0) notes.push(`Senior deduction: ${money(senior.amount)} for ${senior.people} ${plural(senior.people, 'person', 'people')} aged 65 or older${senior.phase === 'partial' ? ', already reduced for income' : senior.phase === 'unchecked' ? ', before any reduction for income (no AGI entered)' : ''}. It is claimed whether or not the return itemizes.`);
     const tripCount = liveTrips(state.trips).filter((t) => Number(t.taxYear) === R0.taxYear).length;
     if (tripCount) notes.push(`Mileage log: ${tripCount} ${tripCount === 1 ? 'trip' : 'trips'} with date, destination, purpose, and miles (export from Capture → Trip).`);
     if (R0.scheduleC.hasActivity && R0.scheduleC.vehicle.totalMiles) notes.push(`Vehicle: ${fmtMiles(R0.scheduleC.vehicle.miles)} business of ${fmtMiles(R0.scheduleC.vehicle.totalMiles)} total (${Math.round((R0.scheduleC.vehicle.businessUseShare || 0) * 100)}% business use).`);
@@ -6596,7 +6753,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       const has = L.count > 0;
       let amt = '$';
       if (has) {
-        if (l.unit === 'miles') amt = `<span class="mi">${esc(fmtMiles(L.total))}${l.treatment === 'info' ? '' : ' @ ' + esc(rateShort(P0.mileage[l.rate]))}</span>${l.treatment === 'info' ? '' : esc(moneyCents(R.cents(L.total * (P0.mileage[l.rate] || 0))))}`;
+        if (l.unit === 'miles') amt = `<span class="mi">${esc(fmtMiles(L.total))}${l.treatment === 'info' ? '' : ' @ ' + esc(rateShortFor(P0, l.rate))}</span>${l.treatment === 'info' ? '' : esc(moneyCents(L.milesValue))}`;
         else amt = esc(moneyCents(L.total));
       }
       return `<div class="sheet-line ${has ? '' : 'is-zero'}"><div class="lbl"><span>${esc(l.label)}</span><span class="leader"></span></div><span class="amt ${has ? '' : 'blank'}"${has ? '' : ' aria-hidden="true"'}>${amt}</span></div>`;
@@ -6655,7 +6812,7 @@ window.ITEMIZER_SINGLE_FILE = true;
           ${R0.scheduleA.taxes.withheld ? `<span>State and local income tax withheld per W-2 (from Settings)</span><span class="num">${esc(moneyCents(R0.scheduleA.taxes.withheld))}</span>` : ''}
           <span>Schedule A items entered${R0.scheduleA.taxes.withheld ? ', including that withholding' : ''}</span><span class="num">${esc(moneyCents(R0.scheduleA.grossEntered))}</span>
           <span>Counts after medical floor, tax cap, and gift limits</span><span class="num">${esc(moneyCents(R0.scheduleA.total))}</span>
-          <span>Standard deduction (${esc(filing ? filing.label : '')}${R0.standardDeduction.conditions.length ? ', with age/blind additions' : ''})</span><span class="num">${esc(moneyCents(R0.standardDeduction.total))}</span>
+          <span>Standard deduction (${esc(filing ? filing.label : '')}${R0.standardDeduction.conditions.length ? ', with age/blind additions' : ''}${esc(stdGiftClause(R0.standardDeduction))})</span><span class="num">${esc(moneyCents(R0.standardDeduction.total))}</span>
           <span class="big">${R0.verdict.itemize ? 'Itemizing appears to win by' : 'Standard deduction appears to win by'}</span><span class="num big">${esc(moneyCents(Math.abs(R0.verdict.difference)))}</span>
           ${R0.scheduleC.hasActivity ? `<span>Schedule C expenses (business, not itemized)</span><span class="num">${esc(moneyCents(R0.scheduleC.total))}</span>` : ''}
           ${R0.adjustments.studentLoanInterest.paid ? `<span>Student loan interest (adjustment to income)</span><span class="num">${esc(moneyCents(R0.adjustments.studentLoanInterest.deductible))}</span>` : ''}
@@ -6714,7 +6871,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       out.push(sec.title.toUpperCase());
       for (const l of lines) {
         const L = R0.lines[l.id];
-        const v = l.unit === 'miles' ? `${fmtMiles(L.total)}${l.treatment === 'info' ? '' : ` @ ${rateShort(P0.mileage[l.rate])} = ` + moneyCents(R.cents(L.total * (P0.mileage[l.rate] || 0)))}` : moneyCents(L.total);
+        const v = l.unit === 'miles' ? `${fmtMiles(L.total)}${l.treatment === 'info' ? '' : ` @ ${rateShortFor(P0, l.rate)} = ` + moneyCents(L.milesValue)}` : moneyCents(L.total);
         out.push('  ' + pad(l.label, v, 58));
         if (l.id === 'int.individual') {
           const D = lenderDetails(R0);
@@ -6727,7 +6884,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (R0.scheduleA.taxes.withheld) out.push(pad('State and local income tax withheld per W-2', moneyCents(R0.scheduleA.taxes.withheld), 60));
     out.push(pad(R0.scheduleA.taxes.withheld ? 'Schedule A entered, including that withholding' : 'Schedule A entered', moneyCents(R0.scheduleA.grossEntered), 60));
     out.push(pad('Counts after floors and caps', moneyCents(R0.scheduleA.total), 60));
-    out.push(pad('Standard deduction', moneyCents(R0.standardDeduction.total), 60));
+    out.push(pad(`Standard deduction${stdGiftClause(R0.standardDeduction)}`, moneyCents(R0.standardDeduction.total), 60));
     out.push(pad(R0.verdict.itemize ? 'Itemizing wins by' : 'Standard deduction wins by', moneyCents(Math.abs(R0.verdict.difference)), 60));
     if (R0.scheduleC.hasActivity) out.push(pad('Schedule C expenses', moneyCents(R0.scheduleC.total), 60));
     if (R0.adjustments.studentLoanInterest.paid) out.push(pad('Student loan interest (adjustment)', moneyCents(R0.adjustments.studentLoanInterest.deductible), 60));
@@ -6855,7 +7012,7 @@ window.ITEMIZER_SINGLE_FILE = true;
             <div class="field"><span>Age &amp; vision</span><div class="chips"><label class="check"><input type="checkbox" id="sAge65" ${s.age65 ? 'checked' : ''}> I'm 65 or older</label><label class="check"><input type="checkbox" id="sBlind" ${s.blind ? 'checked' : ''}> I'm blind</label></div></div>
             <div class="field" ${marriedJoint ? '' : 'hidden'}><span>Spouse</span><div class="chips"><label class="check"><input type="checkbox" id="sSpouseAge65" ${s.spouseAge65 ? 'checked' : ''}> Spouse is 65 or older</label><label class="check"><input type="checkbox" id="sSpouseBlind" ${s.spouseBlind ? 'checked' : ''}> Spouse is blind</label></div></div>
             <label class="field"><span>Gambling winnings reported ($)</span><input id="sWinnings" inputmode="numeric" value="${esc(s.gamblingWinnings)}" placeholder="0"></label>
-            <label class="field"><span>State &amp; local income tax withheld ($)</span><input id="sWithheld" inputmode="numeric" value="${esc(s.stateWithholding || '')}" placeholder="W-2 boxes 17 and 19"></label>
+            <label class="field"><span>State &amp; local income tax withheld ($)</span><input id="sWithheld" inputmode="numeric" value="${esc(s.stateWithholding || '')}" placeholder="W-2 boxes 17 and 19"><small class="muted">Tax withheld for another state counts here too.</small></label>
             <label class="field"><span>State</span><select id="sState" class="input"><option value="">Not set</option>${G.US_STATES.map((st) => `<option value="${st.code}" ${s.state === st.code ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select></label>
             <label class="field"><span>County</span><input id="sCounty" value="${esc(s.county || '')}" placeholder="for disaster lookups"></label>
             <div class="field span-2"><span>Location</span><div class="btn-row"><button class="btn btn-sm" type="button" id="sLocate">Use my location to fill in state and county</button></div></div>
@@ -6872,7 +7029,7 @@ window.ITEMIZER_SINGLE_FILE = true;
           <div class="card-head"><h2>Rates &amp; thresholds for ${R0.taxYear}</h2>${P0.isFallback ? `<span class="pill pill-act">using ${P0.baseYear} figures</span>` : `<span class="pill pill-info">built in</span>`}</div>
           <p class="note">Built-in figures come from IRS inflation-adjustment notices and the 2025 tax law. Override any value the IRS updates; blank restores the default. Percentages are entered as percent (7.5), mileage as cents per mile (72.5).</p>
           <div class="params-wrap"><table class="params"><caption class="sr-only">Rates and thresholds for ${R0.taxYear}: the built-in default and your override for each figure.</caption><thead><tr><th>Figure</th><th class="num">Default</th><th class="num">Your value</th></tr></thead><tbody>
-            ${R.PARAM_FIELDS.map((f) => { const def = R.getPath(defaults, f.path); const ov = R.getPath(overrides, f.path); return `<tr><td>${esc(f.label)}</td><td class="num">${esc(fmtParam(f.kind, def))}</td><td class="num"><input data-param="${f.path}" data-kind="${f.kind}" class="${ov != null ? 'is-over' : ''}" inputmode="decimal" value="${ov != null ? esc(toInput(f.kind, ov)) : ''}" placeholder="${esc(toInput(f.kind, def))}" aria-label="${esc(f.label)}"></td></tr>`; }).join('')}
+            ${R.paramFields(R0.taxYear, overrides).map((f) => { const def = R.getPath(defaults, f.path); const ov = R.getPath(overrides, f.path); return `<tr><td>${esc(f.label)}</td><td class="num">${esc(fmtParam(f.kind, def))}</td><td class="num"><input data-param="${f.path}" data-kind="${f.kind}" class="${ov != null ? 'is-over' : ''}" inputmode="decimal" value="${ov != null ? esc(toInput(f.kind, ov)) : ''}" placeholder="${esc(toInput(f.kind, def))}" aria-label="${esc(f.label)}"></td></tr>`; }).join('')}
           </tbody></table></div>
           <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="resetParams" ${Object.keys(overrides).length ? '' : 'disabled'}>Reset ${R0.taxYear} to defaults</button></div>
         </section>
@@ -6903,7 +7060,7 @@ window.ITEMIZER_SINGLE_FILE = true;
             <label class="check"><input type="checkbox" id="xNudges" ${s.experimentNudges === false ? '' : 'checked'}> A follow-up right after a save</label>
           </div>
           <p class="note small" style="margin-top:8px">With "Learn from corrected suggestions" off, the weights already stored are kept but no longer applied; "Reset keyword weights" deletes them.</p>
-          ${Object.keys(state.weights).length ? `<div class="learned-list" style="margin-top:10px">${Object.entries(state.weights).sort((a, b) => a[1] - b[1]).slice(0, 12).map(([k, v]) => `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">${v < 1 ? 'demoted' : 'boosted'} to ×${v}</span></span></div>`).join('')}</div>` : ''}
+          ${Object.keys(state.weights).length ? `<div class="learned-list" style="margin-top:10px">${Object.entries(state.weights).sort((a, b) => Math.abs(b[1] - 1) - Math.abs(a[1] - 1)).slice(0, 12).map(([k, v]) => `<div class="learned-item"><span><span class="k">${esc(k)}</span> <span class="v">${v < 1 ? 'demoted' : 'boosted'} to ×${v}</span></span></div>`).join('')}</div>${Object.keys(state.weights).length > 12 ? `<p class="note small">The twelve furthest from normal are shown; ${Object.keys(state.weights).length - 12} other ${plural(Object.keys(state.weights).length - 12, 'keyword')} also ${Object.keys(state.weights).length - 12 === 1 ? 'carries' : 'carry'} a weight.</p>` : ''}` : ''}
           <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="xClearSnapshots" ${state.snapshots.length ? '' : 'disabled'}>Clear ${state.snapshots.length} ${state.snapshots.length === 1 ? 'snapshot' : 'snapshots'}</button><button class="btn btn-sm" type="button" id="xResetWeights" ${Object.keys(state.weights).length ? '' : 'disabled'}>Reset keyword weights</button></div>
         </section>
 
@@ -6934,8 +7091,9 @@ window.ITEMIZER_SINGLE_FILE = true;
 
     // the store is the record: a field that could not be written goes back to what is stored rather than staying on screen and in the figures
     let stored = Object.assign({}, s);
-    const save = async () => {
-      try { await DB.saveSettings(state.settings); }
+    /** Write only what this control changed: a whole-row write from a tab open since this morning would undo what another tab saved. */
+    const save = async (patch) => {
+      try { Object.assign(state.settings, await DB.updateSettings(patch)); } // the same object throughout: these handlers hold a reference to it
       catch (err) {
         Object.assign(s, stored);
         toast(`Could not save: ${err && err.message ? err.message : 'storage error'}.`, 6000);
@@ -6946,15 +7104,15 @@ window.ITEMIZER_SINGLE_FILE = true;
       recompute();
       return true;
     };
-    $('#sFiling').onchange = async (ev) => { s.filingStatus = ev.target.value; await save(); renderSettings(); };
-    $('#sName').addEventListener('change', async (ev) => { s.taxpayerName = ev.target.value.trim().slice(0, 120); ev.target.value = s.taxpayerName; await save(); });
+    $('#sFiling').onchange = async (ev) => { s.filingStatus = ev.target.value; await save({ filingStatus: s.filingStatus }); renderSettings(); };
+    $('#sName').addEventListener('change', async (ev) => { s.taxpayerName = ev.target.value.trim().slice(0, 120); ev.target.value = s.taxpayerName; await save({ taxpayerName: s.taxpayerName }); });
     // a figure that cannot be read goes back to what is stored: a stripped one would change the floors and the verdict without saying so
     const moneyField = (id, key, help) => {
       const el = $('#' + id); if (!el) return;
       el.addEventListener('change', async (ev) => {
         const v = parseDollarField(ev.target.value);
         if (v === null) { ev.target.value = s[key] || ''; toast(help, 5000); return; }
-        s[key] = v; ev.target.value = v; await save();
+        s[key] = v; ev.target.value = v; await save({ [key]: v });
       });
     };
     moneyField('sAgi', 'agi', 'Enter the AGI as a plain number, for example 95000.');
@@ -6962,15 +7120,15 @@ window.ITEMIZER_SINGLE_FILE = true;
       const el = $('#' + id); if (el) el.onchange = async () => {
         s[key] = el.checked;
         if (key === 'casualtyFederalDisaster' && !el.checked) s.casualtyQualifiedDisaster = false; // hidden and still set, it would go on changing the figures
-        await save();
+        await save(key === 'casualtyFederalDisaster' ? { casualtyFederalDisaster: s.casualtyFederalDisaster, casualtyQualifiedDisaster: s.casualtyQualifiedDisaster } : { [key]: s[key] });
         if (key === 'casualtyFederalDisaster') renderSettings();
       };
     }
     moneyField('sWinnings', 'gamblingWinnings', 'Enter the winnings as a plain number, for example 1200.');
     moneyField('sWithheld', 'stateWithholding', 'Enter the tax withheld as a plain number, for example 4200.');
-    $('#sState').onchange = async (ev) => { s.state = ev.target.value; await save(); renderSettings(); };
-    $('#sCounty').addEventListener('change', async (ev) => { s.county = ev.target.value.trim(); await save(); });
-    $('#sDisasterNumber').addEventListener('change', async (ev) => { s.disasterNumber = ev.target.value.trim(); await save(); });
+    $('#sState').onchange = async (ev) => { s.state = ev.target.value; await save({ state: s.state }); renderSettings(); };
+    $('#sCounty').addEventListener('change', async (ev) => { s.county = ev.target.value.trim(); await save({ county: s.county }); });
+    $('#sDisasterNumber').addEventListener('change', async (ev) => { s.disasterNumber = ev.target.value.trim(); await save({ disasterNumber: s.disasterNumber }); });
     $('#sLocate').onclick = async () => {
       const btn = $('#sLocate'); btn.disabled = true;
       try {
@@ -6978,7 +7136,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         const r = await G.reverse(pos.lat, pos.lon);
         if (r.stateCode) s.state = r.stateCode;
         if (r.county) s.county = r.county.replace(/\s+County$/i, '');
-        await save(); renderSettings();
+        await save({ state: s.state, county: s.county }); renderSettings();
         toast(r.stateCode ? `Set to ${r.stateCode}${s.county ? ', ' + s.county : ''}.` : 'Could not tell the state from that location.');
       } catch (e) { toast(e.message); btn.disabled = false; }
     };
@@ -6990,7 +7148,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         const list = await G.femaDeclarations({ state: s.state, county: s.county, since: `${R0.taxYear}-01-01`, until: `${R0.taxYear + 1}-01-01` });
         if (!list.length) { panel.innerHTML = `<p class="note small">The lookup returned no federal declarations for ${esc(s.state)}${s.county ? ', ' + esc(s.county) : ''} for tax year ${R0.taxYear}. The list may be incomplete or lag the event; check FEMA.gov or your state's emergency management site, and enter the declaration number by hand if you find one.</p>`; return; }
         panel.innerHTML = `<div class="fema-list">${list.slice(0, 12).map((d) => `<div class="fema-item"><span><b>${esc(d.type)}-${esc(d.number)}</b> ${esc(d.title)}<br><span class="muted small">${esc(d.incident)} · declared ${esc(d.declared)} · ${esc(d.area)}</span></span><button class="btn btn-sm" type="button" data-fema="${esc(d.type)}-${esc(d.number)}">Use</button></div>`).join('')}</div>`;
-        panel.querySelectorAll('[data-fema]').forEach((b) => { b.onclick = async () => { s.casualtyFederalDisaster = true; s.disasterNumber = b.dataset.fema; await save(); renderSettings(); toast(`Casualty losses marked as federal disaster ${b.dataset.fema}.`); }; });
+        panel.querySelectorAll('[data-fema]').forEach((b) => { b.onclick = async () => { s.casualtyFederalDisaster = true; s.disasterNumber = b.dataset.fema; await save({ casualtyFederalDisaster: true, disasterNumber: s.disasterNumber }); renderSettings(); toast(`Casualty losses marked as federal disaster ${b.dataset.fema}.`); }; });
       } catch (e) { panel.innerHTML = `<p class="note small">${esc(e.message)}</p>`; }
     };
     $$('[data-param]').forEach((inp) => inp.addEventListener('change', async () => {
@@ -7026,7 +7184,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       recompute(); renderSettings(); toast('Defaults restored.');
     };
     // save() puts a setting that could not be written back, so the theme is applied again from whatever is now stored
-    $$('[data-theme-pick]').forEach((b) => b.onclick = async () => { s.theme = b.dataset.themePick; applyTheme(); await save(); applyTheme(); renderSettings(); });
+    $$('[data-theme-pick]').forEach((b) => b.onclick = async () => { s.theme = b.dataset.themePick; applyTheme(); await save({ theme: s.theme }); applyTheme(); renderSettings(); });
     $('#exportJson').onclick = async () => {
       const btn = $('#exportJson'); btn.disabled = true;
       try {
@@ -7053,7 +7211,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       renderSettings();
     };
     for (const [id, key] of [['xSnapshots', 'experimentSnapshots'], ['xCorrections', 'experimentCorrections'], ['xNudges', 'experimentNudges']]) {
-      const el = $('#' + id); if (el) el.onchange = async () => { s[key] = el.checked; await save(); };
+      const el = $('#' + id); if (el) el.onchange = async () => { s[key] = el.checked; await save({ [key]: s[key] }); };
     }
     $('#xClearSnapshots').onclick = async () => {
       const was = state.snapshots;
@@ -7084,7 +7242,11 @@ window.ITEMIZER_SINGLE_FILE = true;
     DB.storageInfo().then((info) => {
       const el = $('#storageNote'); if (!el) return;
       const used = info.estimate && info.estimate.usage ? ` · ${(info.estimate.usage / 1048576).toFixed(1)} MB used` : '';
-      let text = info.mode === 'idb' ? `Stored in this browser's IndexedDB, one table per kind of record${used}.` : info.mode === 'local' ? 'This browser has no IndexedDB, so the same tables are kept in localStorage and receipt photos cannot be stored.' : 'This browser offers neither IndexedDB nor localStorage; nothing is saved between sessions.';
+      let text = info.mode === 'idb' ? `Stored in this browser's IndexedDB, one table per kind of record${used}.`
+        : info.mode === 'local' ? 'This browser has no IndexedDB, so the same tables are kept in localStorage and receipt photos cannot be stored.'
+        // the store could not be opened at all, so every write is failing: saying where the data is kept would be untrue
+        : info.mode === 'unavailable' ? 'Local storage could not be opened, so nothing is being saved. Close other Itemizer tabs and reload.'
+        : 'This browser offers neither IndexedDB nor localStorage; nothing is saved between sessions.';
       if (info.counts) text += ` Rows: ${Object.entries(info.counts).map(([k, n]) => `${k} ${n == null ? '?' : n}`).join(' · ')}.`;
       if (info.persisted === true) text += ' The browser has agreed not to evict this data.';
       else if (info.persisted === false) text += ' The browser may delete this data when disk space runs low (Safari: after 7 days without a visit). Install the app to your home screen and download a backup now and then.';
@@ -7134,7 +7296,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     applyTheme();
     render();
     if (failure) toast(`${failure.message || 'The backup could not be restored.'} The ledger now shows what is actually stored.`, 8000);
-    else toast(`Restored ${res.entries} entries and ${res.receipts} receipts.${res.skipped ? ` ${res.skipped} ${res.skipped === 1 ? 'row was' : 'rows were'} not valid and skipped.` : ''}${res.badReceipts ? ` ${res.badReceipts} receipt ${res.badReceipts === 1 ? 'image' : 'images'} could not be read.` : ''}`, 7000);
+    // a backup can be missing a photo an entry names, or carry a photo whose entry is gone: both are worth saying, since the ledger will look different from the file
+    else toast(`Restored ${res.entries} entries and ${res.receipts} receipts.${res.skipped ? ` ${res.skipped} ${res.skipped === 1 ? 'row was' : 'rows were'} not valid and skipped.` : ''}${res.badReceipts ? ` ${res.badReceipts} receipt ${res.badReceipts === 1 ? 'image' : 'images'} could not be read.` : ''}${res.dangling ? ` ${res.dangling} ${plural(res.dangling, 'entry', 'entries')} referenced a photo that was not in the file; the photo mark was cleared.` : ''}${res.orphanReceipts ? ` ${res.orphanReceipts} ${plural(res.orphanReceipts, 'photo')} had no entry and ${res.orphanReceipts === 1 ? 'was' : 'were'} left out.` : ''}`, 9000);
   }
 
   // ---- example data ---------------------------------------------------------
@@ -7259,15 +7422,29 @@ window.ITEMIZER_SINGLE_FILE = true;
   function registerSW() {
     if (globalThis.ITEMIZER_SINGLE_FILE) return;
     if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
-    let askedToReload = false, waiting = null, offeredAt = 0;
+    let askedToReload = false, waiting = null;
     // A new version waits until the user chooses to reload, so the cache is never swapped under a half-typed form.
     const offerUpdate = (worker) => {
       if (!worker || !navigator.serviceWorker.controller) return; // first install: nothing is running on the old version
       // Never a Reload button in front of a driver: the recording is in memory and a reload would lose it. It waits for the Stop.
       if (state.recorder && state.recorder.state !== 'idle') { waiting = worker; return; }
-      if (Date.now() - offeredAt < 60000) return; // the offer from a moment ago is still on screen
-      offeredAt = Date.now();
-      toast('A new version of Itemizer is ready.', 60000, { label: 'Reload', onClick: () => { askedToReload = true; worker.postMessage({ type: 'SKIP_WAITING' }); } });
+      // Navigations are served from the cache, so a fix reaches the user only when this offer is taken: it gets its own
+      // banner rather than a toast, which the next passing message would wipe for the rest of the session.
+      let el = $('#updateBanner');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'updateBanner';
+        el.className = 'toast is-on'; // the toast styling, and with it the rule that keeps it off the printed page
+        el.setAttribute('role', 'status');
+        el.style.bottom = 'calc(var(--tabbar-h) + 72px + env(safe-area-inset-bottom))'; // clear of the toast below it
+        document.body.appendChild(el);
+      }
+      el.textContent = 'A new version of Itemizer is ready.';
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'toast-action'; b.textContent = 'Reload';
+      // rebuilt on every offer: a worker replaced while the banner was up would no longer answer the message
+      b.onclick = () => { askedToReload = true; worker.postMessage({ type: 'SKIP_WAITING' }); };
+      el.appendChild(b);
     };
     offerWaitingUpdate = () => { const w = waiting; waiting = null; if (w) offerUpdate(w); };
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (askedToReload) location.reload(); });

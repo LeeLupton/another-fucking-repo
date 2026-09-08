@@ -7,6 +7,8 @@ const E = (date, lineId, amount, description, extra) => Object.assign({ id: `e${
 const monthly = (year, months, lineId, amount, description, day) => months.map((m) => E(`${year}-${String(m).padStart(2, '0')}-${String(day || 5).padStart(2, '0')}`, lineId, amount, description));
 const base = { taxYear: 2026, filingStatus: 'single', agi: '', today: '2026-09-20' };
 const run = (entries, settings, today) => Advisor.analyze({ entries, settings: Object.assign({}, base, settings || {}), today: today || base.today });
+// a missing recommendation should say which one was missing, not fail on a property of undefined
+const mustFind = (list, pred, label) => { const x = list.find(pred); assert.ok(x, label); return x; };
 
 test('a monthly payee is detected, flagged when a month is missing, and projected to year end', () => {
   const entries = monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.worship', 200, "Tithe — St. Andrew's");
@@ -103,7 +105,7 @@ test('far from itemizing: advise stopping the Schedule A receipt chase', () => {
 
 test('dismissed recommendations stay hidden for thirty days', () => {
   const entries = monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.worship', 200, 'Tithe');
-  const id = run(entries).recommendations.find((x) => x.id.startsWith('recur:')).id;
+  const id = mustFind(run(entries).recommendations, (x) => x.id.startsWith('recur:'), 'a recurrence recommendation to dismiss').id;
   const hidden = run(entries, { advisorDismissed: { [id]: '2026-09-10' } });
   assert.ok(!hidden.recommendations.some((x) => x.id === id));
   assert.ok(hidden.dismissed.some((x) => x.id === id));

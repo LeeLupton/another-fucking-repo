@@ -1,12 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Advisor = require('../js/advisor.js');
+const Rules = require('../js/rules.js');
 
 let seq = 0;
 const E = (date, lineId, amount, description, extra) => Object.assign({ id: `a${++seq}`, date, taxYear: Number(date.slice(0, 4)), lineId, amount, description: description || '', note: '', hasReceipt: true, createdAt: `${date}T12:00:00.000Z` }, extra || {});
 const monthly = (year, months, lineId, amount, description, day) => months.map((m) => E(`${year}-${String(m).padStart(2, '0')}-${String(day || 5).padStart(2, '0')}`, lineId, amount, description));
 const base = { taxYear: 2026, filingStatus: 'single', agi: '', today: '2026-09-20' };
 const run = (entries, settings, today) => Advisor.analyze({ entries, settings: Object.assign({}, base, settings || {}), today: today || base.today });
+// a missing recommendation should say which one was missing, not fail on a property of undefined
+const mustFind = (list, pred, label) => { const x = list.find(pred); assert.ok(x, label); return x; };
 
 test('a payee that stopped is lapsed: shown in the table, projected nowhere, never nagged about', () => {
   const entries = monthly(2025, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.worship', 200, 'Old church');
@@ -21,7 +24,7 @@ test('dismissing "if it stopped, dismiss this" also stops the projection for tha
   const entries = monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.worship', 200, 'Tithe');
   const first = run(entries);
   assert.equal(first.projection.expectedMore, 800);
-  const id = first.recommendations.find((x) => x.id.startsWith('recur:')).id;
+  const id = mustFind(first.recommendations, (x) => x.id.startsWith('recur:'), 'a recurrence recommendation').id;
   const muted = run(entries, { advisorDismissed: { [id]: '2026-09-18' } });
   assert.equal(muted.projection.expectedMore, 0);
   assert.ok(muted.dismissed.some((x) => x.id === id), 'it still shows under dismissed');
@@ -174,7 +177,7 @@ test('weekly, biweekly, quarterly and yearly payees are recognised; same-day ent
   assert.ok(weekly); assert.equal(weekly.cadence, 'weekly'); assert.equal(weekly.perYear, 52); assert.equal(weekly.nextDate, '2026-03-01'); assert.equal(weekly.status, 'overdue'); assert.equal(weekly.typicalAmount, 50);
   const biweekly = [];
   for (let i = 0; i < 6; i++) { const d = new Date(2026, 0, 2 + 14 * i); biweekly.push(E(`2026-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, 'ch.org', 25, 'Food bank payroll gift')); }
-  assert.equal(run(biweekly).recurrences.find((x) => x.description === 'Food bank payroll gift').cadence, 'biweekly');
+  assert.equal(mustFind(run(biweekly).recurrences, (x) => x.description === 'Food bank payroll gift', 'the biweekly payee').cadence, 'biweekly');
   const quarterly = ['2025-10-01', '2026-01-01', '2026-04-01', '2026-07-01'].map((d) => E(d, 'med.insurance', 900, 'Blue Cross premium'));
   const q = run(quarterly).recurrences.find((x) => x.description === 'Blue Cross premium');
   assert.ok(q); assert.equal(q.cadence, 'quarterly'); assert.equal(q.perYear, 4); assert.equal(q.nextDate, '2026-10-01'); assert.equal(q.status, 'due');
@@ -223,7 +226,7 @@ test('a payee with a cadence of its own never props up another one', () => {
   const r = run(respelled, {}, '2026-09-20');
   assert.equal(r.recommendations.filter((x) => x.id.startsWith('recur:')).length, 1);
   assert.equal(r.projection.expectedMore, 800);
-  assert.equal(r.recurrences.find((x) => /St\. Andrew/.test(x.description)).status, 'lapsed');
+  assert.equal(mustFind(r.recurrences, (x) => /St\. Andrew/.test(x.description), 'the St. Andrew recurrence').status, 'lapsed');
   const masked = monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.org', 50, 'Red Cross', 1).concat(monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8, 9], 'ch.org', 50, 'Food Bank', 3));
   const m = run(masked, {}, '2026-09-20');
   const red = m.recurrences.find((x) => x.description === 'Red Cross');
@@ -233,7 +236,7 @@ test('a payee with a cadence of its own never props up another one', () => {
   assert.equal(m.projection.expectedMore, 350);
   const keptAlive = monthly(2026, [1, 2, 3, 4], 'ch.org', 50, 'Old church').concat(monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8, 9], 'ch.org', 50, 'Food Bank', 3));
   const k = run(keptAlive, {}, '2026-09-20');
-  assert.equal(k.recurrences.find((x) => x.description === 'Old church').status, 'lapsed');
+  assert.equal(mustFind(k.recurrences, (x) => x.description === 'Old church', 'the Old church recurrence').status, 'lapsed');
   assert.equal(k.projection.expectedMore, 150);
 });
 
@@ -255,7 +258,7 @@ test('dismissing a recurrence keeps it quiet until it lapses, however long its p
   const first = run(pledge, {}, '2026-07-01');
   assert.equal(first.recurrences[0].cadence, 'quarterly');
   assert.equal(first.projection.expectedMore, 900);
-  const id = first.recommendations.find((x) => x.id.startsWith('recur:')).id;
+  const id = mustFind(first.recommendations, (x) => x.id.startsWith('recur:'), 'a recurrence recommendation').id;
   const later = run(pledge, { advisorDismissed: { [id]: '2026-07-01' } }, '2026-09-01');
   assert.equal(later.recurrences[0].muted, true);
   assert.equal(later.projection.expectedMore, 0);
@@ -265,7 +268,7 @@ test('dismissing a recurrence keeps it quiet until it lapses, however long its p
   assert.equal(stopped.projection.expectedMore, 0);
   assert.equal(stopped.recommendations.filter((x) => x.id.startsWith('recur:')).length, 0);
   const vehicle = ['2024-03-10', '2025-03-10'].map((d) => E(d, 'tax.personal_property', 320, 'Vehicle tax'));
-  const vid = run(vehicle, {}, '2026-05-01').recommendations.find((x) => x.id.startsWith('recur:')).id;
+  const vid = mustFind(run(vehicle, {}, '2026-05-01').recommendations, (x) => x.id.startsWith('recur:'), 'the vehicle tax recommendation').id;
   for (const day of ['2026-09-01', '2026-12-15']) {
     const v = run(vehicle, { advisorDismissed: { [vid]: '2026-05-01' } }, day);
     assert.equal(v.projection.expectedMore, 0, day);
@@ -308,7 +311,7 @@ test('bunching is priced through the tax engine, so a capped or floored payment 
   floored.push(E('2026-02-01', 'int.mortgage', 15400, 'Mortgage interest'));
   const f = run(floored, { agi: 100000 }, '2026-11-20');
   assert.ok(!f.recommendations.some((x) => x.id === 'plan:bunch:2026'), 'the premium stays under the medical floor');
-  assert.ok(!/[Ee]lective dental or vision work/.test(f.recommendations.find((x) => x.id.startsWith('plan:')).body));
+  assert.ok(!/[Ee]lective dental or vision work/.test(mustFind(f.recommendations, (x) => x.id.startsWith('plan:'), 'a plan recommendation').body));
   const under = [E('2023-01-15', 'tax.real_estate', 3000, 'County property tax'), E('2023-07-15', 'tax.real_estate', 3000, 'County property tax'), E('2025-01-15', 'tax.real_estate', 3000, 'County property tax'), E('2025-07-15', 'tax.real_estate', 3000, 'County property tax'), E('2026-01-15', 'tax.real_estate', 3000, 'County property tax'), E('2026-07-15', 'tax.real_estate', 3000, 'County property tax'), E('2026-02-01', 'int.mortgage', 9000, 'Mortgage interest')];
   const u = run(under, { agi: 90000 }, '2026-09-20').recommendations.find((x) => x.id === 'plan:bunch:2026');
   assert.ok(u, 'under the cap the payment is worth its face value');
@@ -318,7 +321,7 @@ test('bunching is priced through the tax engine, so a capped or floored payment 
 test('the cadence nudge is keyed to the last logging day, so dismissing it lasts thirty days', () => {
   const entries = [];
   for (let i = 0; i < 8; i++) entries.push(E('2026-05-01', 'se.supplies', 20 + i, 'Supplies', { createdAt: `2026-0${5 + Math.floor(i / 4)}-${String(1 + (i % 4) * 3).padStart(2, '0')}T10:00:00.000Z` }));
-  const id = run(entries, {}, '2026-09-29').recommendations.find((x) => x.id.startsWith('habit:cadence')).id;
+  const id = mustFind(run(entries, {}, '2026-09-29').recommendations, (x) => x.id.startsWith('habit:cadence'), 'the cadence nudge').id;
   assert.equal(id, 'habit:cadence:2026-06-10');
   const nextDay = run(entries, { advisorDismissed: { [id]: '2026-09-29' } }, '2026-10-01');
   assert.equal(nextDay.recommendations.filter((x) => x.id.startsWith('habit:cadence')).length, 0);
@@ -328,9 +331,9 @@ test('the cadence nudge is keyed to the last logging day, so dismissing it lasts
 
 test('an overdue payee whose last entry was last year shows the year', () => {
   const grace = ['2024-09-10', '2024-10-10', '2024-11-10', '2024-12-10'].map((d) => E(d, 'ch.worship', 200, 'Grace Church tithe'));
-  const title = run(grace, { taxYear: 2025 }, '2025-01-25').recommendations.find((x) => x.id.startsWith('recur:')).title;
+  const title = mustFind(run(grace, { taxYear: 2025 }, '2025-01-25').recommendations, (x) => x.id.startsWith('recur:'), 'the overdue recurrence').title;
   assert.equal(title, 'Grace Church tithe: nothing logged since Dec 10, 2024');
-  const inYear = run(monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.worship', 200, 'Tithe'), {}, '2026-09-20').recommendations.find((x) => x.id.startsWith('recur:')).title;
+  const inYear = mustFind(run(monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.worship', 200, 'Tithe'), {}, '2026-09-20').recommendations, (x) => x.id.startsWith('recur:'), 'the overdue recurrence').title;
   assert.equal(inYear, 'Tithe: nothing logged since Aug 5', 'a date inside the year being viewed needs no year');
 });
 
@@ -366,4 +369,43 @@ test('the stop-chasing-receipts plan waits until the year is far enough along', 
   assert.equal(evidence.recurrences.length, 2);
   assert.ok(evidence.recommendations.some((x) => x.id === 'plan:stop:2026'));
   assert.ok(!evidence.recommendations.some((x) => x.id === 'plan:early:2026'));
+});
+
+test('a co-occurring line the schema no longer has is skipped instead of throwing', () => {
+  // an id a later schema dropped can still sit in the ledger, and the pair rule has no label to print for it
+  const entries = [];
+  for (const d of ['2026-02-01', '2026-03-01', '2026-04-01']) entries.push(E(d, 'ch.worship', 200, 'Tithe'), E(d, 'ch.retired', 40, 'A line that was removed'));
+  entries.push(E('2026-05-01', 'ch.worship', 200, 'Tithe'));
+  const r = run(entries);
+  assert.ok(!r.recommendations.some((x) => x.id.startsWith('pair:')), 'nothing is suggested for a line with no label');
+  assert.ok(r.recommendations.some((x) => x.id.startsWith('plan:')), 'the rest of the advice still runs');
+});
+
+test('a year with its own rates and standard deduction is projected on those numbers', () => {
+  // what the caller computed and what the advisor projects have to rest on the same parameters, or the two disagree on screen
+  const entries = [E('2026-02-02', 'med.miles', 5000, 'Round trip \u2014 dialysis'), E('2026-03-02', 'med.doctor', 3000, 'Dr Patel')];
+  const settings = { taxYear: 2026, filingStatus: 'single', agi: 10000, paramOverrides: { 2026: { mileage: { medical: 0.5 }, standardDeduction: { single: 12000 } } } };
+  const today = '2026-09-02';
+  const computed = Rules.compute(entries, Object.assign({}, settings, { today }));
+  const p = Advisor.analyze({ entries, settings, computed, today }).projection;
+  // 5,000 miles at 50c and 3,000 of bills is 5,500, less the 7.5% floor on a 10,000 AGI
+  assert.equal(p.actual, 4750);
+  assert.equal(p.standardDeduction, 12000);
+  assert.equal(p.expectedMore, 0);
+  assert.equal(p.projectedTotal, 4750);
+  assert.equal(p.itemize, false);
+  assert.equal(p.gap, 7250);
+});
+
+test('estimated-tax dates are the day the payment is actually due, not the raw 15th', () => {
+  assert.equal(Advisor.dueDate(2026, '04-15'), '2026-04-15', 'a plain Wednesday stays where it is');
+  assert.equal(Advisor.dueDate(2024, '01-15'), '2024-01-16', 'Martin Luther King Day');
+  assert.equal(Advisor.dueDate(2028, '01-15'), '2028-01-18', 'Saturday, Sunday, then the holiday');
+  assert.equal(Advisor.dueDate(2029, '04-15'), '2029-04-17', 'Sunday, then Emancipation Day on the Monday');
+  assert.equal(Advisor.dueDate(2022, '04-15'), '2022-04-18', 'Emancipation Day kept on the Friday, then the weekend');
+  const paid = ['2023-04-18', '2023-06-15', '2023-09-15', '2024-01-16'].map((d) => E(d, 'tax.state_income', 900, 'NC DOR estimated payment'));
+  const rec = run(paid, { taxYear: 2024 }, '2024-05-20').recurrences[0];
+  assert.equal(rec.cadence, 'estimated');
+  assert.deepEqual(rec.expected, ['2024-04-15', '2024-06-17', '2024-09-16'], 'the June and September deadlines fall on a weekend in 2024');
+  assert.deepEqual(rec.nextYearEarly, ['2025-01-15', '2025-04-15']);
 });

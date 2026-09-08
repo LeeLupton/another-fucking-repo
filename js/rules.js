@@ -59,6 +59,7 @@
       nonItemizerCharity: null,
       casualtyPerEvent: 100,
       casualtyQualifiedPerEvent: 500,
+      qualifiedDisasterLoss: true,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
@@ -88,6 +89,7 @@
       nonItemizerCharity: null,
       casualtyPerEvent: 100,
       casualtyQualifiedPerEvent: 500,
+      qualifiedDisasterLoss: true,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
@@ -116,6 +118,7 @@
       nonItemizerCharity: { single: 1000, mfj: 2000 },
       casualtyPerEvent: 100,
       casualtyQualifiedPerEvent: 500,
+      qualifiedDisasterLoss: false,
       casualtyAgiRate: 0.1,
       nonCashForm8283: 500,
       nonCashAppraisal: 5000,
@@ -135,7 +138,7 @@
     { path: 'standardDeduction.qss', label: 'Standard deduction — Qualifying surviving spouse', kind: 'usd' },
     { path: 'additionalStdDed.married', label: 'Extra standard deduction per 65+/blind condition (married)', kind: 'usd' },
     { path: 'additionalStdDed.unmarried', label: 'Extra standard deduction per 65+/blind condition (unmarried)', kind: 'usd' },
-    { path: 'medicalFloorRate', label: 'Medical floor (share of AGI)', kind: 'rate' },
+    { path: 'medicalFloorRate', label: 'Medical floor (% of AGI)', kind: 'rate' },
     { path: 'saltCap.default', label: 'State & local tax cap', kind: 'usd' },
     { path: 'saltCap.mfs', label: 'State & local tax cap (married filing separately)', kind: 'usd' },
     { path: 'mileage.business', label: 'Business mileage rate (¢/mile)', kind: 'permile' },
@@ -152,13 +155,13 @@
     { path: 'ltcPremiumLimits.to60', label: 'Long-term-care premium limit — age 51 to 60', kind: 'usd' },
     { path: 'ltcPremiumLimits.to70', label: 'Long-term-care premium limit — age 61 to 70', kind: 'usd' },
     { path: 'ltcPremiumLimits.over70', label: 'Long-term-care premium limit — over 70', kind: 'usd' },
-    { path: 'mealsDeductibleRate', label: 'Business meals deductible share', kind: 'rate' },
-    { path: 'gamblingLossRate', label: 'Share of gambling losses allowed', kind: 'rate' },
-    { path: 'charityFloorRate', label: 'Charitable floor for itemizers (share of AGI)', kind: 'rate' },
-    { path: 'charityCashAgiLimit', label: 'Charitable gift limit (share of AGI)', kind: 'rate' },
+    { path: 'mealsDeductibleRate', label: 'Business meals deductible share (%)', kind: 'rate' },
+    { path: 'gamblingLossRate', label: 'Share of gambling losses allowed (%)', kind: 'rate' },
+    { path: 'charityFloorRate', label: 'Charitable floor for itemizers (% of AGI)', kind: 'rate' },
+    { path: 'charityCashAgiLimit', label: 'Charitable gift limit (% of AGI)', kind: 'rate' },
     { path: 'casualtyPerEvent', label: 'Casualty loss reduction per event', kind: 'usd' },
     { path: 'casualtyQualifiedPerEvent', label: 'Qualified disaster loss reduction per event', kind: 'usd' },
-    { path: 'casualtyAgiRate', label: 'Casualty loss reduction (share of AGI)', kind: 'rate' },
+    { path: 'casualtyAgiRate', label: 'Casualty loss reduction (% of AGI)', kind: 'rate' },
     { path: 'nonCashForm8283', label: 'Non-cash gifts needing Form 8283', kind: 'usd' },
     { path: 'nonCashAppraisal', label: 'Non-cash gifts needing a qualified appraisal', kind: 'usd' },
     { path: 'acknowledgmentThreshold', label: 'Gift size needing written acknowledgment', kind: 'usd' },
@@ -172,7 +175,7 @@
     { path: 'mileageJul.charity', label: 'Charitable mileage rate from July 1 (¢/mile)', kind: 'permile' },
     { path: 'saltPhaseout.start.default', label: 'State & local cap phase-down starts', kind: 'usd' },
     { path: 'saltPhaseout.start.mfs', label: 'State & local cap phase-down starts (married filing separately)', kind: 'usd' },
-    { path: 'saltPhaseout.rate', label: 'State & local cap phase-down (share of income above the threshold)', kind: 'rate' },
+    { path: 'saltPhaseout.rate', label: 'State & local cap phase-down (% of income above the threshold)', kind: 'rate' },
     { path: 'saltPhaseout.floor.default', label: 'State & local cap floor', kind: 'usd' },
     { path: 'saltPhaseout.floor.mfs', label: 'State & local cap floor (married filing separately)', kind: 'usd' },
     { path: 'nonItemizerCharity.single', label: 'Cash gift deduction without itemizing', kind: 'usd' },
@@ -180,7 +183,7 @@
     { path: 'seniorDeduction.perPerson', label: 'Senior deduction per person aged 65 or older', kind: 'usd' },
     { path: 'seniorDeduction.phaseoutStart.default', label: 'Senior deduction phase-out starts', kind: 'usd' },
     { path: 'seniorDeduction.phaseoutStart.mfj', label: 'Senior deduction phase-out starts (joint)', kind: 'usd' },
-    { path: 'seniorDeduction.rate', label: 'Senior deduction phase-out (share of income above the threshold)', kind: 'rate' },
+    { path: 'seniorDeduction.rate', label: 'Senior deduction phase-out (% of income above the threshold)', kind: 'rate' },
     { path: 'pmiPhaseout.default.start', label: 'Mortgage insurance phase-out starts', kind: 'usd' },
     { path: 'pmiPhaseout.default.end', label: 'Mortgage insurance phase-out ends', kind: 'usd' },
     { path: 'pmiPhaseout.mfs.start', label: 'Mortgage insurance phase-out starts (married filing separately)', kind: 'usd' },
@@ -201,7 +204,9 @@
   function moneyCents(n) { return usdCents.format(n || 0); }
   /** Margins decide the verdict, so print the cents when the whole-dollar figure would read as $0. */
   function moneyNear(n) { return Math.abs(Number(n) || 0) < 1 ? moneyCents(n) : money(n); }
-  function cents(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+  // Round the decimal figure half up, the way the IRS does, rather than the binary double:
+  // 101 miles at 72.5¢ is 73.225 on paper, and $73.23 on the return.
+  function cents(n) { const x = Number(n) || 0; return Math.round(Math.round(x * 1e6) / 1e4) / 100; }
   function pct(rate) { const p = rate * 100; return (Number.isInteger(p) ? p : p.toFixed(1).replace(/\.0$/, '')) + '%'; }
   function perMile(rate) { return (rate * 100).toFixed(1).replace(/\.0$/, '') + '¢/mile'; }
   function plural(n, one, many) { return n === 1 ? one : (many || one + 's'); }
@@ -260,6 +265,12 @@
     return `${perMile(early)} before July 1 and ${perMile(late)} after`;
   }
 
+  /** An amount from an old backup or a hand-edited import can be Infinity or NaN; one of those would poison every total it touches. */
+  function amountOf(entry) {
+    const n = Number(entry && entry.amount);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   function taxYearOf(entry) {
     if (entry.taxYear) return Number(entry.taxYear);
     return Number(String(entry.date || '').slice(0, 4)) || null;
@@ -293,7 +304,7 @@
 
     for (const e of entries) {
       const line = Schema.getLine(e.lineId);
-      const amt = Number(e.amount) || 0;
+      const amt = amountOf(e);
       const L = lines[line.id];
       L.total += amt; L.count += 1; L.entries.push(e);
       // Miles are valued one entry at a time, because the rate can change during the year.
@@ -315,7 +326,7 @@
       if (line.treatment === 'info') continue;
       const m = Number(String(e.date || '').slice(5, 7)) - 1;
       if (m < 0 || m > 11) continue;
-      const v = line.unit === 'miles' ? (Number(e.amount) || 0) * mileageRate(P, line.rate, e.date) : (Number(e.amount) || 0);
+      const v = line.unit === 'miles' ? amountOf(e) * mileageRate(P, line.rate, e.date) : amountOf(e);
       months[m] += v;
       monthsBySection[line.sectionId][m] += v;
     }
@@ -398,13 +409,15 @@
 
     const casGross = T('cas.loss');
     // A "qualified disaster loss" (declarations covered by P.L. 118-148 and P.L. 119-21) uses a $500 floor, no AGI reduction,
-    // and counts on top of the standard deduction for non-itemizers.
-    const qualifiedDisaster = !!s.casualtyFederalDisaster && !!s.casualtyQualifiedDisaster;
+    // and counts on top of the standard deduction for non-itemizers. Those acts reach declarations made between
+    // January 2020 and September 2025, so a later year cannot use the treatment however the box is set.
+    const qualifiedDisaster = P.qualifiedDisasterLoss !== false && !!s.casualtyFederalDisaster && !!s.casualtyQualifiedDisaster;
     const perEvent = qualifiedDisaster ? (P.casualtyQualifiedPerEvent || 500) : P.casualtyPerEvent;
     const casualty = {
       gross: casGross,
       federalDisaster: !!s.casualtyFederalDisaster,
       qualified: qualifiedDisaster,
+      qualifiedRequested: !!s.casualtyQualifiedDisaster,
       perEvent,
       afterLimits: qualifiedDisaster ? cents(Math.max(0, casGross - perEvent)) : (agi == null ? null : cents(Math.max(0, casGross - perEvent - agi * P.casualtyAgiRate))),
       deductible: 0,
@@ -650,8 +663,9 @@
     if (A.casualty.gross > 0) {
       if (!A.casualty.federalDisaster) add('warn', 'Casualty losses count only for declared disasters', `${money(A.casualty.gross)} logged. Personal casualty and theft losses are deductible only when attributable to a ${R.taxYear >= 2026 ? 'federally or state-declared disaster (from 2026 a governor\'s declaration also qualifies)' : 'federally declared disaster'}. If yours was, turn that on in Settings and keep the declaration number.`, { view: 'settings' });
       else if (A.casualty.afterLimits == null) add('act', 'Enter AGI to size the casualty loss', 'Disaster losses are reduced by insurance reimbursement, $100 per event, and 10% of AGI (Form 4684).', { view: 'settings' });
+      else if (A.casualty.qualifiedRequested && !A.casualty.qualified) add('warn', 'This is not a qualified disaster loss', `That treatment covers federal disasters declared between January 2020 and September 2025, so the loss has been worked with the ${money(P.casualtyPerEvent)} floor and ${pct(P.casualtyAgiRate)} of your AGI: ${money(A.casualty.deductible)} counts.`, { view: 'settings' });
       else if (A.casualty.qualified) add('info', `${money(A.casualty.deductible)} of the qualified disaster loss counts`, `After a ${money(A.casualty.perEvent)} per-event reduction and with no AGI reduction. A qualified disaster loss counts on top of the standard deduction if you do not itemize, so it is included in your ${money(SD.total)} standard deduction figure. Log only the unreimbursed loss (Form 4684).`);
-      else add('info', `${money(A.casualty.deductible)} of the disaster loss counts`, `After the ${money(P.casualtyPerEvent)} per-event reduction and ${pct(P.casualtyAgiRate)} of AGI. Log only the unreimbursed loss (Form 4684).${R.taxYear <= 2025 ? ' If FEMA declared this disaster between 2020 and early 2025 it is probably a "qualified disaster loss": a $500 floor, no AGI reduction, and it counts even without itemizing — turn that on in Settings.' : ''}`, { view: 'settings' });
+      else add('info', `${money(A.casualty.deductible)} of the disaster loss counts`, `After the ${money(P.casualtyPerEvent)} per-event reduction and ${pct(P.casualtyAgiRate)} of AGI. Log only the unreimbursed loss (Form 4684).${R.taxYear <= 2025 ? ' If FEMA declared this disaster between January 2020 and September 2025 it is probably a "qualified disaster loss": a $500 floor, no AGI reduction, and it counts even without itemizing — turn that on in Settings.' : ''}`, { view: 'settings' });
     }
 
     // Above the line & credits

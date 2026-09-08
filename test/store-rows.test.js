@@ -105,10 +105,11 @@ test('rows are written, replaced, deleted and counted one at a time, and synced 
 
 test('the settings row holds scalars only and round-trips', async () => {
   await DB.clearAll();
-  const saved = await DB.saveSettings({ taxYear: 2025, filingStatus: 'hoh', taxpayerName: '  Alex ', learned: { cvs: 'med.prescriptions' }, experiments: { nudges: false } });
+  const saved = await DB.saveSettings({ taxYear: 2025, taxYearPickedAt: '2026-02-14', filingStatus: 'hoh', taxpayerName: '  Alex ', learned: { cvs: 'med.prescriptions' }, experiments: { nudges: false } });
   assert.equal(saved.learned, undefined);
   const back = await DB.getSettings();
   assert.equal(back.taxYear, 2025); assert.equal(back.filingStatus, 'hoh'); assert.equal(back.taxpayerName, '  Alex '); assert.equal(back.experimentNudges, false);
+  assert.equal(back.taxYearPickedAt, '2026-02-14', 'the day a year was chosen by hand is kept, so the New Year roll-over leaves that choice alone');
   assert.deepEqual(await DB.getLearned(), {}, 'a collection passed on the settings object is not silently stored anywhere');
 });
 
@@ -306,5 +307,60 @@ test('a restore that runs out of room leaves the ledger that was already here', 
      const error = await DB.importJSON(file, { schema: Schema, replace: true }).then(() => null, (e) => e.message);
      return { error, entries: (await DB.getEntries()).map((e) => e.id).sort() };`);
   assert.match(out.error, /Storage is full/);
+  assert.match(out.error, /Only part of the backup could be saved: 1 entry was written/, 'the message says what landed rather than claiming nothing did');
   assert.deepEqual(out.entries, ['new1', 'old'], 'a replace only takes the old ledger away once the new one is written');
+});
+
+test('a receipt whose entry is gone is left out of the backup instead of riding along in every one', async () => {
+  await DB.clearAll();
+  assert.deepEqual(DB.orphanReceiptIds([{ id: 'r1', entryId: 'e1' }, { id: 'r2', entryId: 'gone' }, { id: 'r3', entryId: null }], [{ id: 'e1' }]), ['r2'], 'only a receipt that names an entry the ledger does not have');
+  await DB.putEntry({ id: 'e1', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 100, hasReceipt: true, receiptId: 'r1' });
+  const blob = await DB.dataURLToBlob(PNG);
+  await DB.putReceipt({ id: 'r1', entryId: 'e1', type: 'image/png', createdAt: '2026-01-05T00:00:00.000Z', blob });
+  await DB.putReceipt({ id: 'r2', entryId: 'gone', type: 'image/png', createdAt: '2026-01-05T00:00:00.000Z', blob });
+  assert.equal(await DB.countRows('receipts'), 2, 'both photos are still stored; only the backup leaves one behind');
+  assert.deepEqual((await DB.exportJSON()).receipts.map((r) => r.id), ['r1']);
+  const backup = await DB.exportBackup();
+  assert.deepEqual([backup.receipts, backup.failed], [1, 0]);
+  assert.deepEqual(JSON.parse(await backup.blob.text()).receipts.map((r) => r.id), ['r1']);
+});
+
+test('an entry and the trip logged for it are written together', async () => {
+  await DB.clearAll();
+  const entry = { id: 'e1', date: '2026-03-01', taxYear: 2026, lineId: 'med.miles', amount: 18 };
+  const trip = { id: 't1', date: '2026-03-01', taxYear: 2026, miles: 18, lineId: 'med.miles', entryId: 'e1' };
+  await DB.putTripWithEntry(entry, trip);
+  assert.deepEqual((await DB.getEntries()).map((e) => e.id), ['e1']);
+  assert.deepEqual((await DB.getTrips()).map((t) => t.id), ['t1']);
+});
+
+test('entries and the photo one of them names go in a single transaction, so a failure leaves neither', () => {
+  const out = inChild(
+    `let aborted = false, names = null; const written = { entries: [], receipts: [] };
+     const store = (name) => ({ put(r) { if (name === 'receipts') { const e = new Error('invalid key'); e.name = 'DataError'; throw e; } written[name].push(r.id); } });
+     globalThis.indexedDB = { open() {
+       const req = {};
+       const db = { transaction(n) { names = n; const t = { objectStore: (s) => store(s), abort() { aborted = true; queueMicrotask(() => t.onabort && t.onabort({})); } }; queueMicrotask(() => { if (!aborted && t.oncomplete) t.oncomplete({}); }); return t; }, close() {} };
+       setTimeout(() => { req.result = db; req.onsuccess({}); }, 1);
+       return req;
+     } };
+     globalThis.peek = () => ({ aborted, names, written });`,
+    `const error = await DB.putEntriesWithReceipt([{ id: 'e1' }], { id: 'r1' }).then(() => null, (e) => e.name);
+     return Object.assign({ error }, globalThis.peek());`);
+  assert.deepEqual(out.names, ['entries', 'receipts'], 'one transaction over both stores, so neither needs a compensating delete');
+  assert.equal(out.error, 'DataError');
+  assert.deepEqual(out.written.entries, ['e1'], 'the entry was queued, which is why the transaction has to be aborted');
+  assert.equal(out.aborted, true, 'an entry claiming a photo that could not be stored must not commit on its own');
+});
+
+test('a wipe that cannot clear a store says which ones are left instead of reporting success', () => {
+  const out = inChild(
+    `const m = new Map();
+     globalThis.localStorage = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: () => { throw new Error('denied'); } };`,
+    `await DB.putEntry({ id: 'e1', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 1 });
+     const error = await DB.clearAll().then(() => null, (e) => e.message);
+     return { error, entries: (await DB.getEntries()).map((e) => e.id) };`);
+  assert.match(out.error, /not cleared/);
+  assert.match(out.error, /entries/);
+  assert.deepEqual(out.entries, ['e1'], 'the row is still here, so the wipe must not report that everything went');
 });

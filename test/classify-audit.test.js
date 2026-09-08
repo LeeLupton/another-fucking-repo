@@ -243,9 +243,34 @@ test('line hints and treatments describe what the app actually does', () => {
   assert.ok(!/federal disasters/i.test(S.TREATMENTS['A-casualty'].label));
   assert.match(S.getLine('tax.state_income').hint, /Settings/);
   assert.ok(!/already on your W-2/i.test(S.getLine('tax.state_income').hint));
-  // the engine applies neither the age-based long-term-care limit nor the investment-interest limit
+  // the engine trims a long-term-care premium only at the top band and applies no investment-interest limit
   assert.match(S.getLine('med.ltc').hint, /preparer/);
   assert.match(S.getLine('int.investment').hint, /without applying that limit/);
+});
+
+test('the long-term-care hint gives the shape of the limit: five age bands, one per insured person', () => {
+  const ltc = S.getLine('med.ltc').hint;
+  assert.match(ltc, /five age bands/i);
+  assert.match(ltc, /each insured person/i);
+  assert.match(ltc, /each spouse/i, 'a joint return has two limits, not one');
+  // the figures themselves move every year and live in the engine's params, not in the worksheet text
+  assert.ok(!/\$\s*\d/.test(ltc), 'no dollar figure is baked into the hint');
+});
+
+test('a treatment label never quotes a rate or a dollar figure, because both are editable', () => {
+  for (const [id, t] of Object.entries(S.TREATMENTS)) {
+    assert.ok(!/\d+(\.\d+)?\s*%|\$\s*\d/.test(t.label), `${id}: ${t.label}`);
+  }
+  assert.equal(S.TREATMENTS['A-medical'].label, 'Medical (above the AGI floor)');
+});
+
+test('the charity hints warn at capture time about what a non-itemizer cannot count', () => {
+  assert.match(S.getLine('ch.org').hint, /donor-advised fund/i);
+  assert.match(S.getLine('ch.org').hint, /without itemizing/i);
+  // the education hint leaves this year's classroom cap to Insights rather than naming a figure
+  const edu = S.getLine('edu.expenses').hint;
+  assert.ok(!/\$\s*\d/.test(edu), 'no classroom-expense figure is baked into the hint');
+  assert.match(edu, /Insights/);
 });
 
 test('no line promises a credit and an above-the-line deduction at once', () => {

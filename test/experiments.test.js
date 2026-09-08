@@ -19,6 +19,19 @@ test('snapshots: one per month per year, refreshed in place, pruned after the ke
   assert.equal(list[0].taxYear, 2028);
 });
 
+test('a snapshot carries the settings the forecast was made under, and leaves off the ones it was not given', () => {
+  const s = Object.assign(snap('2026-03-15', 2026, 5000, 3000, 16100, false), { agi: '95000', filingStatus: 'mfj', age65: true, blind: false, spouseAge65: false, spouseBlind: false });
+  const [row] = X.snapshot([], s);
+  assert.equal(row.filingStatus, 'mfj');
+  assert.equal(row.agi, '95000');
+  assert.equal(row.age65, true);
+  assert.equal(row.blind, false, 'a flag that is off is still the setting the forecast was made under');
+  const [plain] = X.snapshot([], Object.assign(snap('2026-04-15', 2026, 1, 1, 2, false), { agi: '', filingStatus: undefined }));
+  assert.equal('agi' in plain, false, 'an AGI that was never entered says nothing, so it is not carried');
+  assert.equal('filingStatus' in plain, false);
+  assert.deepEqual(X.CARRIED_SETTINGS, ['agi', 'filingStatus', 'age65', 'blind', 'spouseAge65', 'spouseBlind']);
+});
+
 test('validation compares each forecast with the final figure and flags the verdict', () => {
   const list = [
     X.snapshot([], snap('2025-03-10', 2025, 4000, 6000, 15750, false))[0],

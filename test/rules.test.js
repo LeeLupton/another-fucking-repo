@@ -144,6 +144,13 @@ test('Schedule C: meals at 50%, vehicle method conflict, business-use share', ()
   assert.equal(r.sections.selfemp.value, 100 + 400 + 500 + 725);
 });
 
+test('a miscellaneous business expense is not a car expense: miles alone raise no method conflict', () => {
+  const r = Rules.compute([E('2025-03-10', 'se.miles', 1000), E('2025-03-10', 'se.other', 12)], { ...base, taxYear: 2025, agi: 50000 });
+  assert.equal(r.scheduleC.total, 712);
+  assert.equal(r.scheduleC.vehicle.methodConflict, false);
+  assert.ok(r.insights.every((i) => !/Pick one vehicle method/.test(i.title)), 'no vehicle-method warning');
+});
+
 test('entries from other years are ignored; duplicates are detected', () => {
   const entries = [E('2025-03-01', 'med.doctor', 100), E('2026-03-01', 'med.doctor', 100), E('2026-03-01', 'med.doctor', 100, { id: 'dupe' })];
   const r = Rules.compute(entries, base);

@@ -99,6 +99,25 @@ test('backup places and trips are validated too, and keep every field the app wr
   assert.equal(DB.sanitizeRow('trips', Object.assign({}, trip, { sample: true }), Schema).sample, true, 'an example trip is still known to be one after a restore');
 });
 
+test('a snapshot keeps the settings its forecast was made under, and only ones the worksheet knows', async () => {
+  const base = { taxYear: 2026, month: '2026-03', takenOn: '2026-03-15', actual: 5000, expectedMore: 3000, projectedTotal: 8000, standardDeduction: 16100, itemize: false };
+  const plain = DB.sanitizeRow('snapshots', base);
+  assert.equal(plain.filingStatus, undefined, 'a snapshot taken before the app stamped them is still a good row');
+  assert.equal('age65' in plain, false);
+  const stamped = DB.sanitizeRow('snapshots', Object.assign({}, base, { filingStatus: 'mfj', agi: '95000', age65: 'yes', blind: false, spouseAge65: true, spouseBlind: 0 }));
+  assert.equal(stamped.filingStatus, 'mfj');
+  assert.equal(stamped.agi, 95000, 'the AGI is a number however it was stamped');
+  assert.deepEqual([stamped.age65, stamped.blind, stamped.spouseAge65, stamped.spouseBlind], [true, false, true, false]);
+  const odd = DB.sanitizeRow('snapshots', Object.assign({}, base, { filingStatus: 'married-ish', agi: '' }));
+  assert.equal(odd.filingStatus, undefined, 'a status the worksheet does not have is not carried');
+  assert.equal(odd.agi, undefined, 'an empty AGI is not an AGI of zero, which would make every medical bill count');
+  // and the stamp survives the store, so a finished year is graded the way it was projected
+  await DB.clearAll();
+  await DB.syncSnapshots([Object.assign({}, base, { filingStatus: 'mfj', agi: 95000, age65: true })]);
+  const back = (await DB.getSnapshots())[0];
+  assert.equal(back.filingStatus, 'mfj'); assert.equal(back.agi, 95000); assert.equal(back.age65, true);
+});
+
 test('the id column of the ledger CSV cannot start a spreadsheet formula either', () => {
   const csv = DB.toCSV([{ id: '=2+2', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 1, description: 'x', note: '' }], Schema).split('\r\n')[1];
   assert.equal(csv, "2026-01-05,2026,Medical Expenses,Doctor,1,usd,x,,no,no,'=2+2");

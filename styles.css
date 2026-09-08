@@ -173,7 +173,9 @@ img { max-width: 100%; display: block; }
 /* ---- components ---- */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.card-head h2, .card-head h3 { line-height: 1.2; }
+/* min-width:0 drops the flex item's min-content floor and overflow-wrap lets a long space-free heading
+   (an imported file name such as Chase1234_Activity20250101_20251231.CSV) wrap instead of widening the page. */
+.card-head h2, .card-head h3 { min-width: 0; overflow-wrap: anywhere; line-height: 1.2; }
 .eyebrow { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-weight: 600; line-height: 1.2; }
