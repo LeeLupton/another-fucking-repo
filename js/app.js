@@ -208,7 +208,7 @@
       const hasDrive = state.entries.some((e) => e.lineId === 'med.miles' && Math.abs(Math.round((new Date(e.date + 'T00:00:00') - new Date(entry.date + 'T00:00:00')) / dayMs)) <= 1);
       const history = state.entries.filter((e) => e.lineId === 'med.miles').map((e) => Number(e.amount) || 0);
       if (!hasDrive && (history.length || state.places.some((p) => p.category === 'medical')) && once('drive:' + entry.id)) {
-        const typical = history.length ? median(history) : '';
+        const typical = history.length ? G.roundMiles(median(history)) : '';
         setTimeout(() => toast(`Saved. Add the drive to ${entry.description || line.label}?`, 9000, { label: 'Add drive', onClick: () => prefillCapture({ lineId: 'med.miles', amount: typical, description: `Round trip — ${entry.description || line.label}`, date: entry.date }) }), 60);
       }
     } else if (entry.lineId === 'se.miles' && !state.entries.some((e) => e.lineId === 'se.total_miles' && Number(e.taxYear) === Number(entry.taxYear)) && once('totalmiles:' + entry.taxYear)) {
@@ -1403,7 +1403,8 @@
       // the row is written before the card is treated as dismissed: otherwise a failed write leaves the screen and the store disagreeing, silently
       try { await DB.putDismissal(id, at); } catch (e) { toast(`Could not dismiss that: ${e && e.message ? e.message : 'storage error'}.`, 6000); return; }
       state.dismissed[id] = at; // one row per dismissed recommendation
-      toast('Dismissed for 30 days.');
+      // a recurrence is muted for its own period, which for a quarterly or annual payee is far longer than thirty days
+      toast(id.startsWith('recur:') ? 'Dismissed. It stays out of the forecast until it is logged again.' : 'Dismissed for 30 days.');
       render();
       // the card that had focus is gone; move to the next recommendation rather than dropping focus to the top of the page
       const next = $(`#view-${state.view} [data-rec-act]`);
@@ -2120,7 +2121,7 @@
 
       ${sectionRows.length ? `<section class="card">
         <div class="card-head"><h2>By section</h2><span class="muted small">entered vs. counts on the return</span></div>
-        <div class="bars">${sectionRows.map((r) => `<div class="bar-row"><div class="bar-label">${esc(r.title)}<small>${r.counts != null ? money(r.counts) + ' counts · ' : ''}${esc(r.note)}</small></div><div class="bar-track" data-tip="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" role="img" aria-label="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" tabindex="0"><div class="bar-gross" style="width:${(r.gross / maxGross * 100).toFixed(1)}%"></div>${r.counts != null ? `<div class="bar-counts" style="width:${(Math.min(r.counts, r.gross) / maxGross * 100).toFixed(1)}%"></div>` : ''}<div class="bar-value" style="left:min(${(r.gross / maxGross * 100).toFixed(1)}%, calc(100% - 84px))">${money(r.gross)}</div></div></div>`).join('')}</div>
+        <div class="bars">${sectionRows.map((r) => `<div class="bar-row"><div class="bar-label">${esc(r.title)}<small>${r.counts != null ? money(r.counts) + ' counts · ' : ''}${esc(r.note)}</small></div><div class="bar-track" data-tip="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" role="img" aria-label="${esc(`${money(r.gross)} entered · ${r.counts == null ? 'pending AGI' : money(r.counts) + ' counts'}`)}" tabindex="0"><div class="bar-gross" style="width:${(r.gross / maxGross * 100).toFixed(1)}%"></div>${r.counts != null ? `<div class="bar-counts" style="width:${(Math.min(r.counts, r.gross) / maxGross * 100).toFixed(1)}%"></div>` : ''}<div class="bar-value" style="left:min(${(r.gross / maxGross * 100).toFixed(1)}%, calc(100% - 90px))">${money(r.gross)}</div></div></div>`).join('')}</div>
         <div class="bar-legend"><span><span class="legend-dot" style="background:var(--accent)"></span>Counts on the return</span><span><span class="legend-dot" style="background:var(--accent-soft)"></span>Entered on the worksheet</span></div>
       </section>` : ''}
 
@@ -2413,7 +2414,7 @@
     const KIND = { log: ['act', 'Log it'], check: ['warn', 'Check'], plan: ['info', 'Plan'], good: ['good', 'On track'], habit: ['info', 'Habit'] };
     const actionLabel = (r) => (!r.action ? '' : ({ prefill: 'Log it', edit: 'Open entry', ledger: 'Open ledger', capture: 'Log something', settings: 'Open settings' })[r.action.type] || 'Open');
     const recHTML = (r) => `<article class="insight insight-${KIND[r.kind][0]} rec"><div class="insight-stripe"></div><div class="insight-body"><div class="insight-top"><span class="pill pill-${KIND[r.kind][0]}">${KIND[r.kind][1]}</span><h3>${esc(r.title)}</h3></div><p>${esc(r.body)}</p><div class="because">Because: ${esc(r.because)}</div><div class="btn-row rec-actions">${r.action ? `<button class="btn btn-sm btn-primary" type="button" data-rec-act="go" data-rec="${esc(r.id)}">${esc(actionLabel(r))}</button>` : ''}<button class="btn btn-sm btn-ghost" type="button" data-rec-act="dismiss" data-rec="${esc(r.id)}">Dismiss</button></div></div></article>`;
-    const statusPill = (s) => (s === 'overdue' ? '<span class="pill pill-act">Overdue</span>' : s === 'due' ? '<span class="pill pill-warn">Due</span>' : s === 'lapsed' ? '<span class="pill pill-info" title="More than a full period past due; nothing is projected for it">Stopped?</span>' : '<span class="pill pill-info">Upcoming</span>');
+    const statusPill = (s) => (s === 'overdue' ? '<span class="pill pill-act">Overdue</span>' : s === 'due' ? '<span class="pill pill-warn">Due</span>' : s === 'lapsed' ? '<span class="pill pill-info" title="Long enough past due that it looks stopped; nothing is projected for it">Stopped?</span>' : '<span class="pill pill-info">Upcoming</span>');
     const closed = !!pr.closed;
     const H = adv.habits;
     const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -2440,7 +2441,7 @@
       ${adv.recurrences.length ? `<section class="card">
         <div class="card-head"><h2>Recurring payees</h2><button class="btn btn-sm" type="button" id="icsBtn">Add due dates to calendar</button></div>
         <div class="table-wrap"><table class="table-twin recur"><thead><tr><th>Payee</th><th>Cadence</th><th class="num">Usually</th><th>Last</th><th>Next</th><th>Status</th></tr></thead><tbody>
-          ${adv.recurrences.map((r) => `<tr><td><b>${esc(r.description)}</b><br><span class="muted small">${esc(r.label)}</span></td><td>${esc(r.cadenceLabel)}<br><span class="muted small">${r.count} times</span></td><td class="num">${esc(r.unit === 'miles' ? fmtMiles(r.typicalAmount) : moneyCents(r.typicalAmount))}</td><td>${esc(P.formatDate(r.lastDate, false))}</td><td>${esc(P.formatDate(r.nextDate, r.nextDate.slice(0, 4) !== String(R0.taxYear)))}</td><td>${statusPill(r.status)}</td></tr>`).join('')}
+          ${adv.recurrences.map((r) => `<tr><td><b>${esc(r.description)}</b><br><span class="muted small">${esc(r.label)}</span></td><td>${esc(r.cadenceLabel)}<br><span class="muted small">${r.count} times</span></td><td class="num">${esc(r.unit === 'miles' ? fmtMiles(r.typicalAmount) : moneyCents(r.typicalAmount))}</td><td>${esc(P.formatDate(r.lastDate, r.lastDate.slice(0, 4) !== String(R0.taxYear)))}</td><td>${esc(P.formatDate(r.nextDate, r.nextDate.slice(0, 4) !== String(R0.taxYear)))}</td><td>${statusPill(r.status)}</td></tr>`).join('')}
         </tbody></table></div>
       </section>` : ''}
 
@@ -2454,7 +2455,7 @@
           ${kpi('Logging day', H.busiestWeekday == null ? '—' : WEEKDAYS[H.busiestWeekday], 'when you log most')}
           ${kpi('Receipts', `${Math.round(R0.substantiation.coverage * 100)}%`, 'of dollar entries')}
         </div>
-        ${receiptRows.length ? `<div class="bars" style="margin-top:14px">${receiptRows.map((s) => { const p = s.withReceipt / s.count * 100; return `<div class="bar-row"><div class="bar-label">${esc(s.title)}<small>${s.withReceipt} of ${s.count} with receipts</small></div><div class="bar-track" data-tip="${esc(`${Math.round(p)}% with receipts`)}" role="img" aria-label="${esc(`${Math.round(p)}% with receipts`)}"><div class="bar-gross" style="width:100%"></div><div class="bar-counts" style="width:${p.toFixed(1)}%"></div><div class="bar-value" style="left:min(${p.toFixed(1)}%, calc(100% - 48px))">${Math.round(p)}%</div></div></div>`; }).join('')}</div>` : ''}
+        ${receiptRows.length ? `<div class="bars" style="margin-top:14px">${receiptRows.map((s) => { const p = s.withReceipt / s.count * 100; return `<div class="bar-row"><div class="bar-label">${esc(s.title)}<small>${s.withReceipt} of ${s.count} with receipts</small></div><div class="bar-track" data-tip="${esc(`${Math.round(p)}% with receipts`)}" role="img" aria-label="${esc(`${Math.round(p)}% with receipts`)}" tabindex="0"><div class="bar-gross" style="width:100%"></div><div class="bar-counts" style="width:${p.toFixed(1)}%"></div><div class="bar-value" style="left:min(${p.toFixed(1)}%, calc(100% - 54px))">${Math.round(p)}%</div></div></div>`; }).join('')}</div>` : ''}
       </section>
 
       <section class="card">
@@ -2651,8 +2652,8 @@
       if (!s.state) { toast('Pick your state first.'); return; }
       panel.innerHTML = '<p class="note small">Looking up FEMA declarations…</p>';
       try {
-        const list = await G.femaDeclarations({ state: s.state, county: s.county, since: `${R0.taxYear}-01-01` });
-        if (!list.length) { panel.innerHTML = `<p class="note small">The lookup returned no federal declarations for ${esc(s.state)}${s.county ? ', ' + esc(s.county) : ''} since Jan 1, ${R0.taxYear}. The list may be incomplete or lag the event; check FEMA.gov or your state's emergency management site, and enter the declaration number by hand if you find one.</p>`; return; }
+        const list = await G.femaDeclarations({ state: s.state, county: s.county, since: `${R0.taxYear}-01-01`, until: `${R0.taxYear + 1}-01-01` });
+        if (!list.length) { panel.innerHTML = `<p class="note small">The lookup returned no federal declarations for ${esc(s.state)}${s.county ? ', ' + esc(s.county) : ''} for tax year ${R0.taxYear}. The list may be incomplete or lag the event; check FEMA.gov or your state's emergency management site, and enter the declaration number by hand if you find one.</p>`; return; }
         panel.innerHTML = `<div class="fema-list">${list.slice(0, 12).map((d) => `<div class="fema-item"><span><b>${esc(d.type)}-${esc(d.number)}</b> ${esc(d.title)}<br><span class="muted small">${esc(d.incident)} · declared ${esc(d.declared)} · ${esc(d.area)}</span></span><button class="btn btn-sm" type="button" data-fema="${esc(d.type)}-${esc(d.number)}">Use</button></div>`).join('')}</div>`;
         panel.querySelectorAll('[data-fema]').forEach((b) => { b.onclick = async () => { s.casualtyFederalDisaster = true; s.disasterNumber = b.dataset.fema; await save(); renderSettings(); toast(`Casualty losses marked as federal disaster ${b.dataset.fema}.`); }; });
       } catch (e) { panel.innerHTML = `<p class="note small">${esc(e.message)}</p>`; }
@@ -2989,6 +2990,23 @@
     $('#csvInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onCSVFile(f); };
     $('#modal').addEventListener('click', (ev) => { if (ev.target.classList.contains('modal-backdrop')) cancelModal(); });
     document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('#modal').hidden) cancelModal(); });
+    // Escape hides a chart tip without moving the pointer; the next pointer move or Tab brings tips back.
+    document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') document.body.classList.add('tips-off'); });
+    document.addEventListener('pointermove', () => document.body.classList.remove('tips-off'));
+    document.addEventListener('focusin', () => document.body.classList.remove('tips-off'));
+    // The print stylesheet keeps only #view-worksheet, which render() leaves hidden and empty on every other view.
+    let printedOffView = false;
+    window.addEventListener('beforeprint', () => {
+      if (state.view === 'worksheet') return;
+      renderWorksheet();
+      $('#view-worksheet').hidden = false;
+      printedOffView = true;
+    });
+    window.addEventListener('afterprint', () => {
+      if (!printedOffView) return;
+      printedOffView = false;
+      $('#view-worksheet').hidden = true;
+    });
     window.addEventListener('resize', () => { if ($('#trackCanvas')) drawTrack(); });
     window.addEventListener('hashchange', route);
     route();
