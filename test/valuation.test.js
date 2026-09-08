@@ -43,3 +43,32 @@ test('totals, counts, summary, and the record text', () => {
   assert.deepEqual(V.thresholds(600), { form8283: true, appraisal: false });
   assert.deepEqual(V.thresholds(6000), { form8283: true, appraisal: true });
 });
+
+test('the words people actually type find the catalog row, and appliances are in it', () => {
+  assert.equal(V.find('couch')[0].name, 'Sofa');
+  assert.equal(V.find('bike')[0].name, 'Bicycle');
+  assert.equal(V.find('fridge')[0].name, 'Refrigerator');
+  assert.equal(V.find('television')[0].name, 'Flat-screen TV');
+  assert.equal(V.byName('fridge').name, 'Refrigerator');
+  assert.equal(V.find('washer')[0].name, 'Washing machine');
+  assert.equal(V.find('dryer')[0].name, 'Clothes dryer');
+  assert.equal(V.find('stove')[0].name, 'Stove or range');
+  assert.equal(V.find('mattress')[0].name, 'Mattress');
+  // a name match still outranks an alias match
+  assert.equal(V.find('sofa')[0].name, 'Sofa');
+  assert.equal(V.find('jeans')[0].name, 'Pants or jeans');
+  assert.equal(V.find('zzz').length, 0);
+});
+
+test('aliases are lower case, spelled once, and never repeat a catalog name', () => {
+  const seen = new Set(V.CATALOG.map((c) => c.name.toLowerCase()));
+  for (const c of V.CATALOG) {
+    assert.ok(Array.isArray(c.aliases), c.name);
+    for (const a of c.aliases) {
+      assert.equal(a, a.toLowerCase().trim(), c.name);
+      assert.ok(a.length > 0, c.name);
+      assert.ok(!seen.has(a), `${a} is already a catalog name or alias`);
+      seen.add(a);
+    }
+  }
+});

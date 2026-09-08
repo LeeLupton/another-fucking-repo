@@ -73,3 +73,16 @@ test('the classifier honours learned keyword weights', () => {
   assert.equal(learned.lineId, 'se.car', 'still the only candidate, but weaker');
   assert.ok(learned.score < C.classify('gas').suggestions[0].score);
 });
+
+test('accepting a suggestion reinforces gently and saturates below an explicit correction', () => {
+  let w = {};
+  for (let i = 0; i < 40; i++) w = X.applyCorrection(w, 'se.car', ['gas'], 'se.car', ['gas']);
+  assert.equal(w.gas, X.ACCEPT_CAP);
+  assert.ok(X.ACCEPT_CAP < X.WEIGHT_CAP);
+  assert.equal(C.classify('gas bill', { weights: w }).suggestions[0].lineId, 'se.utilities', 'a boosted single word does not beat a two-word keyword');
+  // a demoted keyword still heals back to neutral through acceptances
+  let d = { gas: 0.2 };
+  for (let i = 0; i < 40; i++) d = X.applyCorrection(d, 'se.car', ['gas'], 'se.car', ['gas']);
+  assert.equal(d.gas, X.ACCEPT_CAP);
+  assert.equal(X.isKeyword('title and name'), false, 'the honorific reason is not a keyword weight');
+});

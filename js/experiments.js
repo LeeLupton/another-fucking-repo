@@ -26,7 +26,9 @@
   'use strict';
 
   const KEEP_MONTHS = 24;
-  const WEIGHT_FLOOR = 0.2, WEIGHT_CAP = 2.5;
+  // Keeping the top suggestion is weak evidence, so acceptance saturates well below the cap an
+  // explicit correction can reach: a common single word must not ratchet past a longer phrase.
+  const WEIGHT_FLOOR = 0.2, WEIGHT_CAP = 2.5, ACCEPT_CAP = 1.2;
   const r2 = (n) => Math.round(n * 100) / 100;
   const r3 = (n) => Math.round(n * 1000) / 1000;
   const r4 = (n) => Math.round(n * 10000) / 10000;
@@ -121,7 +123,7 @@
     const w = Object.assign({}, weights || {});
     const get = (k) => (w[k] == null ? 1 : w[k]);
     if (!chosenLineId || suggestedLineId === chosenLineId) {
-      for (const k of because || []) w[k] = r3(Math.min(WEIGHT_CAP, get(k) * 1.05));
+      for (const k of because || []) w[k] = r3(Math.min(ACCEPT_CAP, get(k) * 1.05));
     } else {
       for (const k of because || []) w[k] = r3(Math.max(WEIGHT_FLOOR, get(k) * 0.7));
       for (const k of chosenBecause || []) w[k] = r3(Math.min(WEIGHT_CAP, get(k) * 1.25));
@@ -131,7 +133,7 @@
   }
 
   /** Keywords the classifier reports as reasons; pseudo reasons are not weights. */
-  const isKeyword = (k) => typeof k === 'string' && !/here before|section context|^miles|odometer/.test(k);
+  const isKeyword = (k) => typeof k === 'string' && !/here before|section context|^miles|odometer|^title and name$/.test(k);
 
-  return { KEEP_MONTHS, WEIGHT_FLOOR, WEIGHT_CAP, monthKey, snapshot, changed, validate, calibration, summary, applyCorrection, isKeyword };
+  return { KEEP_MONTHS, WEIGHT_FLOOR, WEIGHT_CAP, ACCEPT_CAP, monthKey, snapshot, changed, validate, calibration, summary, applyCorrection, isKeyword };
 });
