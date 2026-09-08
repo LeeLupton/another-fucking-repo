@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- Everything the app needs comes from this origin, so an escaping slip in a description or a receipt name cannot run as script. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-BThAH42typ1buS7sLJhHsepUdb8lHjHOwtYusZyDKNI='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-yWsKirO0cXRrPdAFFtgc/XO58h+Kud8W5+36LgOI1lc='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Itemizer</title>
 <meta name="description" content="Keep track of deductible expenses through the year, know the moment itemizing beats the standard deduction, and hand your preparer a filled-in worksheet.">
@@ -6623,6 +6623,8 @@ window.ITEMIZER_SINGLE_FILE = true;
       entry.receiptId = null; entry.hasReceipt = false; entry.updatedAt = at;
       const row = panel.querySelector('#eReceiptRow');
       row.innerHTML = receiptRowHTML(entry, null);
+      const sel = panel.querySelector('#eLine');
+      row.hidden = S.isMiles(sel ? sel.value : entry.lineId); // a mileage line has nothing left to show, and must not be offered a photo it cannot be saved with
       bindReceiptRow(panel, entry);
       toast('Photo removed.');
     };

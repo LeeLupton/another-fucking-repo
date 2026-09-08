@@ -6606,6 +6606,8 @@ window.ITEMIZER_SINGLE_FILE = true;
       entry.receiptId = null; entry.hasReceipt = false; entry.updatedAt = at;
       const row = panel.querySelector('#eReceiptRow');
       row.innerHTML = receiptRowHTML(entry, null);
+      const sel = panel.querySelector('#eLine');
+      row.hidden = S.isMiles(sel ? sel.value : entry.lineId); // a mileage line has nothing left to show, and must not be offered a photo it cannot be saved with
       bindReceiptRow(panel, entry);
       toast('Photo removed.');
     };
