@@ -4,7 +4,7 @@ A deductible-expense tracker built from the paper organizer sheet tax preparers 
 
 It runs entirely in the browser, stores everything on the device, installs to a phone home screen, and works offline. No server, no accounts, no tracking.
 
-**Use it:** https://leelupton.github.io/another-fucking-repo/ (deployed from `main` by GitHub Actions once Pages is enabled for the repository) or download the single file `dist/itemizer.html` from the latest CI run and open it anywhere.
+**Use it:** https://leelupton.github.io/another-fucking-repo/ (deployed from `main` by the Actions workflow, which needs the repository's Pages source set to GitHub Actions) or download the single file `dist/itemizer.html` from the latest CI run and open it anywhere.
 
 ## What it does
 
@@ -22,7 +22,7 @@ It runs entirely in the browser, stores everything on the device, installs to a 
 
 **Worksheet.** The organizer sheet, filled in with your totals, section by section, with notes for the preparer. It names the taxpayer, keeps the paper's two-column layout (Self-Employed continues at the foot of the right column), always prints the lender's Name and Address lines, and shows the mileage rate beside converted miles. Print it, save it as a PDF, or copy it as text; the text carries the same notes. A receipts sheet puts every receipt photo on a printable contact sheet with the paper receipts listed underneath.
 
-**Settings.** Filing status, AGI, age and vision, gambling winnings, state (typed or from your location; a no-income-tax state gets the sales-tax note instead), a FEMA declaration lookup for the casualty line, editable rates and thresholds per tax year, backup and restore including receipts, places, and trips.
+**Settings.** Filing status, AGI, age and vision, the age bracket that sets your long-term-care premium limit, net investment income, gambling winnings, state (typed or from your location; a no-income-tax state gets the sales-tax note instead), a FEMA declaration lookup for the casualty line, editable rates and thresholds per tax year, backup and restore including receipts, places, and trips.
 
 ## Experiments
 
@@ -32,19 +32,37 @@ Three ways the app studies its own judgement and checks it later, all on the dev
 - **Correction learning.** Override a suggested line and the keywords behind the wrong suggestion lose weight for you, while the keywords behind your choice gain some. Weights drift back to neutral and are forgotten; the current ones are listed in Settings.
 - **Session nudges.** Right after a save, at most one follow-up based only on what was just logged: add the drive to that visit, log the year's total miles, attach the acknowledgment for a gift of $250 or more. Nothing about it is stored.
 
-## Audit hardening
+## Review hardening
+
+Two rounds of review have run over this code. The second is described first, because where the two disagree the second is what the code does now.
+
+### The second round
+
+Twenty-five lenses read the app (tax law, the engine's arithmetic, the worksheet data, the parser, the classifier and the learning experiments, the advisor, geography, the importer, storage, five passes over the user interface, offline and deploy, styling and accessibility, security, the tests, the documentation, dates, data flow between modules, numbers, the app's life over time, error handling and speed, and the words on screen). They raised 248 findings. Every one was then given to a verifier whose job was to disprove it by running the code; 217 survived, and those are fixed here. The suite grew from 146 tests to 285.
+
+- **Mileage by date.** The IRS raised the 2026 rates from July 1 (Announcement 2026-11), so a single rate per year is wrong. Rates are held as dated periods and each drive is valued by its own date: 72.5 cents a business mile through June 30 and 76 after it, 20.5 cents a medical mile and then 23.5. The worksheet names both rates when a year has two.
+- **Two limits the sheet used to leave blank.** Long-term-care premiums count only up to the amount set by your age, and investment interest only up to net investment income; both are now applied, with the excess named or carried forward, and both say so plainly when you have not told the app the figure they need.
+- **Worksheet lines.** Business parking and tolls count on top of the standard mileage rate, so they left the actual-expense line where they were being dropped. Interest on a car loan is no longer flatly non-deductible: for 2025 through 2028 up to $10,000 on a new American-assembled vehicle is an adjustment to income. The qualified disaster loss is closed for 2026, and choosing it there says why. Flood and fire premiums are insurance, not a casualty loss, and a doctor's office visit is medical, not a Schedule C office expense.
+- **Advice that costs money.** Bunching advice added up gross payments the engine would not deduct, so a taxpayer already at the state-and-local cap was told to move thousands of dollars into December for nothing; every suggestion is now priced through the same engine and dropped if the deduction it buys is zero. An estimated payment made early no longer re-expects its own deadline, and the app no longer tells you in January that you will not itemize this year.
+- **Dates.** The tax year moves on at New Year instead of dating every new entry to December 31 of the year before, while a year you picked on purpose is left alone.
+- **Geography.** The FEMA county filter was sent lower-cased, and FEMA compares case-sensitively, so every county lookup returned nothing: a Buncombe County taxpayer was told there was no federal declaration in the year of Hurricane Helene. A parked phone whose platform reports no speed no longer books phantom miles.
+- **Offline.** A navigation to any document on the site could be saved as the offline shell, so opening the README left the installed app starting up as a Markdown file. Only the app root is remembered now, the deploy publishes the app alone, and a launch is served from this version's own cache rather than waiting on the network.
+- **Money and records.** A business-use share of 33.3 percent filed the whole bill at 100 percent. Deleting an entry now takes the trip logged for it, so the mileage log cannot export a drive the ledger no longer has. An entry and its photo are written in one transaction. Restoring a backup merges only the settings the file carries instead of resetting the rest.
+- **Reading the screen.** Printing from any view other than the worksheet gave a blank page. The offer to reload for a new version is a banner that stays until it is used. The editable rate boxes are labelled in the unit they actually take, which was a hundredfold understatement waiting to happen.
+
+### The first round
 
 A multi-lens review (tax rules, parser, classifier, advisor, importer, geo, storage, security, accessibility, mobile) produced 83 verified findings; all are fixed here, each with a regression test where the code is testable under `node --test`. The user-visible changes:
 
-- **Tax engine.** State and local income tax withheld from pay (W-2 boxes 17 and 19) can be entered in Settings and counts toward the state-and-local deduction; a qualifying surviving spouse no longer gets a spouse add-on, the joint student-loan range, or the $2,000 non-itemizer gift cap; the 2026 student-loan phase-out is built in; charitable gifts above the 60%-of-AGI limit carry forward instead of inflating the total; a "qualified disaster loss" option applies the $500 floor with no AGI reduction and counts on top of the standard deduction; education credits are withheld from married-filing-separately; mortgage insurance premiums are flagged as deductible again from 2026; a missing AGI is called out wherever an income-based limit could not be checked.
+- **Tax engine.** State and local income tax withheld from pay (W-2 boxes 17 and 19) can be entered in Settings and counts toward the state-and-local deduction; a qualifying surviving spouse no longer gets a spouse add-on, the joint student-loan range, or the $2,000 non-itemizer gift cap; the 2026 student-loan phase-out is built in; charitable gifts above the 60%-of-AGI limit carry forward instead of inflating the total; a "qualified disaster loss" option applies the $500 floor with no AGI reduction and counts on top of the standard deduction (for 2024 and 2025; see the second round); education credits are withheld from married-filing-separately; mortgage insurance premiums are flagged as deductible again from 2026; a missing AGI is called out wherever an income-based limit could not be checked.
 - **Classifier.** Maryland statement lines are no longer doctor visits, personal gifts, vets, K-12 tuition, life insurance, car-loan interest, and IRS payments warn instead of being filed, brand collisions (Caliber Collision, Frontier, Delta) are resolved, apostrophes are ignored, learned short words no longer hijack later entries, and the section fallback only offers a real catch-all line.
 - **Parser.** "on sunscreen" is not a weekday, a sentence-ending period no longer hides an amount or date, Feb 29 is handled, tokens are removed by position, one- and three-decimal amounts behave, a four-digit year is not taken as the amount when anything else could be, and "bill"/"cost" stay in descriptions.
 - **Advisor.** Payees that stopped are marked lapsed and no longer projected; dismissing a recurrence also stops its projection; a re-spelled payee still satisfies an expected date; state estimated payments follow the IRS calendar; every-four-weeks payees are recognised; month-end anchors never drift; no "stop chasing receipts" advice while medical costs wait on AGI; a closed year gets a past-tense summary; the shareable aggregate no longer reveals age or blindness.
 - **Import.** Debit/credit indicator columns set each row's sign; day-first dates are detected and can be forced; a header below a preamble is found; semicolon and tab exports and European decimals parse; the amount column is chosen by its cells rather than position; only strong matches are pre-ticked, and Schedule C lines only when the ledger already shows a business; duplicates require the payee to match.
-- **Trips.** GPS jitter while parked no longer accumulates miles, a stale first fix is re-anchored, a pause breaks the track, the wake lock is re-acquired when the screen returns, a denied permission stops the recorder, lookup errors say what went wrong, and the FEMA lookup filters by county on the server and matches county names exactly.
+- **Trips.** GPS jitter while parked no longer accumulates miles, a stale first fix is re-anchored, a pause breaks the track, the wake lock is re-acquired when the screen returns, a denied permission stops the recorder, lookup errors say what went wrong, and the FEMA lookup sends the county name as FEMA writes it, asks again for the whole state when the county matches nothing, bounds the search to the tax year, and lists every area a declaration designates.
 - **Storage.** One object store per kind of record with row-level writes (see Storage above); a blocked or failing IndexedDB open no longer forks data into localStorage; backups are validated before they are stored and receipts are decoded locally; a failed save is reported and leaves the form intact; the browser is asked to protect the data from eviction; backups are built as a Blob; CSV exports defuse spreadsheet formulas in free text.
 - **Accessibility and mobile.** Dialogs trap focus, make the page behind them inert, and return focus on close; the ledger search keeps its caret; selects and icons have names; muted text meets AA contrast; worksheet labels wrap instead of being cut off.
-- **Tests.** The follow-up lenses added regression tests for what the first pass left untested: the GPS trip recorder's state machine and permission denial, FEMA lookups against a stubbed fetch, the advisor's co-occurrence and receipt-habit rules, weekly through yearly cadences with same-day merging and a tolerated miss, the year plan's three outcomes, the Schedule C mileage guards, the date-gated year-end checklist, the appraisal, escrow, casualty and tuition insights, the CSV export, withdrawal/deposit and type-column statements with the sign override, relative-date aliases and date sources, and the classifier's limit and key; three assertions that could pass by accident were tightened.
+- **Tests.** The follow-up lenses of that round added regression tests for what the first pass left untested: the GPS trip recorder's state machine and permission denial, FEMA lookups against a stubbed fetch, the advisor's co-occurrence and receipt-habit rules, weekly through yearly cadences with same-day merging and a tolerated miss, the year plan's three outcomes, the Schedule C mileage guards, the date-gated year-end checklist, the appraisal, escrow, casualty and tuition insights, the CSV export, withdrawal/deposit and type-column statements with the sign override, relative-date aliases and date sources, and the classifier's limit and key; three assertions that could pass by accident were tightened.
 - **Worksheet.** The sheet names the taxpayer (Settings → About you); Self-Employed continues at the foot of the right column as on paper, so a full sheet fits one page; the lender's Name and Address lines are always printed; mileage rows show the rate applied; the Education section has no total (its lines go to different forms); totals and notes never split across a page; the text copy carries the lender lines and the full preparer notes.
 
 ## Run it locally
@@ -56,6 +74,8 @@ npx serve -l 4173 .        # then open http://localhost:4173
 npm test                    # node --test: parser, categorizer, tax engine, advisor, geo, importer
 npm run build               # dist/itemizer.html, the whole app in one file
 ```
+
+`npm run build` also rewrites the cache version stamped into `sw.js`. Both `sw.js` and `dist/` are committed, so run the build after any change under `js/` (or to the page, styles, manifest or icons); CI fails if the committed build is out of date.
 
 Opening `index.html` straight from disk also works in Chromium-based browsers. The service worker and the install prompt need http(s).
 
@@ -98,18 +118,18 @@ sw.js                 offline cache for the app shell
 manifest.webmanifest  installable web app metadata
 test/                 node:test suites for the pure modules
 build.js              single-file bundler (no dependencies)
-.github/workflows     CI (syntax, tests, build) and the Pages deploy from main
+.github/workflows     CI (syntax, tests, build, and a check that the committed build is current) and the Pages deploy from main
 ```
 
 The pure modules use a small UMD wrapper so the same files run in the browser as globals and in Node for tests. There are no dependencies, at build time or at run time.
 
 ## Privacy
 
-Data never leaves the device. There is no server, no analytics, and no usage tracking. The only network calls are the fonts and the lookups you trigger yourself: an address search, a road distance, a disaster-declaration check. Each sends just the query it needs to OpenStreetMap or FEMA, and each works without a connection by falling back or asking you. GPS positions are recorded only while you have pressed Start, and they stay with the trip on the device. Back up from Settings before clearing browser data or switching phones.
+Data never leaves the device. There is no server, no analytics, and no usage tracking. The only network calls are the lookups you trigger yourself, an address search, a road distance, a disaster-declaration check, and the two typefaces, which come from Google Fonts. Opening the page asks Google for them, so Google sees your IP address and browser; the request carries no referrer, the service worker serves them from its cache after the first visit, and the single-file build does not ask for them at all. Each lookup sends just the query it needs to OpenStreetMap or FEMA, and each works without a connection by falling back or asking you. GPS positions are recorded only while you have pressed Start, and they stay with the trip on the device. Back up from Settings before clearing browser data or switching phones.
 
 ## Tax figures and disclaimer
 
-Built-in parameters follow IRS Revenue Procedures 2023-34, 2024-40, and 2025-32 (inflation adjustments), the annual IRS standard-mileage notices, and Public Law 119-21 (2025) for the standard deduction, the state-and-local-tax cap and phase-down, the 2026 charitable floor and non-itemizer deduction, and the 2026 gambling-loss limitation. They are planning figures. Verify against current IRS publications (Schedule A instructions; Publications 502, 526, 529, 970) or your preparer before filing. Itemizer is not tax advice.
+Built-in parameters follow IRS Revenue Procedures 2023-34, 2024-40, and 2025-32 (inflation adjustments, including the age-based long-term-care premium limits of §213(d)(10)); the annual IRS standard-mileage notices, which for 2026 means Notice 2026-10 for January through June and Announcement 2026-11 for July onward; Public Law 119-21 (2025) for the standard deduction, the state-and-local-tax cap and phase-down, the 2026 charitable floor and non-itemizer deduction, the 2026 gambling-loss limitation, the return of mortgage insurance premiums, and the 2025 through 2028 deduction for interest on a new American-assembled car; and Public Law 118-148 (2024) for the qualified disaster loss, which covers declarations through early 2025 and no longer applies to 2026. They are planning figures. Verify against current IRS publications (Schedule A instructions; Publications 502, 526, 529, 970) or your preparer before filing. Itemizer is not tax advice.
 
 ## License
 
