@@ -67,7 +67,9 @@
     blind: false,
     spouseAge65: false,
     spouseBlind: false,
+    ltcAgeBracket: '', // age at the end of the year, which sets the long-term-care premium limit; blank means not stated
     gamblingWinnings: '',
+    investmentIncome: '',
     stateWithholding: '',
     casualtyFederalDisaster: false,
     casualtyQualifiedDisaster: false,
@@ -98,6 +100,7 @@
   const okKey = (v) => !!v && !RESERVED_KEY.test(v);
   const TRIP_METHODS = ['road', 'estimate', 'gps', 'manual']; // METHOD_LABEL in app.js
   const FILING_STATUSES = ['single', 'mfj', 'mfs', 'hoh', 'qss'];
+  const LTC_AGE_BRACKETS = ['', '40-', '41-50', '51-60', '61-70', '71+']; // LTC_BRACKETS in rules.js
   const PLACE_CATEGORIES = ['home', 'medical', 'business', 'charity', 'school', 'other']; // PLACE_CATEGORIES in geo.js
   const MAX_POINTS = 5000; // a recorded track is thinned to about one point per ten metres, so this is a very long drive
   const yearOf = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 2000 && n <= 2100 ? n : null; };
@@ -121,6 +124,7 @@
     }
     if (!(out.taxYear >= 2000 && out.taxYear <= 2100)) out.taxYear = DEFAULT_SETTINGS.taxYear;
     if (!FILING_STATUSES.includes(out.filingStatus)) out.filingStatus = 'single';
+    if (!LTC_AGE_BRACKETS.includes(out.ltcAgeBracket)) out.ltcAgeBracket = '';
     if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
     return out;
   }

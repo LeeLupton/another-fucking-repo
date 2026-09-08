@@ -159,6 +159,18 @@
   /** Forget the ledger selection: used wherever the list under it is replaced wholesale. */
   function clearLedgerSelection() { state.ledger.selected.clear(); state.ledger.selectMode = false; }
 
+  /**
+   * The settings the newest forecast of a year was taken under. A snapshot written before settings were carried has
+   * none of them; today's settings then stand in, which is what that row was already being graded against.
+   */
+  function snapshotSettings(snaps, taxYear) {
+    let newest = null;
+    for (const x of snaps || []) if (Number(x.taxYear) === Number(taxYear) && (!newest || x.month > newest.month)) newest = x;
+    const out = {};
+    for (const k of EXP.CARRIED_SETTINGS) if (newest && newest[k] !== undefined) out[k] = newest[k];
+    return out;
+  }
+
   function recompute() {
     const today = P.todayISO();
     state.computed = R.compute(state.entries, Object.assign({}, state.settings, { today, paramOverrides: state.overrides }));
@@ -167,7 +179,12 @@
     const thisYear = Number(today.slice(0, 4));
     const finals = {};
     // December receipts are typed in January to April, so a year is only graded once its records are in.
-    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear && today >= `${y + 1}-04-15`) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
+    for (const y of new Set(snaps.map((x) => x.taxYear))) {
+      if (!(y < thisYear && today >= `${y + 1}-04-15`)) continue;
+      // graded the way it was projected: a filing status or an AGI entered since would move the mark the old forecast is measured against
+      const stamped = snapshotSettings(snaps, y);
+      finals[y] = R.compute(state.entries, Object.assign({}, state.settings, stamped, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
+    }
     state.validation = EXP.validate(snaps, finals);
     const calibration = state.settings.experimentSnapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
     // the advisor recomputes the projection itself, so it needs the same overridden parameters the live figures were built with
@@ -181,6 +198,7 @@
     const pr = state.advice && state.advice.projection;
     if (!pr || Number(state.settings.taxYear) !== Number(today.slice(0, 4)) || !state.computed.entries.length) return;
     const s = { today, taxYear: state.computed.taxYear, actual: pr.actual, expectedMore: pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore, projectedTotal: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore), standardDeduction: pr.standardDeduction, itemize: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore) > pr.standardDeduction };
+    for (const k of EXP.CARRIED_SETTINGS) s[k] = state.settings[k]; // the settings behind the forecast ride along on the row, so the year is graded the way it was projected
     if (!EXP.changed(state.snapshots, s)) return;
     const known = state.snapshots; // only the rows this tab started from may be deleted: another tab's month must survive
     state.snapshots = EXP.snapshot(state.snapshots, s);
@@ -959,10 +977,8 @@
     T.saving = true;
     try {
       DB.requestPersistence();
-      await DB.putEntry(entry);
-      await DB.putTrip(trip);
+      await DB.putTripWithEntry(entry, trip); // one transaction: the mileage log must never name an entry that is not there
     } catch (e) {
-      await DB.deleteEntry(entry.id).catch(() => {});
       T.saving = false;
       toast(`Could not log the trip: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
       return;
@@ -1361,26 +1377,6 @@
   }
   /** A calendar client keeps events by their UID, so the same reminder has to carry the same one every time it is exported. */
   const uidToken = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'payee';
-  /**
-   * The estimated-tax due date for a quarter. The IRS moves a due date that falls on a Saturday,
-   * Sunday or legal holiday to the next business day. Only two holidays can meet these dates:
-   * Martin Luther King Day (the third Monday in January) and Emancipation Day in Washington DC
-   * (April 16, kept on the Friday before when it falls on a Saturday and the Monday after when it falls on a Sunday).
-   */
-  function estimatedDueDate(year, monthDay) {
-    const iso = (d) => d.toISOString().slice(0, 10);
-    const jan1 = new Date(Date.UTC(year, 0, 1)).getUTCDay();
-    const holidays = new Set([`${year}-01-${String(1 + ((8 - jan1) % 7) + 14).padStart(2, '0')}`]);
-    const apr16 = new Date(Date.UTC(year, 3, 16)).getUTCDay();
-    holidays.add(apr16 === 6 ? `${year}-04-15` : apr16 === 0 ? `${year}-04-17` : `${year}-04-16`);
-    let d = new Date(`${year}-${monthDay}T00:00:00Z`);
-    for (let i = 0; i < 7; i++) {
-      const day = d.getUTCDay();
-      if (day !== 0 && day !== 6 && !holidays.has(iso(d))) break;
-      d = new Date(d.getTime() + 86400000);
-    }
-    return iso(d);
-  }
   /** The calendar file, or null when nothing is due: a calendar with no events in it is not a file any client will take. */
   function icsText() {
     const adv = state.advice, year = Number(state.settings.taxYear), today = P.todayISO();
@@ -1392,7 +1388,8 @@
     }
     events.push({ uid: `itemizer-yearend-${year}`, date: `${year}-12-31`, summary: 'Last day for deductible payments this tax year', desc: `Property tax, gifts, and medical bills paid by today count for ${year}.` });
     if (state.computed.scheduleC.hasActivity || state.computed.lines['tax.state_income'].count) {
-      [[estimatedDueDate(year, '04-15'), 'Q1'], [estimatedDueDate(year, '06-15'), 'Q2'], [estimatedDueDate(year, '09-15'), 'Q3'], [estimatedDueDate(year + 1, '01-15'), 'Q4']]
+      // the Advisor's own dates, so a reminder and the Advisor never name different days for the same payment
+      [[ADV.dueDate(year, '04-15'), 'Q1'], [ADV.dueDate(year, '06-15'), 'Q2'], [ADV.dueDate(year, '09-15'), 'Q3'], [ADV.dueDate(year + 1, '01-15'), 'Q4']]
         .forEach(([d, q]) => events.push({ uid: `itemizer-est-${year}-${q.toLowerCase()}`, date: d, summary: `Estimated tax payment ${q} due`, desc: 'Federal, and usually state, estimated payment. A state payment made by Dec 31 counts this year.' }));
     }
     const due = events.filter((e) => e.date >= today).sort((a, b) => a.date.localeCompare(b.date) || a.uid.localeCompare(b.uid));
@@ -1633,10 +1630,9 @@
     // Everything is written before anything is shown as saved; a failure leaves the form filled in and the store untouched.
     try {
       DB.requestPersistence(); // the first save carries the user gesture some browsers require to protect the data from eviction
-      if (receiptId) await DB.putReceipt({ id: receiptId, entryId: entries[0].id, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob });
-      await DB.putEntries(entries);
+      // the photo and the entries share one transaction, so a half-written save cannot leave a photo behind with nothing pointing at it
+      await DB.putEntriesWithReceipt(entries, receiptId ? { id: receiptId, entryId: entries[0].id, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob } : null);
     } catch (e) {
-      if (receiptId) await DB.deleteReceipt(receiptId).catch(() => {});
       cap.saving = false; if (saveBtn) saveBtn.disabled = false;
       toast(`Could not save: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
       return;
@@ -1676,17 +1672,12 @@
       state.pendingReceiptTarget = null;
       if (!entry) return;
       const id = entry.receiptId || DB.uid();
-      const isNewPhoto = !entry.receiptId;
-      try {
-        await DB.putReceipt({ id, entryId: entry.id, type: blob.type || 'image/jpeg', createdAt: new Date().toISOString(), blob });
-      } catch (e) { toast(e.message || 'Could not store the receipt.'); return; }
-      // The photo and the entry are two writes. The entry is told about it only after both are through, so a failure
-      // cannot leave the ledger showing an attachment that is not there, or a photo no entry will ever name.
       const at = new Date().toISOString();
+      // The photo and the entry share one transaction, so a failure cannot leave the ledger showing an attachment that
+      // is not there, or a photo no entry will ever name.
       try {
-        await DB.putEntry(Object.assign({}, entry, { receiptId: id, hasReceipt: true, sample: false, updatedAt: at }));
+        await DB.putEntriesWithReceipt([Object.assign({}, entry, { receiptId: id, hasReceipt: true, sample: false, updatedAt: at })], { id, entryId: entry.id, type: blob.type || 'image/jpeg', createdAt: at, blob });
       } catch (e) {
-        if (isNewPhoto) await DB.deleteReceipt(id).catch(() => {}); // otherwise it rides along in every backup with nothing pointing at it
         toast(`Could not attach the receipt: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
         return;
       }
@@ -2134,7 +2125,7 @@
         <div class="verdict-kicker">${kicker}</div>
         <h2 class="verdict-title">${V.itemize ? 'Itemizing wins' : 'The standard deduction still wins'}</h2>
         <div class="hero">${hero}</div>
-        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdParts.length ? ` (includes ${stdParts.join(' and ')})` : ''}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}</p>
+        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdParts.length ? ` (includes ${stdParts.join(' and ')})` : ''}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}${V.interestPending ? ' Investment interest is waiting on your net investment income.' : ''}</p>
         ${meterHTML('')}
       </section>
 
@@ -2172,7 +2163,7 @@
           <dl class="dl">
             <dt>Medical, after ${R.pct(R0.params.medicalFloorRate)} floor</dt><dd>${A.medical.deductible == null ? (A.medical.gross ? 'needs AGI' : moneyCents(0)) : moneyCents(A.medical.deductible)}</dd>
             <dt>State &amp; local taxes, capped</dt><dd>${moneyCents(A.taxes.deductible)}</dd>
-            <dt>Interest</dt><dd>${moneyCents(A.interest.total)}</dd>
+            <dt>Interest${A.interest.carryforward ? ' (after the investment limit)' : ''}</dt><dd>${moneyCents(A.interest.deductible)}</dd>
             <dt>Gifts to charity${A.charity.floor ? ' (after floor)' : ''}</dt><dd>${moneyCents(A.charity.deductible)}</dd>
             <dt>Gambling losses (to winnings)</dt><dd>${moneyCents(A.other.deductible)}</dd>
             <dt>Casualty (${A.casualty.qualified ? 'qualified disaster loss' : 'declared disaster'})</dt><dd>${moneyCents(A.casualty.deductible)}</dd>
@@ -2229,7 +2220,7 @@
     switch (sectionId) {
       case 'medical': return A.medical.deductible;
       case 'taxes': return A.taxes.deductible;
-      case 'interest': return A.interest.total;
+      case 'interest': return A.interest.deductible;
       // The floor and the AGI limit apply to gifts and volunteer costs together, so the two bars split the one
       // deductible figure rather than each showing its own gross; together they equal "Gifts to charity" below.
       case 'charity':
@@ -2250,6 +2241,7 @@
     switch (sectionId) {
       case 'medical': return A.medical.deductible == null ? 'pending AGI' : `above ${money(A.medical.floor)} floor`;
       case 'taxes': return A.taxes.excess ? `${money(A.taxes.excess)} over the cap` : `cap ${money(A.taxes.cap)}`;
+      case 'interest': return A.interest.pending ? 'needs investment income' : A.interest.carryforward ? `${money(A.interest.carryforward)} carries forward` : 'Schedule A';
       case 'selfemp': return 'Schedule C, not itemized';
       case 'education': return 'loan interest counts; tuition → credits';
       case 'other': return A.other.gamblingWinnings ? `to ${money(A.other.gamblingWinnings)} winnings` : 'needs winnings';
@@ -2552,9 +2544,13 @@
             <label class="field"><span>Name on the return</span><input id="sName" value="${esc(s.taxpayerName || '')}" placeholder="printed on the worksheet" autocomplete="name" maxlength="120"></label>
             <label class="field"><span>Filing status</span><select id="sFiling" class="input">${R.FILING_STATUSES.map((f) => `<option value="${f.id}" ${s.filingStatus === f.id ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}</select></label>
             <label class="field"><span>Estimated AGI ($)</span><input id="sAgi" inputmode="numeric" value="${esc(s.agi)}" placeholder="e.g. 95000"></label>
-            <div class="field"><span>Age &amp; vision</span><div class="chips"><label class="check"><input type="checkbox" id="sAge65" ${s.age65 ? 'checked' : ''}> I'm 65 or older</label><label class="check"><input type="checkbox" id="sBlind" ${s.blind ? 'checked' : ''}> I'm blind</label></div></div>
+            <div class="field"><span>Age &amp; vision</span><div class="chips"><label class="check"><input type="checkbox" id="sAge65" ${s.age65 ? 'checked' : ''}> I'm 65 or older</label><label class="check"><input type="checkbox" id="sBlind" ${s.blind ? 'checked' : ''}> I'm blind</label></div>
+              <select id="sLtcBracket" class="input" aria-label="Your age band for the long-term-care premium limit"><option value="">Age band not set</option>${R.LTC_BRACKETS.map((b) => `<option value="${b.id}" ${s.ltcAgeBracket === b.id ? 'selected' : ''}>Age ${esc(b.label)} at the end of the year</option>`).join('')}</select>
+              <small class="muted">Sets the limit on long-term-care insurance premiums. Leave it unset if you have no such policy.</small>
+            </div>
             <div class="field" ${marriedJoint ? '' : 'hidden'}><span>Spouse</span><div class="chips"><label class="check"><input type="checkbox" id="sSpouseAge65" ${s.spouseAge65 ? 'checked' : ''}> Spouse is 65 or older</label><label class="check"><input type="checkbox" id="sSpouseBlind" ${s.spouseBlind ? 'checked' : ''}> Spouse is blind</label></div></div>
             <label class="field"><span>Gambling winnings reported ($)</span><input id="sWinnings" inputmode="numeric" value="${esc(s.gamblingWinnings)}" placeholder="0"></label>
+            <label class="field"><span>Net investment income ($)</span><input id="sInvestmentIncome" inputmode="numeric" value="${esc(s.investmentIncome || '')}" placeholder="0"><small class="muted">Interest, dividends, and other investment income, less investment expenses. Margin interest counts only up to this figure.</small></label>
             <label class="field"><span>State &amp; local income tax withheld ($)</span><input id="sWithheld" inputmode="numeric" value="${esc(s.stateWithholding || '')}" placeholder="W-2 boxes 17 and 19"><small class="muted">Tax withheld for another state counts here too.</small></label>
             <label class="field"><span>State</span><select id="sState" class="input"><option value="">Not set</option>${G.US_STATES.map((st) => `<option value="${st.code}" ${s.state === st.code ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select></label>
             <label class="field"><span>County</span><input id="sCounty" value="${esc(s.county || '')}" placeholder="for disaster lookups"></label>
@@ -2565,7 +2561,7 @@
               ${R0.taxYear >= 2026 && s.casualtyFederalDisaster ? `<p class="note small">A disaster declared in 2026 cannot be a qualified disaster loss: that treatment covers federal declarations made between January 2020 and September 2025. A 2026 loss from a state-declared disaster still belongs on Schedule A, after the $100 floor and 10 percent of your AGI.</p>` : ''}
             </div>
           </div>
-          <p class="note" style="margin-top:12px">AGI is adjusted gross income — roughly wages plus other income, minus adjustments like retirement contributions and student loan interest. Last year's Form 1040 line 11 is a good estimate. This figure, your filing status, the gambling winnings and the state tax withheld apply to every tax year until you change them.</p>
+          <p class="note" style="margin-top:12px">AGI is adjusted gross income — roughly wages plus other income, minus adjustments like retirement contributions and student loan interest. Last year's Form 1040 line 11 is a good estimate. This figure, your filing status, the age band, the gambling winnings, the investment income and the state tax withheld apply to every tax year until you change them.</p>
         </section>
 
         <section class="card">
@@ -2668,7 +2664,9 @@
       };
     }
     moneyField('sWinnings', 'gamblingWinnings', 'Enter the winnings as a plain number, for example 1200.');
+    moneyField('sInvestmentIncome', 'investmentIncome', 'Enter the investment income as a plain number, for example 3000.');
     moneyField('sWithheld', 'stateWithholding', 'Enter the tax withheld as a plain number, for example 4200.');
+    $('#sLtcBracket').onchange = async (ev) => { s.ltcAgeBracket = ev.target.value; await save({ ltcAgeBracket: s.ltcAgeBracket }); };
     $('#sState').onchange = async (ev) => { s.state = ev.target.value; await save({ state: s.state }); renderSettings(); };
     $('#sCounty').addEventListener('change', async (ev) => { s.county = ev.target.value.trim(); await save({ county: s.county }); });
     $('#sDisasterNumber').addEventListener('change', async (ev) => { s.disasterNumber = ev.target.value.trim(); await save({ disasterNumber: s.disasterNumber }); });

@@ -127,19 +127,27 @@ test('a dialog opened over another keeps the first one opener and scroll positio
 });
 
 test('the advisor gets the parameter overrides, and a year is graded only once its records are in', () => {
+  const EXP = require(path.join(__dirname, '../js/experiments.js'));
   const computes = [];
   let analyzed = null, finals = null;
   const state = {
-    entries: [], settings: { taxYear: 2027, experimentSnapshots: true }, dismissed: {},
-    snapshots: [{ taxYear: 2026 }, { taxYear: 2025 }], overrides: { 2026: { mileage: { medical: 0.5 } } },
+    entries: [], settings: { taxYear: 2027, filingStatus: 'single', agi: '90000', experimentSnapshots: true }, dismissed: {},
+    // the 2025 forecasts were taken while the return was still joint, and on a smaller AGI
+    snapshots: [
+      { taxYear: 2026, month: '2026-11' },
+      { taxYear: 2025, month: '2025-06', filingStatus: 'mfj', agi: 40000, age65: false },
+      { taxYear: 2025, month: '2025-11', filingStatus: 'mfj', agi: 52000, age65: true },
+    ],
+    overrides: { 2026: { mileage: { medical: 0.5 } } },
   };
-  const ctx = load([fn('recompute')], {
+  const ctx = load([fn('snapshotSettings'), fn('recompute')], {
     state,
     P: { todayISO: () => '2027-02-01' },
     R: { compute: (entries, opts) => { computes.push(opts); return { scheduleA: { total: 100 }, entries: [] }; } },
-    EXP: { validate: (snaps, f) => { finals = f; return []; }, calibration: () => ({ factor: 1, n: 0 }) },
+    EXP: { CARRIED_SETTINGS: EXP.CARRIED_SETTINGS, validate: (snaps, f) => { finals = f; return []; }, calibration: () => ({ factor: 1, n: 0 }) },
     ADV: { analyze: (input) => { analyzed = input; return {}; } },
     maybeSnapshot: () => {},
+    Number,
   });
 
   ctx.recompute();
@@ -147,6 +155,56 @@ test('the advisor gets the parameter overrides, and a year is graded only once i
   assert.equal(analyzed.settings.taxYear, 2027);
   // 2025 is closed and past 15 April; 2026 is still collecting December's receipts
   assert.deepEqual(Object.keys(finals), ['2025']);
+  // the live figures use today's settings; the closed year is graded on the settings its last forecast was taken under
+  assert.equal(computes[0].filingStatus, 'single');
+  assert.equal(computes[0].agi, '90000');
+  const graded = computes.find((o) => o.taxYear === 2025);
+  assert.equal(graded.filingStatus, 'mfj');
+  assert.equal(graded.agi, 52000);
+  assert.equal(graded.age65, true);
+  assert.equal(graded.paramOverrides, state.overrides);
+});
+
+test('a year whose snapshots were taken before settings were carried is still graded on the settings of the day', () => {
+  const EXP = require(path.join(__dirname, '../js/experiments.js'));
+  const ctx = load([fn('snapshotSettings')], { EXP, Number });
+  const snaps = [{ taxYear: 2025, month: '2025-03' }, { taxYear: 2025, month: '2025-09', filingStatus: 'single' }];
+  const of = (list, year) => Object.entries(ctx.snapshotSettings(list, year)); // the helper builds its object inside the vm, so compare the pairs
+  assert.deepEqual(of(snaps, 2025), [['filingStatus', 'single']]);
+  assert.deepEqual(of(snaps, 2024), []);
+  assert.deepEqual(of([{ taxYear: 2025, month: '2025-03' }], 2025), []);
+  assert.deepEqual(of(null, 2025), []);
+});
+
+test('a forecast is written down with the settings it was made under', () => {
+  const EXP = require(path.join(__dirname, '../js/experiments.js'));
+  const synced = [];
+  const state = {
+    settings: { taxYear: 2026, filingStatus: 'mfj', agi: '90000', age65: true, blind: false, spouseAge65: false, spouseBlind: false },
+    entries: [{ id: 'e1', sample: false }],
+    computed: { taxYear: 2026, entries: [{ id: 'e1' }] },
+    advice: { projection: { actual: 12000, expectedMore: 3000, standardDeduction: 31500 } },
+    snapshots: [],
+  };
+  const ctx = load([fn('maybeSnapshot')], { state, EXP, DB: { syncSnapshots: (rows) => { synced.push(rows); return Promise.resolve(); } }, Number });
+
+  ctx.maybeSnapshot('2026-09-08');
+  assert.equal(state.snapshots.length, 1);
+  const row = state.snapshots[0];
+  assert.equal(row.projectedTotal, 15000);
+  assert.equal(row.itemize, false);
+  assert.equal(row.filingStatus, 'mfj');
+  assert.equal(row.agi, '90000');
+  assert.equal(row.age65, true);
+  assert.equal(row.blind, false); // a box that is off is a setting like any other, and has to be graded as one
+  assert.equal(synced.length, 1);
+
+  // an AGI that was never entered says nothing, so it is left off rather than stored as nought
+  state.settings.agi = '';
+  state.snapshots = [];
+  state.advice.projection.actual = 13000;
+  ctx.maybeSnapshot('2026-10-08');
+  assert.equal('agi' in state.snapshots[0], false);
 });
 
 test('recorded time is time at the wheel: a pause is not driving time', () => {
@@ -213,6 +271,27 @@ test('the charity bars split what counts, so they never exceed the Schedule A ro
   assert.equal(ctx.countedFor('charity') + ctx.countedFor('volunteer'), computed.scheduleA.charity.deductible);
 });
 
+test('the interest bar counts what survives the investment-interest limit, and says where the rest went', () => {
+  const Rules = require(path.join(__dirname, '../js/rules.js'));
+  const E = (date, lineId, amount) => ({ id: `${lineId}-${date}`, date, lineId, amount, hasReceipt: true });
+  const entries = [E('2026-03-01', 'int.mortgage', 8000), E('2026-03-02', 'int.investment', 5000)];
+  const settings = { taxYear: 2026, filingStatus: 'single', agi: '80000', today: '2026-09-08' };
+  const sources = [line(/^  const money = R\.money.*$/m), fn('countedFor'), fn('countedNote')];
+  const capped = Rules.compute(entries, { ...settings, investmentIncome: 1800 });
+  const ctxCapped = load(sources, { R: Rules, state: { computed: capped } });
+  assert.equal(ctxCapped.countedFor('interest'), 9800, 'the mortgage interest plus the investment interest the income allows');
+  assert.equal(ctxCapped.countedNote('interest'), '$3,200 carries forward');
+  // with no investment income entered the whole amount is still counted, and the note says what is missing
+  const pending = Rules.compute(entries, settings);
+  const ctxPending = load(sources, { R: Rules, state: { computed: pending } });
+  assert.equal(ctxPending.countedFor('interest'), 13000);
+  assert.equal(ctxPending.countedNote('interest'), 'needs investment income');
+  const clear = Rules.compute(entries, { ...settings, investmentIncome: 9000 });
+  const ctxClear = load(sources, { R: Rules, state: { computed: clear } });
+  assert.equal(ctxClear.countedFor('interest'), 13000);
+  assert.equal(ctxClear.countedNote('interest'), 'Schedule A');
+});
+
 test('a count and its noun, so nothing on screen reads "1 entries"', () => {
   const ctx = load([line(/^  const plural = .*$/m)], { Number });
   assert.equal(run(ctx, 'plural(1, "note")'), 'note');
@@ -267,4 +346,32 @@ test('a mileage line shows both rates in a year the IRS changed them, and cash g
   assert.equal(run(ctx, 'stdGiftClause({ charity: 0 })'), '');
   assert.equal(run(ctx, 'stdGiftClause(null)'), '');
   assert.equal(run(ctx, 'stdGiftClause({ charity: 1000 })'), ', including $1,000.00 of cash gifts');
+});
+
+test('the calendar file gives the estimated-tax dates the Advisor gives, rolled off weekends and holidays', () => {
+  const ADV = require(path.join(__dirname, '../js/advisor.js'));
+  let today = '2027-06-01';
+  const state = {
+    advice: { recurrences: [] },
+    settings: { taxYear: 2027 },
+    computed: { scheduleC: { hasActivity: true }, lines: { 'tax.state_income': { count: 0 } } },
+  };
+  const ctx = load([line(/^  const uidToken = .*$/m), fn('icsEscape'), fn('icsFold'), fn('icsText')], { state, P: { todayISO: () => today }, ADV });
+
+  const ics = ctx.icsText();
+  // 15 January 2028 is a Saturday and the Monday after it is Martin Luther King Day, so the fourth payment is due on the 18th
+  assert.match(ics, /DTSTART;VALUE=DATE:20280118/);
+  assert.doesNotMatch(ics, /20280115/);
+  assert.match(ics, /DTSTART;VALUE=DATE:20270615/); // an ordinary Tuesday is left alone
+  assert.match(ics, /DTSTART;VALUE=DATE:20271231/);
+  assert.doesNotMatch(ics, /20270415/); // the first quarter is already past
+
+  // 15 April 2029 is a Sunday and Emancipation Day is then kept on Monday the 16th, so the first payment moves to the 17th
+  today = '2029-01-02';
+  state.settings.taxYear = 2029;
+  assert.match(ctx.icsText(), /DTSTART;VALUE=DATE:20290417/);
+
+  // nothing self-employed and no state income tax logged: no estimated payments are named at all
+  state.computed.scheduleC.hasActivity = false;
+  assert.doesNotMatch(ctx.icsText(), /20290417/);
 });

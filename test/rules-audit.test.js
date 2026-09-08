@@ -367,14 +367,78 @@ test('long-term-care premiums are held to the age-based limit and the bands are 
   const capped = mustFind(r.insights, /Long-term-care premiums are limited/, 'the long-term-care warning');
   assert.equal(capped.level, 'warn');
   assert.match(capped.body, /\$4,810/); assert.match(capped.body, /\$6,020/); assert.match(capped.body, /per insured person/);
-  // a joint return can hold two policies, so the bound doubles
+  // a joint return can hold a second policy at any age, so the top band is allowed on top
   assert.equal(Rules.compute(e, { ...base, taxYear: 2025, agi: 20000, age65: true, filingStatus: 'mfj' }).scheduleA.medical.gross, 9000);
-  // a plausible premium is left alone, with the bands as information
+  // a plausible premium is left alone, and the age band is asked for
   const small = Rules.compute([E('2025-01-01', 'med.ltc', 1200)], { ...base, taxYear: 2025, agi: 20000 });
   assert.equal(small.scheduleA.medical.gross, 1200);
-  assert.equal(mustFind(small.insights, /Long-term-care premiums have an age limit/, 'the long-term-care note').level, 'info');
+  assert.ok(!small.insights.some((i) => /Long-term-care premiums are limited/.test(i.title)));
+  const askBand = mustFind(small.insights, /age band for long-term-care/, 'the prompt for the age band');
+  assert.equal(askBand.level, 'act');
+  assert.equal(askBand.view, 'settings');
   // the 2026 table
   assert.equal(Rules.compute([E('2026-01-01', 'med.ltc', 9000)], { ...base, agi: 20000, age65: true }).scheduleA.medical.gross, 6200);
+});
+
+test('a stated age band applies that band\'s long-term-care limit, not the highest one', () => {
+  const e = [E('2025-02-01', 'med.ltc', 9000)];
+  const s = { ...base, taxYear: 2025, agi: 20000 };
+  // age 41 to 50 in 2025: $900, so $8,100 of the premium is left out
+  const r = Rules.compute(e, { ...s, ltcAgeBracket: '41-50' });
+  assert.equal(r.scheduleA.medical.ltc.limit, 900);
+  assert.equal(r.scheduleA.medical.ltc.counted, 900);
+  assert.equal(r.scheduleA.medical.ltc.excess, 8100);
+  assert.equal(r.scheduleA.medical.gross, 900);
+  assert.equal(r.scheduleA.medical.ltc.pending, false);
+  const capped = mustFind(r.insights, /Long-term-care premiums are limited/, 'the long-term-care warning');
+  assert.match(capped.body, /\$8,100/);
+  assert.match(capped.body, /41 to 50/);
+  assert.ok(!r.insights.some((i) => /age band for long-term-care/.test(i.title)), 'the band is set, so it is not asked for again');
+  // a joint return leaves room for a second policy on the spouse, whose age is not asked for
+  assert.equal(Rules.compute(e, { ...s, ltcAgeBracket: '41-50', filingStatus: 'mfj' }).scheduleA.medical.ltc.counted, 6920);
+  // within the band nothing is held back, and the note names the limit that was applied
+  const within = Rules.compute([E('2025-02-01', 'med.ltc', 800)], { ...s, ltcAgeBracket: '41-50' });
+  assert.equal(within.scheduleA.medical.gross, 800);
+  const note = mustFind(within.insights, /Long-term-care premiums have an age limit/, 'the long-term-care note');
+  assert.equal(note.level, 'info');
+  assert.match(note.body, /\$900/);
+  // an unknown band is ignored rather than trusted
+  assert.equal(Rules.compute(e, { ...s, ltcAgeBracket: 'nonsense' }).scheduleA.medical.ltc.counted, 4810);
+});
+
+test('investment interest is held to the investment income entered in settings', () => {
+  const e = [E('2026-03-01', 'int.mortgage', 8000), E('2026-03-02', 'int.investment', 5000)];
+  // with no investment income the whole amount counts, and the verdict says a figure is missing
+  const pending = Rules.compute(e, base);
+  assert.equal(pending.scheduleA.interest.total, 13000);
+  assert.equal(pending.scheduleA.interest.deductible, 13000);
+  assert.equal(pending.scheduleA.interest.carryforward, 0);
+  assert.equal(pending.verdict.interestPending, true);
+  const ask = mustFind(pending.insights, /net investment income/, 'the prompt for investment income');
+  assert.equal(ask.level, 'act');
+  assert.equal(ask.view, 'settings');
+  // with less income than interest, only the income counts and the rest carries forward
+  const capped = Rules.compute(e, { ...base, investmentIncome: 1800 });
+  assert.equal(capped.scheduleA.interest.allowedInvestment, 1800);
+  assert.equal(capped.scheduleA.interest.carryforward, 3200);
+  assert.equal(capped.scheduleA.interest.deductible, 9800);
+  assert.equal(capped.verdict.interestPending, false);
+  // the worksheet still shows what was entered; only the counted figure is trimmed
+  assert.equal(capped.scheduleA.grossEntered, 13000);
+  assert.equal(capped.scheduleA.total, 9800);
+  const warn = mustFind(capped.insights, /Investment interest is over/, 'the carryforward warning');
+  assert.equal(warn.level, 'warn');
+  assert.match(warn.body, /\$3,200/);
+  // enough income and the whole amount counts, with the limit reported as met
+  const clear = Rules.compute(e, { ...base, investmentIncome: 9000 });
+  assert.equal(clear.scheduleA.interest.deductible, 13000);
+  assert.equal(clear.scheduleA.interest.carryforward, 0);
+  assert.equal(mustFind(clear.insights, /Investment interest is limited/, 'the investment interest note').level, 'info');
+  // an income of zero is a real answer, not a missing one
+  const zero = Rules.compute(e, { ...base, investmentIncome: 0 });
+  assert.equal(zero.scheduleA.interest.deductible, 8000);
+  assert.equal(zero.scheduleA.interest.carryforward, 5000);
+  assert.equal(zero.verdict.interestPending, false);
 });
 
 test('the senior deduction is figured per person and phases out on income', () => {

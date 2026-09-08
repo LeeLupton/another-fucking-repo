@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- Everything the app needs comes from this origin, so an escaping slip in a description or a receipt name cannot run as script. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-cI7W3XWf30AzzhCXyn4IhlTd1U/L8IW7g9QTeOG/Pxs='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-dWQs/S3OkDbznFuAcaMp+Gpxm285X2lHq0a/kR7IsYY='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Itemizer</title>
 <meta name="description" content="Keep track of deductible expenses through the year, know the moment itemizing beats the standard deduction, and hand your preparer a filled-in worksheet.">
@@ -702,7 +702,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         { id: 'med.operations', label: 'Operations', keywords: ['surgery', 'surgeon', 'operation', 'surgical', 'procedure', 'anesthesia', 'anesthesiologist', 'outpatient surgery'] },
         { id: 'med.prescriptions', label: 'Prescription Drugs', keywords: ['prescription', 'prescriptions', 'rx', 'pharmacy', 'cvs', 'walgreens', 'rite aid', 'medication', 'meds', 'insulin', 'refill', 'goodrx', 'express scripts', 'optumrx', 'caremark'] },
         { id: 'med.insurance', label: 'Medical/Dental Insurance', hint: 'After-tax premiums only. Premiums taken pre-tax from a paycheck are already excluded from income and cannot be deducted again. Medicare Part B/D premiums count.', keywords: ['health insurance', 'health insurance premium', 'medical insurance', 'medical premium', 'health premium', 'dental insurance', 'dental premium', 'vision insurance', 'delta dental', 'blue cross', 'bcbs', 'aetna', 'cigna', 'unitedhealthcare', 'united healthcare', 'kaiser', 'humana', 'anthem', 'tricare', 'fehb', 'medicare part b', 'medicare part d', 'medicare premium', 'medigap', 'cobra'] },
-        { id: 'med.ltc', label: 'Long-term Care Insurance', hint: 'Deductible only up to an annual limit set by your age at the end of the year. There are five age bands, and the limit belongs to each insured person, so on a joint return each spouse\'s policy has its own. This worksheet holds back only an amount above the highest limit, so tell your preparer the age of everyone insured and let them apply the right limit to each policy.', keywords: ['long-term care', 'long term care', 'ltc', 'ltci', 'genworth', 'fltcip'] },
+        { id: 'med.ltc', label: 'Long-term Care Insurance', hint: 'Deductible only up to an annual limit set by your age at the end of the year. There are five age bands, and the limit belongs to each insured person, so on a joint return each spouse\'s policy has its own. Set your age band in Settings and this worksheet applies your limit; if a second policy insures someone in another band, tell your preparer so each policy gets its own.', keywords: ['long-term care', 'long term care', 'ltc', 'ltci', 'genworth', 'fltcip'] },
         { id: 'med.hospital', label: 'Hospital & Emergency', keywords: ['hospital', 'emergency room', 'emergency dept', 'emergency department', 'er visit', 'er', 'inpatient', 'hospital admission', 'trauma', 'medical center', 'health system'] },
         { id: 'med.lab', label: 'Lab & X-Ray', keywords: ['lab', 'labs', 'labcorp', 'quest diagnostics', 'x-ray', 'xray', 'mri', 'ct scan', 'imaging', 'ultrasound', 'blood test', 'bloodwork', 'radiology', 'mammogram', 'biopsy', 'colonoscopy', 'ekg', 'echocardiogram'] },
         { id: 'med.nurses', label: 'Visiting Nurses/In-home Care', keywords: ['nurse', 'nursing', 'home health', 'in-home care', 'in home care', 'caregiver', 'home care', 'hospice', 'aide', 'respite care'] },
@@ -811,7 +811,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         { id: 'int.second', label: '2nd Mortgage/Home Equity', hint: 'Counts only if the loan proceeds were used to buy, build, or substantially improve the home that secures it.', keywords: ['heloc', 'home equity', 'second mortgage', '2nd mortgage', 'equity line', 'equity loan', 'home equity line', 'home equity loan'] },
         { id: 'int.individual', label: 'Home Mortgage to Individual', hint: 'Seller or private financing with no Form 1098. Schedule A requires the lender\'s name, address, and SSN or EIN — record them in the note.', keywords: ['owner financing', 'owner-financed', 'owner financed', 'seller financing', 'seller-financed', 'private mortgage', 'land contract', 'contract for deed', 'private lender', 'mortgage to individual', 'paid mortgage to'] },
         { id: 'int.points', label: 'Points Paid at Closing', hint: 'Points on a purchase of your main home are deductible in full the year paid; refinance points are spread over the loan term.', keywords: ['points', 'discount points', 'origination', 'loan origination', 'origination fee', 'closing costs', 'closing disclosure', 'refinance points', 'refi points', 'buydown'] },
-        { id: 'int.investment', label: 'Investment Interest', hint: 'Interest on money borrowed to buy taxable investments (margin interest). It is deductible only up to your net investment income for the year, and the rest carries forward — Form 4952. This worksheet counts what you paid without applying that limit, so tell your preparer your investment income.', keywords: ['margin interest', 'investment interest', 'brokerage interest', 'margin loan', 'schwab margin', 'fidelity margin', 'interactive brokers interest', 'form 4952', 'robinhood margin', 'etrade margin'] },
+        { id: 'int.investment', label: 'Investment Interest', hint: 'Interest on money borrowed to buy taxable investments (margin interest). It is deductible only up to your net investment income for the year, and the rest carries forward — Form 4952. Enter your net investment income in Settings and this worksheet applies the limit; until then it counts the whole amount.', keywords: ['margin interest', 'investment interest', 'brokerage interest', 'margin loan', 'schwab margin', 'fidelity margin', 'interactive brokers interest', 'form 4952', 'robinhood margin', 'etrade margin'] },
       ],
     },
     {
@@ -921,6 +921,15 @@ window.ITEMIZER_SINGLE_FILE = true;
   const FILING_BY_ID = Object.fromEntries(FILING_STATUSES.map((f) => [f.id, f]));
   /** States with no tax on wages: the sales-tax election is usually the better state-tax deduction there. */
   const NO_INCOME_TAX_STATES = new Set(['AK', 'FL', 'NV', 'NH', 'SD', 'TN', 'TX', 'WA', 'WY']);
+  /** The §213(d)(10) age bands: the value stored in settings, the params key holding that year's limit, and how to say it. */
+  const LTC_BRACKETS = [
+    { id: '40-', key: 'to40', label: '40 or under' },
+    { id: '41-50', key: 'to50', label: '41 to 50' },
+    { id: '51-60', key: 'to60', label: '51 to 60' },
+    { id: '61-70', key: 'to70', label: '61 to 70' },
+    { id: '71+', key: 'over70', label: '71 or older' },
+  ];
+  const LTC_BRACKET_BY_ID = Object.fromEntries(LTC_BRACKETS.map((b) => [b.id, b]));
 
   // ---- Tax-year parameters -------------------------------------------------
   // Sources: IRS Rev. Proc. 2023-34 / 2024-40 / 2025-32 (inflation adjustments),
@@ -1240,18 +1249,26 @@ window.ITEMIZER_SINGLE_FILE = true;
 
     // ---- Schedule A ----
     const medicalLines = Schema.linesForSection('medical');
-    // §213(d)(10) caps long-term-care premiums by age, and the cap is per insured person. One worksheet
-    // line cannot tell one policy from two, so only an obviously excessive figure is trimmed: the top
-    // band, doubled on a joint return where both spouses can be insured. The preparer applies each age.
+    // §213(d)(10) caps long-term-care premiums by age, and the cap belongs to each insured person. The age
+    // band from Settings sets the taxpayer's own limit; with no band stated only an obviously excessive
+    // figure is trimmed, at the top band. A joint return is allowed the top band again on top, because one
+    // worksheet line cannot tell one spouse's policy from the other's and the spouse's age is not asked for.
     const ltcPaid = T('med.ltc');
     const ltcLimits = P.ltcPremiumLimits || null;
-    const ltcBound = ltcLimits ? cents((s.age65 ? ltcLimits.over70 : ltcLimits.to70) * (s.filingStatus === 'mfj' ? 2 : 1)) : null;
+    const ltcBracket = LTC_BRACKET_BY_ID[s.ltcAgeBracket] || null;
+    const ltcOwnLimit = ltcLimits ? Number(ltcLimits[ltcBracket ? ltcBracket.key : (s.age65 ? 'over70' : 'to70')]) || 0 : null;
+    const ltcBound = ltcLimits ? cents(ltcOwnLimit + (s.filingStatus === 'mfj' ? Number(ltcLimits.over70) || 0 : 0)) : null;
     const ltcCounted = ltcBound == null ? ltcPaid : Math.min(ltcPaid, ltcBound);
     const medGross = cents(medicalLines.reduce((a, l) => a + valueOf(l), 0) - (ltcPaid - ltcCounted));
     const medFloor = agi == null ? null : cents(agi * P.medicalFloorRate);
     const medical = {
       gross: medGross,
-      ltc: { paid: ltcPaid, counted: cents(ltcCounted), bound: ltcBound, limits: ltcLimits, capped: ltcCounted < ltcPaid },
+      ltc: {
+        paid: ltcPaid, counted: cents(ltcCounted), excess: cents(ltcPaid - ltcCounted),
+        bracket: ltcBracket ? ltcBracket.id : '', bracketLabel: ltcBracket ? ltcBracket.label : null,
+        limit: ltcOwnLimit, bound: ltcBound, limits: ltcLimits,
+        capped: ltcCounted < ltcPaid, pending: !ltcBracket && ltcPaid > 0,
+      },
       milesValue: valueOf(Schema.getLine('med.miles')),
       floor: medFloor,
       deductible: medFloor == null ? null : cents(Math.max(0, medGross - medFloor)),
@@ -1273,7 +1290,22 @@ window.ITEMIZER_SINGLE_FILE = true;
     }
     const taxes = { gross: taxGross, entered: cents(sections.taxes.value), withheld, cap: cents(saltCap), deductible: cents(Math.min(taxGross, saltCap)), excess: cents(Math.max(0, taxGross - saltCap)), phasedOut: saltPhasedOut };
 
-    const interest = { total: cents(sections.interest.value) };
+    // §163(d) allows investment interest only up to net investment income, with the rest carried forward on
+    // Form 4952. That income is nowhere in the ledger, so it comes from Settings; until it is entered the
+    // whole amount counts and the verdict says it is waiting on a figure.
+    const invPaid = T('int.investment');
+    const invIncome = (s.investmentIncome === '' || s.investmentIncome == null || isNaN(Number(s.investmentIncome))) ? null : Math.max(0, Number(s.investmentIncome));
+    const invAllowed = invIncome == null ? invPaid : Math.min(invPaid, invIncome);
+    const interestTotal = cents(sections.interest.value);
+    const interest = {
+      total: interestTotal,
+      investment: invPaid,
+      investmentIncome: invIncome,
+      allowedInvestment: cents(invAllowed),
+      carryforward: invIncome == null ? 0 : cents(invPaid - invAllowed),
+      pending: invIncome == null && invPaid > 0,
+      deductible: cents(interestTotal - invPaid + invAllowed),
+    };
 
     const cash = cents(['ch.worship', 'ch.college', 'ch.org', 'ch.cfc', 'ch.other'].reduce((a, id) => a + T(id), 0));
     const noncash = T('ch.noncash');
@@ -1321,7 +1353,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (qualifiedDisaster && casualty.deductible > 0) casualty.addedToStandard = true;
 
     const scheduleA = { medical, taxes, interest, charity, other, casualty };
-    scheduleA.total = cents((medical.deductible || 0) + taxes.deductible + interest.total + charity.deductible + other.deductible + casualty.deductible);
+    scheduleA.total = cents((medical.deductible || 0) + taxes.deductible + interest.deductible + charity.deductible + other.deductible + casualty.deductible);
     // What the worksheet adds up to before any floor or cap — the number people expect to see.
     scheduleA.grossEntered = cents(medGross + taxGross + interest.total + charGross + losses + casGross);
 
@@ -1357,6 +1389,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       difference: cents(scheduleA.total - standardDeduction.total),
       progress: standardDeduction.total ? Math.min(1, scheduleA.total / standardDeduction.total) : 0,
       medicalPending: medical.pending,
+      interestPending: interest.pending,
       // Without an AGI the engine assumes the best case for every income-based limit; say so instead of staying quiet.
       // A qualified disaster loss is fully sized without an AGI, so it is not waiting on one.
       agiPending: agi == null && !!(medical.pending || charity.floorPending || charity.limitPending || taxGross > saltFloor || (casGross > 0 && casualty.federalDisaster && casualty.afterLimits == null) || sliPaid > 0),
@@ -1508,8 +1541,15 @@ window.ITEMIZER_SINGLE_FILE = true;
     const LTC = A.medical.ltc;
     if (LTC && LTC.paid > 0 && LTC.limits) {
       const bands = `${money(LTC.limits.to40)} at age 40 or under, ${money(LTC.limits.to50)} at 41 to 50, ${money(LTC.limits.to60)} at 51 to 60, ${money(LTC.limits.to70)} at 61 to 70, and ${money(LTC.limits.over70)} over 70`;
-      if (LTC.capped) add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${money(LTC.counted)} is counted, which is the most any one insured person of your age can claim in ${R.taxYear}. The limit for ${R.taxYear} is ${bands} — per insured person, so a couple who each hold a policy get two limits. Tell your preparer the age of each insured person.`);
-      else add('info', 'Long-term-care premiums have an age limit', `Only part of a long-term-care premium counts as a medical expense: ${bands} for ${R.taxYear}. The limit is per insured person, so each spouse's policy has its own. Your preparer applies the band for each age.`);
+      const perPerson = `The limit for ${R.taxYear} is ${bands} — per insured person, so a couple who each hold a policy get two limits.`;
+      if (LTC.capped) {
+        const held = LTC.bracket
+          ? `${money(LTC.counted)} is counted, which is the ${R.taxYear} limit at age ${LTC.bracketLabel}${R.filingStatus === 'mfj' ? ', plus room for a second policy on your spouse' : ''}`
+          : `${money(LTC.counted)} is counted, which is the most any one insured person of your age can claim in ${R.taxYear}`;
+        add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${held}, so ${money(LTC.excess)} is left out of the medical total. ${perPerson}${LTC.bracket ? '' : ' Tell your preparer the age of each insured person.'}`);
+      }
+      if (LTC.pending) add('act', 'Tell Settings your age band for long-term-care premiums', `The limit on a long-term-care premium is set by your age at the end of the year, and without your age band the worksheet can only hold back what is above the highest limit${LTC.capped ? '' : ', which leaves the whole premium counted'}. ${perPerson} Choose your band under Age & vision in Settings and the right limit is applied.`, { view: 'settings' });
+      else if (!LTC.capped) add('info', 'Long-term-care premiums have an age limit', `All ${money(LTC.paid)} counts: the ${R.taxYear} limit at age ${LTC.bracketLabel} is ${money(LTC.limit)}. The limit is per insured person, so a second policy insuring someone in another band has its own limit — tell your preparer if there is one.`);
     }
     if (R.scheduleC.hasActivity && T('med.insurance') > 0) add('act', 'Self-employed? Move health premiums above the line', `With self-employment profit, health, dental, and long-term-care premiums (${money(T('med.insurance') + (LTC ? LTC.counted : T('med.ltc')))}) can be deducted on Schedule 1 with no ${pct(P.medicalFloorRate)} floor — usually far better than Schedule A. The same age limit applies to the long-term-care part. Tell your preparer which it is.`);
 
@@ -1528,7 +1568,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (T('int.second') > 0) add('info', 'Home equity interest has a use test', 'Interest on a HELOC or second mortgage counts only if the money was used to buy, build, or substantially improve the home securing it — not for cars, tuition, or paying off cards.');
     if (T('int.points') > 0) add('info', 'Points: purchase vs. refinance', 'Points paid to buy your main home are deductible in full this year. Points on a refinance are spread evenly over the life of the loan (any unamortized balance is deductible when that loan is paid off).');
     if (R.taxYear >= 2026 && P.pmiPhaseout && T('int.mortgage') > 0) add('info', 'Mortgage insurance premiums count again from 2026', `Premiums for mortgage insurance (Form 1098 box 5 — PMI, FHA, VA, or USDA) are deductible as mortgage interest again starting 2026, phasing out between ${money(isMFS0 ? P.pmiPhaseout.mfs.start : P.pmiPhaseout.default.start)} and ${money(isMFS0 ? P.pmiPhaseout.mfs.end : P.pmiPhaseout.default.end)} of AGI. Log the box 5 amount on the Home Mortgage Interest line.`);
-    if (T('int.investment') > 0) add('info', 'Investment interest is limited to investment income', 'Margin and other investment interest is deductible only up to net investment income, on Form 4952; the excess carries forward.');
+    if (A.interest.investment > 0) {
+      const I = A.interest;
+      if (I.pending) add('act', 'Enter your net investment income', `Margin and other investment interest is deductible only up to net investment income, on Form 4952, and the excess carries forward. All ${money(I.investment)} you logged is counted until you enter that income in Settings.`, { view: 'settings' });
+      else if (I.carryforward > 0) add('warn', 'Investment interest is over your investment income', `${money(I.investment)} of investment interest against ${money(I.investmentIncome)} of net investment income, so ${money(I.allowedInvestment)} counts this year and ${money(I.carryforward)} is left out. It is not lost: Form 4952 carries it forward to a year with enough investment income.`);
+      else add('info', 'Investment interest is limited to investment income', `All ${money(I.investment)} counts, being within the ${money(I.investmentIncome)} of net investment income you entered. Form 4952 shows the working; anything above that income would carry forward instead.`);
+    }
 
     // Charity
     if (R.substantiation.giftsNoAck.length) {
@@ -1609,7 +1654,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     return out.sort((a, b) => order[a.level] - order[b.level]);
   }
 
-  return { FILING_STATUSES, NO_INCOME_TAX_STATES, PARAMS, PARAM_FIELDS, CONDITIONAL_PARAM_FIELDS, KNOWN_YEARS, getParams, paramFields, compute, taxYearOf, money, moneyCents, moneyNear, cents, pct, perMile, perMileText, mileageRate, deepMerge, getPath, setPath };
+  return { FILING_STATUSES, LTC_BRACKETS, NO_INCOME_TAX_STATES, PARAMS, PARAM_FIELDS, CONDITIONAL_PARAM_FIELDS, KNOWN_YEARS, getParams, paramFields, compute, taxYearOf, money, moneyCents, moneyNear, cents, pct, perMile, perMileText, mileageRate, deepMerge, getPath, setPath };
 });
 
 ;
@@ -3632,7 +3677,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     blind: false,
     spouseAge65: false,
     spouseBlind: false,
+    ltcAgeBracket: '', // age at the end of the year, which sets the long-term-care premium limit; blank means not stated
     gamblingWinnings: '',
+    investmentIncome: '',
     stateWithholding: '',
     casualtyFederalDisaster: false,
     casualtyQualifiedDisaster: false,
@@ -3663,6 +3710,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   const okKey = (v) => !!v && !RESERVED_KEY.test(v);
   const TRIP_METHODS = ['road', 'estimate', 'gps', 'manual']; // METHOD_LABEL in app.js
   const FILING_STATUSES = ['single', 'mfj', 'mfs', 'hoh', 'qss'];
+  const LTC_AGE_BRACKETS = ['', '40-', '41-50', '51-60', '61-70', '71+']; // LTC_BRACKETS in rules.js
   const PLACE_CATEGORIES = ['home', 'medical', 'business', 'charity', 'school', 'other']; // PLACE_CATEGORIES in geo.js
   const MAX_POINTS = 5000; // a recorded track is thinned to about one point per ten metres, so this is a very long drive
   const yearOf = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 2000 && n <= 2100 ? n : null; };
@@ -3686,6 +3734,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     }
     if (!(out.taxYear >= 2000 && out.taxYear <= 2100)) out.taxYear = DEFAULT_SETTINGS.taxYear;
     if (!FILING_STATUSES.includes(out.filingStatus)) out.filingStatus = 'single';
+    if (!LTC_AGE_BRACKETS.includes(out.ltcAgeBracket)) out.ltcAgeBracket = '';
     if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
     return out;
   }
@@ -4616,6 +4665,18 @@ window.ITEMIZER_SINGLE_FILE = true;
   /** Forget the ledger selection: used wherever the list under it is replaced wholesale. */
   function clearLedgerSelection() { state.ledger.selected.clear(); state.ledger.selectMode = false; }
 
+  /**
+   * The settings the newest forecast of a year was taken under. A snapshot written before settings were carried has
+   * none of them; today's settings then stand in, which is what that row was already being graded against.
+   */
+  function snapshotSettings(snaps, taxYear) {
+    let newest = null;
+    for (const x of snaps || []) if (Number(x.taxYear) === Number(taxYear) && (!newest || x.month > newest.month)) newest = x;
+    const out = {};
+    for (const k of EXP.CARRIED_SETTINGS) if (newest && newest[k] !== undefined) out[k] = newest[k];
+    return out;
+  }
+
   function recompute() {
     const today = P.todayISO();
     state.computed = R.compute(state.entries, Object.assign({}, state.settings, { today, paramOverrides: state.overrides }));
@@ -4624,7 +4685,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     const thisYear = Number(today.slice(0, 4));
     const finals = {};
     // December receipts are typed in January to April, so a year is only graded once its records are in.
-    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear && today >= `${y + 1}-04-15`) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
+    for (const y of new Set(snaps.map((x) => x.taxYear))) {
+      if (!(y < thisYear && today >= `${y + 1}-04-15`)) continue;
+      // graded the way it was projected: a filing status or an AGI entered since would move the mark the old forecast is measured against
+      const stamped = snapshotSettings(snaps, y);
+      finals[y] = R.compute(state.entries, Object.assign({}, state.settings, stamped, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
+    }
     state.validation = EXP.validate(snaps, finals);
     const calibration = state.settings.experimentSnapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
     // the advisor recomputes the projection itself, so it needs the same overridden parameters the live figures were built with
@@ -4638,6 +4704,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const pr = state.advice && state.advice.projection;
     if (!pr || Number(state.settings.taxYear) !== Number(today.slice(0, 4)) || !state.computed.entries.length) return;
     const s = { today, taxYear: state.computed.taxYear, actual: pr.actual, expectedMore: pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore, projectedTotal: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore), standardDeduction: pr.standardDeduction, itemize: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore) > pr.standardDeduction };
+    for (const k of EXP.CARRIED_SETTINGS) s[k] = state.settings[k]; // the settings behind the forecast ride along on the row, so the year is graded the way it was projected
     if (!EXP.changed(state.snapshots, s)) return;
     const known = state.snapshots; // only the rows this tab started from may be deleted: another tab's month must survive
     state.snapshots = EXP.snapshot(state.snapshots, s);
@@ -5416,10 +5483,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     T.saving = true;
     try {
       DB.requestPersistence();
-      await DB.putEntry(entry);
-      await DB.putTrip(trip);
+      await DB.putTripWithEntry(entry, trip); // one transaction: the mileage log must never name an entry that is not there
     } catch (e) {
-      await DB.deleteEntry(entry.id).catch(() => {});
       T.saving = false;
       toast(`Could not log the trip: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
       return;
@@ -5818,26 +5883,6 @@ window.ITEMIZER_SINGLE_FILE = true;
   }
   /** A calendar client keeps events by their UID, so the same reminder has to carry the same one every time it is exported. */
   const uidToken = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'payee';
-  /**
-   * The estimated-tax due date for a quarter. The IRS moves a due date that falls on a Saturday,
-   * Sunday or legal holiday to the next business day. Only two holidays can meet these dates:
-   * Martin Luther King Day (the third Monday in January) and Emancipation Day in Washington DC
-   * (April 16, kept on the Friday before when it falls on a Saturday and the Monday after when it falls on a Sunday).
-   */
-  function estimatedDueDate(year, monthDay) {
-    const iso = (d) => d.toISOString().slice(0, 10);
-    const jan1 = new Date(Date.UTC(year, 0, 1)).getUTCDay();
-    const holidays = new Set([`${year}-01-${String(1 + ((8 - jan1) % 7) + 14).padStart(2, '0')}`]);
-    const apr16 = new Date(Date.UTC(year, 3, 16)).getUTCDay();
-    holidays.add(apr16 === 6 ? `${year}-04-15` : apr16 === 0 ? `${year}-04-17` : `${year}-04-16`);
-    let d = new Date(`${year}-${monthDay}T00:00:00Z`);
-    for (let i = 0; i < 7; i++) {
-      const day = d.getUTCDay();
-      if (day !== 0 && day !== 6 && !holidays.has(iso(d))) break;
-      d = new Date(d.getTime() + 86400000);
-    }
-    return iso(d);
-  }
   /** The calendar file, or null when nothing is due: a calendar with no events in it is not a file any client will take. */
   function icsText() {
     const adv = state.advice, year = Number(state.settings.taxYear), today = P.todayISO();
@@ -5849,7 +5894,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     }
     events.push({ uid: `itemizer-yearend-${year}`, date: `${year}-12-31`, summary: 'Last day for deductible payments this tax year', desc: `Property tax, gifts, and medical bills paid by today count for ${year}.` });
     if (state.computed.scheduleC.hasActivity || state.computed.lines['tax.state_income'].count) {
-      [[estimatedDueDate(year, '04-15'), 'Q1'], [estimatedDueDate(year, '06-15'), 'Q2'], [estimatedDueDate(year, '09-15'), 'Q3'], [estimatedDueDate(year + 1, '01-15'), 'Q4']]
+      // the Advisor's own dates, so a reminder and the Advisor never name different days for the same payment
+      [[ADV.dueDate(year, '04-15'), 'Q1'], [ADV.dueDate(year, '06-15'), 'Q2'], [ADV.dueDate(year, '09-15'), 'Q3'], [ADV.dueDate(year + 1, '01-15'), 'Q4']]
         .forEach(([d, q]) => events.push({ uid: `itemizer-est-${year}-${q.toLowerCase()}`, date: d, summary: `Estimated tax payment ${q} due`, desc: 'Federal, and usually state, estimated payment. A state payment made by Dec 31 counts this year.' }));
     }
     const due = events.filter((e) => e.date >= today).sort((a, b) => a.date.localeCompare(b.date) || a.uid.localeCompare(b.uid));
@@ -6090,10 +6136,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     // Everything is written before anything is shown as saved; a failure leaves the form filled in and the store untouched.
     try {
       DB.requestPersistence(); // the first save carries the user gesture some browsers require to protect the data from eviction
-      if (receiptId) await DB.putReceipt({ id: receiptId, entryId: entries[0].id, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob });
-      await DB.putEntries(entries);
+      // the photo and the entries share one transaction, so a half-written save cannot leave a photo behind with nothing pointing at it
+      await DB.putEntriesWithReceipt(entries, receiptId ? { id: receiptId, entryId: entries[0].id, type: cap.receiptBlob.type || 'image/jpeg', createdAt: now, blob: cap.receiptBlob } : null);
     } catch (e) {
-      if (receiptId) await DB.deleteReceipt(receiptId).catch(() => {});
       cap.saving = false; if (saveBtn) saveBtn.disabled = false;
       toast(`Could not save: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
       return;
@@ -6133,17 +6178,12 @@ window.ITEMIZER_SINGLE_FILE = true;
       state.pendingReceiptTarget = null;
       if (!entry) return;
       const id = entry.receiptId || DB.uid();
-      const isNewPhoto = !entry.receiptId;
-      try {
-        await DB.putReceipt({ id, entryId: entry.id, type: blob.type || 'image/jpeg', createdAt: new Date().toISOString(), blob });
-      } catch (e) { toast(e.message || 'Could not store the receipt.'); return; }
-      // The photo and the entry are two writes. The entry is told about it only after both are through, so a failure
-      // cannot leave the ledger showing an attachment that is not there, or a photo no entry will ever name.
       const at = new Date().toISOString();
+      // The photo and the entry share one transaction, so a failure cannot leave the ledger showing an attachment that
+      // is not there, or a photo no entry will ever name.
       try {
-        await DB.putEntry(Object.assign({}, entry, { receiptId: id, hasReceipt: true, sample: false, updatedAt: at }));
+        await DB.putEntriesWithReceipt([Object.assign({}, entry, { receiptId: id, hasReceipt: true, sample: false, updatedAt: at })], { id, entryId: entry.id, type: blob.type || 'image/jpeg', createdAt: at, blob });
       } catch (e) {
-        if (isNewPhoto) await DB.deleteReceipt(id).catch(() => {}); // otherwise it rides along in every backup with nothing pointing at it
         toast(`Could not attach the receipt: ${e && e.message ? e.message : 'storage error'}. Nothing was changed.`, 6000);
         return;
       }
@@ -6591,7 +6631,7 @@ window.ITEMIZER_SINGLE_FILE = true;
         <div class="verdict-kicker">${kicker}</div>
         <h2 class="verdict-title">${V.itemize ? 'Itemizing wins' : 'The standard deduction still wins'}</h2>
         <div class="hero">${hero}</div>
-        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdParts.length ? ` (includes ${stdParts.join(' and ')})` : ''}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}</p>
+        <p class="verdict-note">${money(A.grossEntered)} entered on the worksheet · ${money(A.total)} counts after the medical floor, the state-and-local-tax cap, and gift limits · ${money(SD.total)} standard deduction${stdParts.length ? ` (includes ${stdParts.join(' and ')})` : ''}.${V.medicalPending ? ' Medical expenses are waiting on your AGI.' : ''}${V.interestPending ? ' Investment interest is waiting on your net investment income.' : ''}</p>
         ${meterHTML('')}
       </section>
 
@@ -6629,7 +6669,7 @@ window.ITEMIZER_SINGLE_FILE = true;
           <dl class="dl">
             <dt>Medical, after ${R.pct(R0.params.medicalFloorRate)} floor</dt><dd>${A.medical.deductible == null ? (A.medical.gross ? 'needs AGI' : moneyCents(0)) : moneyCents(A.medical.deductible)}</dd>
             <dt>State &amp; local taxes, capped</dt><dd>${moneyCents(A.taxes.deductible)}</dd>
-            <dt>Interest</dt><dd>${moneyCents(A.interest.total)}</dd>
+            <dt>Interest${A.interest.carryforward ? ' (after the investment limit)' : ''}</dt><dd>${moneyCents(A.interest.deductible)}</dd>
             <dt>Gifts to charity${A.charity.floor ? ' (after floor)' : ''}</dt><dd>${moneyCents(A.charity.deductible)}</dd>
             <dt>Gambling losses (to winnings)</dt><dd>${moneyCents(A.other.deductible)}</dd>
             <dt>Casualty (${A.casualty.qualified ? 'qualified disaster loss' : 'declared disaster'})</dt><dd>${moneyCents(A.casualty.deductible)}</dd>
@@ -6686,7 +6726,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     switch (sectionId) {
       case 'medical': return A.medical.deductible;
       case 'taxes': return A.taxes.deductible;
-      case 'interest': return A.interest.total;
+      case 'interest': return A.interest.deductible;
       // The floor and the AGI limit apply to gifts and volunteer costs together, so the two bars split the one
       // deductible figure rather than each showing its own gross; together they equal "Gifts to charity" below.
       case 'charity':
@@ -6707,6 +6747,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     switch (sectionId) {
       case 'medical': return A.medical.deductible == null ? 'pending AGI' : `above ${money(A.medical.floor)} floor`;
       case 'taxes': return A.taxes.excess ? `${money(A.taxes.excess)} over the cap` : `cap ${money(A.taxes.cap)}`;
+      case 'interest': return A.interest.pending ? 'needs investment income' : A.interest.carryforward ? `${money(A.interest.carryforward)} carries forward` : 'Schedule A';
       case 'selfemp': return 'Schedule C, not itemized';
       case 'education': return 'loan interest counts; tuition → credits';
       case 'other': return A.other.gamblingWinnings ? `to ${money(A.other.gamblingWinnings)} winnings` : 'needs winnings';
@@ -7009,9 +7050,13 @@ window.ITEMIZER_SINGLE_FILE = true;
             <label class="field"><span>Name on the return</span><input id="sName" value="${esc(s.taxpayerName || '')}" placeholder="printed on the worksheet" autocomplete="name" maxlength="120"></label>
             <label class="field"><span>Filing status</span><select id="sFiling" class="input">${R.FILING_STATUSES.map((f) => `<option value="${f.id}" ${s.filingStatus === f.id ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}</select></label>
             <label class="field"><span>Estimated AGI ($)</span><input id="sAgi" inputmode="numeric" value="${esc(s.agi)}" placeholder="e.g. 95000"></label>
-            <div class="field"><span>Age &amp; vision</span><div class="chips"><label class="check"><input type="checkbox" id="sAge65" ${s.age65 ? 'checked' : ''}> I'm 65 or older</label><label class="check"><input type="checkbox" id="sBlind" ${s.blind ? 'checked' : ''}> I'm blind</label></div></div>
+            <div class="field"><span>Age &amp; vision</span><div class="chips"><label class="check"><input type="checkbox" id="sAge65" ${s.age65 ? 'checked' : ''}> I'm 65 or older</label><label class="check"><input type="checkbox" id="sBlind" ${s.blind ? 'checked' : ''}> I'm blind</label></div>
+              <select id="sLtcBracket" class="input" aria-label="Your age band for the long-term-care premium limit"><option value="">Age band not set</option>${R.LTC_BRACKETS.map((b) => `<option value="${b.id}" ${s.ltcAgeBracket === b.id ? 'selected' : ''}>Age ${esc(b.label)} at the end of the year</option>`).join('')}</select>
+              <small class="muted">Sets the limit on long-term-care insurance premiums. Leave it unset if you have no such policy.</small>
+            </div>
             <div class="field" ${marriedJoint ? '' : 'hidden'}><span>Spouse</span><div class="chips"><label class="check"><input type="checkbox" id="sSpouseAge65" ${s.spouseAge65 ? 'checked' : ''}> Spouse is 65 or older</label><label class="check"><input type="checkbox" id="sSpouseBlind" ${s.spouseBlind ? 'checked' : ''}> Spouse is blind</label></div></div>
             <label class="field"><span>Gambling winnings reported ($)</span><input id="sWinnings" inputmode="numeric" value="${esc(s.gamblingWinnings)}" placeholder="0"></label>
+            <label class="field"><span>Net investment income ($)</span><input id="sInvestmentIncome" inputmode="numeric" value="${esc(s.investmentIncome || '')}" placeholder="0"><small class="muted">Interest, dividends, and other investment income, less investment expenses. Margin interest counts only up to this figure.</small></label>
             <label class="field"><span>State &amp; local income tax withheld ($)</span><input id="sWithheld" inputmode="numeric" value="${esc(s.stateWithholding || '')}" placeholder="W-2 boxes 17 and 19"><small class="muted">Tax withheld for another state counts here too.</small></label>
             <label class="field"><span>State</span><select id="sState" class="input"><option value="">Not set</option>${G.US_STATES.map((st) => `<option value="${st.code}" ${s.state === st.code ? 'selected' : ''}>${esc(st.name)}</option>`).join('')}</select></label>
             <label class="field"><span>County</span><input id="sCounty" value="${esc(s.county || '')}" placeholder="for disaster lookups"></label>
@@ -7022,7 +7067,7 @@ window.ITEMIZER_SINGLE_FILE = true;
               ${R0.taxYear >= 2026 && s.casualtyFederalDisaster ? `<p class="note small">A disaster declared in 2026 cannot be a qualified disaster loss: that treatment covers federal declarations made between January 2020 and September 2025. A 2026 loss from a state-declared disaster still belongs on Schedule A, after the $100 floor and 10 percent of your AGI.</p>` : ''}
             </div>
           </div>
-          <p class="note" style="margin-top:12px">AGI is adjusted gross income — roughly wages plus other income, minus adjustments like retirement contributions and student loan interest. Last year's Form 1040 line 11 is a good estimate. This figure, your filing status, the gambling winnings and the state tax withheld apply to every tax year until you change them.</p>
+          <p class="note" style="margin-top:12px">AGI is adjusted gross income — roughly wages plus other income, minus adjustments like retirement contributions and student loan interest. Last year's Form 1040 line 11 is a good estimate. This figure, your filing status, the age band, the gambling winnings, the investment income and the state tax withheld apply to every tax year until you change them.</p>
         </section>
 
         <section class="card">
@@ -7125,7 +7170,9 @@ window.ITEMIZER_SINGLE_FILE = true;
       };
     }
     moneyField('sWinnings', 'gamblingWinnings', 'Enter the winnings as a plain number, for example 1200.');
+    moneyField('sInvestmentIncome', 'investmentIncome', 'Enter the investment income as a plain number, for example 3000.');
     moneyField('sWithheld', 'stateWithholding', 'Enter the tax withheld as a plain number, for example 4200.');
+    $('#sLtcBracket').onchange = async (ev) => { s.ltcAgeBracket = ev.target.value; await save({ ltcAgeBracket: s.ltcAgeBracket }); };
     $('#sState').onchange = async (ev) => { s.state = ev.target.value; await save({ state: s.state }); renderSettings(); };
     $('#sCounty').addEventListener('change', async (ev) => { s.county = ev.target.value.trim(); await save({ county: s.county }); });
     $('#sDisasterNumber').addEventListener('change', async (ev) => { s.disasterNumber = ev.target.value.trim(); await save({ disasterNumber: s.disasterNumber }); });

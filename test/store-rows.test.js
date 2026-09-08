@@ -113,6 +113,20 @@ test('the settings row holds scalars only and round-trips', async () => {
   assert.deepEqual(await DB.getLearned(), {}, 'a collection passed on the settings object is not silently stored anywhere');
 });
 
+test('the two figures the tax engine cannot see — the age band and the investment income — are stored and checked', async () => {
+  await DB.clearAll();
+  assert.equal(DB.sanitizeSettings({}).ltcAgeBracket, '', 'unset until the taxpayer says');
+  assert.equal(DB.sanitizeSettings({}).investmentIncome, '');
+  assert.equal(DB.sanitizeSettings({ ltcAgeBracket: '61-70' }).ltcAgeBracket, '61-70');
+  assert.equal(DB.sanitizeSettings({ ltcAgeBracket: '65' }).ltcAgeBracket, '', 'a band the engine does not know is dropped, not stored');
+  assert.equal(DB.sanitizeSettings({ ltcAgeBracket: { toString: () => '41-50' } }).ltcAgeBracket, '41-50');
+  const saved = await DB.saveSettings({ ltcAgeBracket: '71+', investmentIncome: 4200 });
+  const back = await DB.getSettings();
+  assert.equal(back.ltcAgeBracket, '71+');
+  assert.equal(back.investmentIncome, '4200', 'money fields are kept as the strings the settings form writes');
+  assert.equal(saved.ltcAgeBracket, back.ltcAgeBracket);
+});
+
 test('a version-2 backup imports into rows; a version-3 backup is rows already; the export is version 3', async () => {
   await DB.clearAll();
   const entry = { id: 'e1', date: '2026-01-05', taxYear: 2026, lineId: 'med.prescriptions', amount: 42.13, description: 'CVS', note: '', hasReceipt: false, receiptId: null };

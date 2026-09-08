@@ -27,6 +27,15 @@
   const FILING_BY_ID = Object.fromEntries(FILING_STATUSES.map((f) => [f.id, f]));
   /** States with no tax on wages: the sales-tax election is usually the better state-tax deduction there. */
   const NO_INCOME_TAX_STATES = new Set(['AK', 'FL', 'NV', 'NH', 'SD', 'TN', 'TX', 'WA', 'WY']);
+  /** The §213(d)(10) age bands: the value stored in settings, the params key holding that year's limit, and how to say it. */
+  const LTC_BRACKETS = [
+    { id: '40-', key: 'to40', label: '40 or under' },
+    { id: '41-50', key: 'to50', label: '41 to 50' },
+    { id: '51-60', key: 'to60', label: '51 to 60' },
+    { id: '61-70', key: 'to70', label: '61 to 70' },
+    { id: '71+', key: 'over70', label: '71 or older' },
+  ];
+  const LTC_BRACKET_BY_ID = Object.fromEntries(LTC_BRACKETS.map((b) => [b.id, b]));
 
   // ---- Tax-year parameters -------------------------------------------------
   // Sources: IRS Rev. Proc. 2023-34 / 2024-40 / 2025-32 (inflation adjustments),
@@ -346,18 +355,26 @@
 
     // ---- Schedule A ----
     const medicalLines = Schema.linesForSection('medical');
-    // §213(d)(10) caps long-term-care premiums by age, and the cap is per insured person. One worksheet
-    // line cannot tell one policy from two, so only an obviously excessive figure is trimmed: the top
-    // band, doubled on a joint return where both spouses can be insured. The preparer applies each age.
+    // §213(d)(10) caps long-term-care premiums by age, and the cap belongs to each insured person. The age
+    // band from Settings sets the taxpayer's own limit; with no band stated only an obviously excessive
+    // figure is trimmed, at the top band. A joint return is allowed the top band again on top, because one
+    // worksheet line cannot tell one spouse's policy from the other's and the spouse's age is not asked for.
     const ltcPaid = T('med.ltc');
     const ltcLimits = P.ltcPremiumLimits || null;
-    const ltcBound = ltcLimits ? cents((s.age65 ? ltcLimits.over70 : ltcLimits.to70) * (s.filingStatus === 'mfj' ? 2 : 1)) : null;
+    const ltcBracket = LTC_BRACKET_BY_ID[s.ltcAgeBracket] || null;
+    const ltcOwnLimit = ltcLimits ? Number(ltcLimits[ltcBracket ? ltcBracket.key : (s.age65 ? 'over70' : 'to70')]) || 0 : null;
+    const ltcBound = ltcLimits ? cents(ltcOwnLimit + (s.filingStatus === 'mfj' ? Number(ltcLimits.over70) || 0 : 0)) : null;
     const ltcCounted = ltcBound == null ? ltcPaid : Math.min(ltcPaid, ltcBound);
     const medGross = cents(medicalLines.reduce((a, l) => a + valueOf(l), 0) - (ltcPaid - ltcCounted));
     const medFloor = agi == null ? null : cents(agi * P.medicalFloorRate);
     const medical = {
       gross: medGross,
-      ltc: { paid: ltcPaid, counted: cents(ltcCounted), bound: ltcBound, limits: ltcLimits, capped: ltcCounted < ltcPaid },
+      ltc: {
+        paid: ltcPaid, counted: cents(ltcCounted), excess: cents(ltcPaid - ltcCounted),
+        bracket: ltcBracket ? ltcBracket.id : '', bracketLabel: ltcBracket ? ltcBracket.label : null,
+        limit: ltcOwnLimit, bound: ltcBound, limits: ltcLimits,
+        capped: ltcCounted < ltcPaid, pending: !ltcBracket && ltcPaid > 0,
+      },
       milesValue: valueOf(Schema.getLine('med.miles')),
       floor: medFloor,
       deductible: medFloor == null ? null : cents(Math.max(0, medGross - medFloor)),
@@ -379,7 +396,22 @@
     }
     const taxes = { gross: taxGross, entered: cents(sections.taxes.value), withheld, cap: cents(saltCap), deductible: cents(Math.min(taxGross, saltCap)), excess: cents(Math.max(0, taxGross - saltCap)), phasedOut: saltPhasedOut };
 
-    const interest = { total: cents(sections.interest.value) };
+    // §163(d) allows investment interest only up to net investment income, with the rest carried forward on
+    // Form 4952. That income is nowhere in the ledger, so it comes from Settings; until it is entered the
+    // whole amount counts and the verdict says it is waiting on a figure.
+    const invPaid = T('int.investment');
+    const invIncome = (s.investmentIncome === '' || s.investmentIncome == null || isNaN(Number(s.investmentIncome))) ? null : Math.max(0, Number(s.investmentIncome));
+    const invAllowed = invIncome == null ? invPaid : Math.min(invPaid, invIncome);
+    const interestTotal = cents(sections.interest.value);
+    const interest = {
+      total: interestTotal,
+      investment: invPaid,
+      investmentIncome: invIncome,
+      allowedInvestment: cents(invAllowed),
+      carryforward: invIncome == null ? 0 : cents(invPaid - invAllowed),
+      pending: invIncome == null && invPaid > 0,
+      deductible: cents(interestTotal - invPaid + invAllowed),
+    };
 
     const cash = cents(['ch.worship', 'ch.college', 'ch.org', 'ch.cfc', 'ch.other'].reduce((a, id) => a + T(id), 0));
     const noncash = T('ch.noncash');
@@ -427,7 +459,7 @@
     if (qualifiedDisaster && casualty.deductible > 0) casualty.addedToStandard = true;
 
     const scheduleA = { medical, taxes, interest, charity, other, casualty };
-    scheduleA.total = cents((medical.deductible || 0) + taxes.deductible + interest.total + charity.deductible + other.deductible + casualty.deductible);
+    scheduleA.total = cents((medical.deductible || 0) + taxes.deductible + interest.deductible + charity.deductible + other.deductible + casualty.deductible);
     // What the worksheet adds up to before any floor or cap — the number people expect to see.
     scheduleA.grossEntered = cents(medGross + taxGross + interest.total + charGross + losses + casGross);
 
@@ -463,6 +495,7 @@
       difference: cents(scheduleA.total - standardDeduction.total),
       progress: standardDeduction.total ? Math.min(1, scheduleA.total / standardDeduction.total) : 0,
       medicalPending: medical.pending,
+      interestPending: interest.pending,
       // Without an AGI the engine assumes the best case for every income-based limit; say so instead of staying quiet.
       // A qualified disaster loss is fully sized without an AGI, so it is not waiting on one.
       agiPending: agi == null && !!(medical.pending || charity.floorPending || charity.limitPending || taxGross > saltFloor || (casGross > 0 && casualty.federalDisaster && casualty.afterLimits == null) || sliPaid > 0),
@@ -614,8 +647,15 @@
     const LTC = A.medical.ltc;
     if (LTC && LTC.paid > 0 && LTC.limits) {
       const bands = `${money(LTC.limits.to40)} at age 40 or under, ${money(LTC.limits.to50)} at 41 to 50, ${money(LTC.limits.to60)} at 51 to 60, ${money(LTC.limits.to70)} at 61 to 70, and ${money(LTC.limits.over70)} over 70`;
-      if (LTC.capped) add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${money(LTC.counted)} is counted, which is the most any one insured person of your age can claim in ${R.taxYear}. The limit for ${R.taxYear} is ${bands} — per insured person, so a couple who each hold a policy get two limits. Tell your preparer the age of each insured person.`);
-      else add('info', 'Long-term-care premiums have an age limit', `Only part of a long-term-care premium counts as a medical expense: ${bands} for ${R.taxYear}. The limit is per insured person, so each spouse's policy has its own. Your preparer applies the band for each age.`);
+      const perPerson = `The limit for ${R.taxYear} is ${bands} — per insured person, so a couple who each hold a policy get two limits.`;
+      if (LTC.capped) {
+        const held = LTC.bracket
+          ? `${money(LTC.counted)} is counted, which is the ${R.taxYear} limit at age ${LTC.bracketLabel}${R.filingStatus === 'mfj' ? ', plus room for a second policy on your spouse' : ''}`
+          : `${money(LTC.counted)} is counted, which is the most any one insured person of your age can claim in ${R.taxYear}`;
+        add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${held}, so ${money(LTC.excess)} is left out of the medical total. ${perPerson}${LTC.bracket ? '' : ' Tell your preparer the age of each insured person.'}`);
+      }
+      if (LTC.pending) add('act', 'Tell Settings your age band for long-term-care premiums', `The limit on a long-term-care premium is set by your age at the end of the year, and without your age band the worksheet can only hold back what is above the highest limit${LTC.capped ? '' : ', which leaves the whole premium counted'}. ${perPerson} Choose your band under Age & vision in Settings and the right limit is applied.`, { view: 'settings' });
+      else if (!LTC.capped) add('info', 'Long-term-care premiums have an age limit', `All ${money(LTC.paid)} counts: the ${R.taxYear} limit at age ${LTC.bracketLabel} is ${money(LTC.limit)}. The limit is per insured person, so a second policy insuring someone in another band has its own limit — tell your preparer if there is one.`);
     }
     if (R.scheduleC.hasActivity && T('med.insurance') > 0) add('act', 'Self-employed? Move health premiums above the line', `With self-employment profit, health, dental, and long-term-care premiums (${money(T('med.insurance') + (LTC ? LTC.counted : T('med.ltc')))}) can be deducted on Schedule 1 with no ${pct(P.medicalFloorRate)} floor — usually far better than Schedule A. The same age limit applies to the long-term-care part. Tell your preparer which it is.`);
 
@@ -634,7 +674,12 @@
     if (T('int.second') > 0) add('info', 'Home equity interest has a use test', 'Interest on a HELOC or second mortgage counts only if the money was used to buy, build, or substantially improve the home securing it — not for cars, tuition, or paying off cards.');
     if (T('int.points') > 0) add('info', 'Points: purchase vs. refinance', 'Points paid to buy your main home are deductible in full this year. Points on a refinance are spread evenly over the life of the loan (any unamortized balance is deductible when that loan is paid off).');
     if (R.taxYear >= 2026 && P.pmiPhaseout && T('int.mortgage') > 0) add('info', 'Mortgage insurance premiums count again from 2026', `Premiums for mortgage insurance (Form 1098 box 5 — PMI, FHA, VA, or USDA) are deductible as mortgage interest again starting 2026, phasing out between ${money(isMFS0 ? P.pmiPhaseout.mfs.start : P.pmiPhaseout.default.start)} and ${money(isMFS0 ? P.pmiPhaseout.mfs.end : P.pmiPhaseout.default.end)} of AGI. Log the box 5 amount on the Home Mortgage Interest line.`);
-    if (T('int.investment') > 0) add('info', 'Investment interest is limited to investment income', 'Margin and other investment interest is deductible only up to net investment income, on Form 4952; the excess carries forward.');
+    if (A.interest.investment > 0) {
+      const I = A.interest;
+      if (I.pending) add('act', 'Enter your net investment income', `Margin and other investment interest is deductible only up to net investment income, on Form 4952, and the excess carries forward. All ${money(I.investment)} you logged is counted until you enter that income in Settings.`, { view: 'settings' });
+      else if (I.carryforward > 0) add('warn', 'Investment interest is over your investment income', `${money(I.investment)} of investment interest against ${money(I.investmentIncome)} of net investment income, so ${money(I.allowedInvestment)} counts this year and ${money(I.carryforward)} is left out. It is not lost: Form 4952 carries it forward to a year with enough investment income.`);
+      else add('info', 'Investment interest is limited to investment income', `All ${money(I.investment)} counts, being within the ${money(I.investmentIncome)} of net investment income you entered. Form 4952 shows the working; anything above that income would carry forward instead.`);
+    }
 
     // Charity
     if (R.substantiation.giftsNoAck.length) {
@@ -715,5 +760,5 @@
     return out.sort((a, b) => order[a.level] - order[b.level]);
   }
 
-  return { FILING_STATUSES, NO_INCOME_TAX_STATES, PARAMS, PARAM_FIELDS, CONDITIONAL_PARAM_FIELDS, KNOWN_YEARS, getParams, paramFields, compute, taxYearOf, money, moneyCents, moneyNear, cents, pct, perMile, perMileText, mileageRate, deepMerge, getPath, setPath };
+  return { FILING_STATUSES, LTC_BRACKETS, NO_INCOME_TAX_STATES, PARAMS, PARAM_FIELDS, CONDITIONAL_PARAM_FIELDS, KNOWN_YEARS, getParams, paramFields, compute, taxYearOf, money, moneyCents, moneyNear, cents, pct, perMile, perMileText, mileageRate, deepMerge, getPath, setPath };
 });

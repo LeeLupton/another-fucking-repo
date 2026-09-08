@@ -243,9 +243,13 @@ test('line hints and treatments describe what the app actually does', () => {
   assert.ok(!/federal disasters/i.test(S.TREATMENTS['A-casualty'].label));
   assert.match(S.getLine('tax.state_income').hint, /Settings/);
   assert.ok(!/already on your W-2/i.test(S.getLine('tax.state_income').hint));
-  // the engine trims a long-term-care premium only at the top band and applies no investment-interest limit
-  assert.match(S.getLine('med.ltc').hint, /preparer/);
-  assert.match(S.getLine('int.investment').hint, /without applying that limit/);
+  // both limits are applied from a figure the taxpayer sets, so both hints send them to Settings
+  const ltcHint = S.getLine('med.ltc').hint, invHint = S.getLine('int.investment').hint;
+  assert.match(ltcHint, /Settings/);
+  assert.match(ltcHint, /preparer/, 'a second policy at another age is still the preparer\'s to apply');
+  assert.ok(!/holds back only an amount above the highest limit/.test(ltcHint));
+  assert.match(invHint, /Settings/);
+  assert.ok(!/without applying that limit/.test(invHint));
 });
 
 test('the long-term-care hint gives the shape of the limit: five age bands, one per insured person', () => {
