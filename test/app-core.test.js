@@ -148,3 +148,123 @@ test('the advisor gets the parameter overrides, and a year is graded only once i
   // 2025 is closed and past 15 April; 2026 is still collecting December's receipts
   assert.deepEqual(Object.keys(finals), ['2025']);
 });
+
+test('recorded time is time at the wheel: a pause is not driving time', () => {
+  const ctx = load([fn('elapsedText')], {});
+  const start = 1700000000000;
+  assert.equal(ctx.elapsedText(start, start + 70 * 60 * 1000, 50 * 60 * 1000), '20:00');
+  assert.equal(ctx.elapsedText(start, start + 70 * 60 * 1000, 0), '1:10:00');
+  assert.equal(ctx.elapsedText(start, start + 60 * 1000, 5 * 60 * 1000), '00:00');
+  assert.equal(ctx.elapsedText(start, start + 3661000), '1:01:01');
+  assert.equal(ctx.elapsedText(null), '00:00');
+});
+
+test('a drive is dated by the local calendar, not by UTC', () => {
+  // the difference only shows west of UTC, where an evening drive is already tomorrow in UTC; CI runs in UTC
+  const wasTZ = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  try {
+    const ctx = load([fn('isoFromEpoch')], {});
+    assert.equal(ctx.isoFromEpoch(Date.parse('2025-12-31T20:00:00-05:00')), '2025-12-31');
+    assert.equal(ctx.isoFromEpoch(Date.parse('2026-11-03T08:00:00-05:00')), '2026-11-03');
+  } finally {
+    if (wasTZ === undefined) delete process.env.TZ; else process.env.TZ = wasTZ;
+  }
+});
+
+test('the mileage log drops a trip whose entry was deleted and keeps one that was never linked', () => {
+  const ctx = load([fn('liveTrips')], { state: { entries: [{ id: 'e1' }, { id: 'e2' }] } });
+  const trips = [{ id: 't1', entryId: 'e1' }, { id: 't2', entryId: 'gone' }, { id: 't3', entryId: null }];
+  assert.deepEqual(ctx.liveTrips(trips).map((t) => t.id), ['t1', 't3']);
+  assert.deepEqual(ctx.liveTrips([]).map((t) => t.id), []);
+});
+
+test('a donated item is valued from the catalog only when it really is that item', () => {
+  const VAL = require(path.join(__dirname, '../js/valuation.js'));
+  const ctx = load([fn('catalogMatch')], { VAL });
+  assert.equal(ctx.catalogMatch('Desk lamp'), null);
+  assert.equal(ctx.catalogMatch('sofa cushion'), null);
+  assert.equal(ctx.catalogMatch('TV stand'), null);
+  assert.equal(ctx.catalogMatch(''), null);
+  assert.equal(ctx.catalogMatch('Desk').name, 'Desk');
+  assert.equal(ctx.catalogMatch('shirt').name, 'Shirt or blouse');
+  assert.equal(ctx.catalogMatch('jeans').name, 'Pants or jeans');
+  assert.equal(ctx.catalogMatch('dining chairs').name, 'Dining chair');
+});
+test('ledger search finds an amount as it is shown, and ignores accents', () => {
+  const ctx = load([line(/^  const foldText = .*$/m), fn('searchMatch')], {});
+  const taxes = ['County treasurer', '', 'Real estate taxes', 'Taxes You Paid', '1200', '$1,200.00'];
+  for (const q of ['1200', '1,200', '$1,200', '1200.00', '1,200.00', '$1,200.00', 'treasurer']) assert.equal(ctx.searchMatch(taxes, q), true, q);
+  assert.equal(ctx.searchMatch(taxes, 'walgreens'), false);
+  assert.equal(ctx.searchMatch(taxes, ''), true);
+  const pharmacy = ["José's Farmacia", '', 'Prescriptions', 'Medical and Dental Expenses', '42.1', '$42.10'];
+  assert.equal(ctx.searchMatch(pharmacy, 'jose'), true);
+  assert.equal(ctx.searchMatch(pharmacy, '42.10'), true);
+  assert.equal(ctx.searchMatch(pharmacy, '43'), false);
+});
+
+test('the charity bars split what counts, so they never exceed the Schedule A row', () => {
+  const Rules = require(path.join(__dirname, '../js/rules.js'));
+  const E = (date, lineId, amount) => ({ id: `${lineId}-${date}`, date, lineId, amount, hasReceipt: true });
+  const computed = Rules.compute([E('2025-03-01', 'ch.org', 40000), E('2025-03-02', 'vol.miles', 100)], { taxYear: 2025, filingStatus: 'single', agi: '50000', today: '2025-09-07' });
+  const ctx = load([fn('countedFor')], { R: Rules, state: { computed } });
+  assert.equal(ctx.countedFor('charity'), 29986);
+  assert.equal(ctx.countedFor('volunteer'), 14);
+  assert.equal(ctx.countedFor('charity') + ctx.countedFor('volunteer'), computed.scheduleA.charity.deductible);
+});
+
+test('a count and its noun, so nothing on screen reads "1 entries"', () => {
+  const ctx = load([line(/^  const plural = .*$/m)], { Number });
+  assert.equal(run(ctx, 'plural(1, "note")'), 'note');
+  assert.equal(run(ctx, 'plural(0, "note")'), 'notes');
+  assert.equal(run(ctx, 'plural(2, "note")'), 'notes');
+  assert.equal(run(ctx, 'plural(1, "entry", "entries")'), 'entry');
+  assert.equal(run(ctx, 'plural(3, "entry", "entries")'), 'entries');
+});
+
+test('a dollar field takes "$95,000" and refuses "95k" rather than reading it as 95', () => {
+  const ctx = load([fn('parseDollarField')], { Number, String });
+  assert.equal(ctx.parseDollarField('$95,000'), '95000');
+  assert.equal(ctx.parseDollarField(' 95000 '), '95000');
+  assert.equal(ctx.parseDollarField('95.50'), '95.5');
+  assert.equal(ctx.parseDollarField(''), '');
+  assert.equal(ctx.parseDollarField('95k'), null);
+  assert.equal(ctx.parseDollarField('9.5.3'), null);
+  assert.equal(ctx.parseDollarField('-40'), null);
+  assert.equal(ctx.parseDollarField('abc'), null);
+});
+
+test('example entries are not built for a tax year that has not started', () => {
+  let n = 0;
+  const ctx = load([fn('sampleEntries')], { DB: { uid: () => 'id' + (++n) }, P: { todayISO: () => '2026-09-08' }, Date, Number, String });
+  assert.equal(ctx.sampleEntries(2027).length, 0);
+  const now = ctx.sampleEntries(2026);
+  assert.equal(now.length, 37);
+  assert.equal(now.filter((e) => e.taxYear === 2026).length, 28);
+  assert.equal(now.filter((e) => e.taxYear === 2025).length, 9);
+  assert.equal(now.every((e) => e.date <= '2026-09-08'), true);
+  assert.equal(ctx.sampleEntries(2025).length, 48);
+});
+
+test('the hint for an amount below nought says a refund is not an expense', () => {
+  const ctx = load([line(/^  const MAX_AMOUNT = .*$/m), line(/^  const amountTyped = .*$/m), fn('amountProblem')], { Number, String });
+  assert.equal(ctx.amountProblem('40', 'an amount', 'a refund is not a deductible expense, so enter a positive amount'), null);
+  assert.equal(ctx.amountProblem('-20', 'an amount', 'a refund is not a deductible expense, so enter a positive amount'), 'a refund is not a deductible expense, so enter a positive amount');
+  assert.equal(ctx.amountProblem('', 'an amount', 'a refund is not a deductible expense, so enter a positive amount'), 'enter an amount');
+  assert.equal(ctx.amountProblem('0', 'an amount', 'a refund is not a deductible expense, so enter a positive amount'), 'enter an amount');
+  // the miles field is given no sentence of its own, so a negative reads as nothing typed there
+  assert.equal(ctx.amountProblem('-4', 'the miles'), 'enter the miles');
+  assert.equal(ctx.amountProblem('1e400', 'an amount', 'never mind'), 'enter a figure below a billion');
+});
+
+test('a mileage line shows both rates in a year the IRS changed them, and cash gifts are named on the standard deduction', () => {
+  const Rules = require(path.join(__dirname, '../js/rules.js'));
+  const ctx = load([line(/^  const money = R\.money.*$/m), line(/^  const rateShort = .*$/m), line(/^  const rateShortFor = .*$/m), line(/^  const stdGiftClause = .*$/m)], { R: Rules });
+  assert.equal(run(ctx, 'rateShortFor(R.getParams(2025, {}), "medical")'), '21¢/mi');
+  assert.equal(run(ctx, 'rateShortFor(R.getParams(2024, {}), "business")'), '67¢/mi');
+  assert.equal(run(ctx, 'rateShortFor(R.getParams(2026, {}), "business")'), '72.5¢/mi to Jun 30, 76¢/mi from Jul 1');
+  assert.equal(run(ctx, 'rateShortFor(R.getParams(2026, {}), "charity")'), '14¢/mi'); // the charity rate is fixed by statute: it did not change in July
+  assert.equal(run(ctx, 'stdGiftClause({ charity: 0 })'), '');
+  assert.equal(run(ctx, 'stdGiftClause(null)'), '');
+  assert.equal(run(ctx, 'stdGiftClause({ charity: 1000 })'), ', including $1,000.00 of cash gifts');
+});

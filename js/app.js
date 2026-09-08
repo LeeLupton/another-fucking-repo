@@ -46,8 +46,8 @@
   /** styles.css turns off transitions for "reduce motion"; a scroll asked for in script has to check the setting itself. */
   const prefersReducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const rateShort = (r) => R.perMile(r || 0).replace('/mile', '/mi'); // "70¢/mi" beside converted miles on the worksheet, so the preparer can check the figure
-  /** The same label for a whole line, which in a year like 2026 was driven under two rates. */
-  const rateShortFor = (P, key) => (P.mileageJul ? `${rateShort(P.mileage[key])} to Jun 30, ${rateShort(P.mileageJul[key])} from Jul 1` : rateShort(P.mileage[key]));
+  /** The same label for a whole line, which in a year like 2026 was driven under two rates. Charity stayed at 14¢, so only what changed is printed twice. */
+  const rateShortFor = (P, key) => { const early = (P.mileage && P.mileage[key]) || 0; const late = P.mileageJul ? P.mileageJul[key] || 0 : early; return late === early ? rateShort(early) : `${rateShort(early)} to Jun 30, ${rateShort(late)} from Jul 1`; };
   const mixedTreatments = (lines) => new Set(lines.filter((l) => l.treatment !== 'info').map((l) => l.treatment)).size > 1; // Education mixes a credit with an adjustment: no single total lands anywhere on the return
   const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const LEVEL_LABEL = { act: 'To do', warn: 'Heads up', good: 'Good news', info: 'Note' };
@@ -2572,7 +2572,7 @@
           <div class="card-head"><h2>Rates &amp; thresholds for ${R0.taxYear}</h2>${P0.isFallback ? `<span class="pill pill-act">using ${P0.baseYear} figures</span>` : `<span class="pill pill-info">built in</span>`}</div>
           <p class="note">Built-in figures come from IRS inflation-adjustment notices and the 2025 tax law. Override any value the IRS updates; blank restores the default. Percentages are entered as percent (7.5), mileage as cents per mile (72.5).</p>
           <div class="params-wrap"><table class="params"><caption class="sr-only">Rates and thresholds for ${R0.taxYear}: the built-in default and your override for each figure.</caption><thead><tr><th>Figure</th><th class="num">Default</th><th class="num">Your value</th></tr></thead><tbody>
-            ${R.paramFields(R0.taxYear, overrides).map((f) => { const def = R.getPath(defaults, f.path); const ov = R.getPath(overrides, f.path); return `<tr><td>${esc(f.label)}</td><td class="num">${esc(fmtParam(f.kind, def))}</td><td class="num"><input data-param="${f.path}" data-kind="${f.kind}" class="${ov != null ? 'is-over' : ''}" inputmode="decimal" value="${ov != null ? esc(toInput(f.kind, ov)) : ''}" placeholder="${esc(toInput(f.kind, def))}" aria-label="${esc(f.label)}"></td></tr>`; }).join('')}
+            ${R.paramFields(R0.taxYear, state.overrides).map((f) => { const def = R.getPath(defaults, f.path); const ov = R.getPath(overrides, f.path); return `<tr><td>${esc(f.label)}</td><td class="num">${esc(fmtParam(f.kind, def))}</td><td class="num"><input data-param="${f.path}" data-kind="${f.kind}" class="${ov != null ? 'is-over' : ''}" inputmode="decimal" value="${ov != null ? esc(toInput(f.kind, ov)) : ''}" placeholder="${esc(toInput(f.kind, def))}" aria-label="${esc(f.label)}"></td></tr>`; }).join('')}
           </tbody></table></div>
           <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="resetParams" ${Object.keys(overrides).length ? '' : 'disabled'}>Reset ${R0.taxYear} to defaults</button></div>
         </section>
