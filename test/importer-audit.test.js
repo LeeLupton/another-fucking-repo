@@ -52,6 +52,18 @@ test('semicolon and tab delimited exports, including European decimals', () => {
   assert.equal(semi[0].length, 3);
   assert.equal(I.parseAmountCell('-42,13'), -42.13);
   assert.equal(I.parseAmountCell('-1.210,00'), -1210);
+  // thousands are not always grouped: 1234,56 is twelve hundred, not a hundred and twenty thousand
+  assert.equal(I.parseAmountCell('1234,56'), 1234.56);
+  assert.equal(I.parseAmountCell('-1234,56'), -1234.56);
+  assert.equal(I.parseAmountCell('1 234,56'), 1234.56);
+  assert.equal(I.parseAmountCell('€1234,56'), 1234.56);
+  assert.equal(I.parseAmountCell('99999,99'), 99999.99);
+  assert.equal(I.parseAmountCell('1.234.567,89'), 1234567.89);
+  // a US thousands comma is always followed by three digits, so these are unchanged
+  assert.equal(I.parseAmountCell('1,234.56'), 1234.56);
+  assert.equal(I.parseAmountCell('1,234'), 1234);
+  assert.equal(I.parseAmountCell('12,345'), 12345);
+  assert.equal(I.parseAmountCell('$1,234.56'), 1234.56);
   const tab = I.parseCSV('Date\tDescription\tAmount\n01/05/2026\tCVS PHARMACY\t-42.13');
   const map = I.detectColumns(tab);
   assert.equal(I.normalize(tab, map).rows[0].amount, 42.13);
@@ -130,4 +142,33 @@ test('a learned payee is filed where it was filed before and says so', () => {
   const norm = I.normalize(rows, I.detectColumns(rows));
   const out = I.review(norm.rows, { learned: { 'joes auto': 'se.car' }, hasBusiness: true });
   assert.equal(out[0].lineId, 'se.car'); assert.equal(out[0].suggestions[0].learned, true); assert.equal(out[0].selected, true);
+});
+
+test('more bank layouts: Amex, Capital One, a running balance, and payee/memo columns', () => {
+  const amex = I.parseCSV('Date,Description,Card Member,Account #,Amount\n01/05/2026,CVS PHARMACY,LEE,-1234,42.13\n01/06/2026,ASPEN DENTAL,LEE,-1234,210.00\n01/07/2026,ST ANDREWS CHURCH,LEE,-1234,200.00\n01/09/2026,ONLINE PAYMENT - THANK YOU,LEE,-1234,-500.00');
+  const am = I.detectColumns(amex);
+  assert.equal(am.date, 0); assert.equal(am.description, 1); assert.equal(am.amount, 4);
+  assert.equal(am.memo, -1); assert.equal(am.debit, -1); assert.equal(am.credit, -1);
+  const an = I.normalize(amex, am);
+  assert.equal(an.spendIsNegative, false, 'a card export where charges are positive');
+  assert.deepEqual(an.rows.map((r) => r.amount), [42.13, 210, 200, -500]);
+  const ar = I.review(an.rows, {});
+  assert.equal(ar[3].refund, true); assert.equal(ar[3].selected, false, 'the payment is never proposed');
+
+  const capital = I.parseCSV('Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit\n01/05/2026,01/06/2026,1234,CVS PHARMACY,Health,42.13,\n01/09/2026,01/10/2026,1234,PAYMENT,,,500.00');
+  const cm = I.detectColumns(capital);
+  assert.equal(cm.date, 0); assert.equal(cm.description, 3); assert.equal(cm.memo, 4);
+  assert.equal(cm.debit, 5); assert.equal(cm.credit, 6); assert.equal(cm.amount, -1);
+  assert.deepEqual(I.normalize(capital, cm).rows.map((r) => r.amount), [42.13, -500]);
+
+  const bofa = I.parseCSV('Date,Description,Amount,Running Bal.\n01/05/2026,CVS PHARMACY,-42.13,"1,957.87"\n01/06/2026,ASPEN DENTAL,-210.00,"1,747.87"');
+  const bm = I.detectColumns(bofa);
+  assert.equal(bm.amount, 2, 'the running balance is not the amount');
+  assert.deepEqual(I.normalize(bofa, bm).rows.map((r) => r.amount), [42.13, 210]);
+
+  const balanceFirst = I.detectColumns(I.parseCSV('Date,Running Bal.,Description,Amount\n01/05/2026,"1,957.87",CVS PHARMACY,-42.13\n01/06/2026,"1,747.87",ASPEN DENTAL,-210.00'));
+  assert.equal(balanceFirst.description, 2); assert.equal(balanceFirst.amount, 3);
+
+  const quicken = I.detectColumns(I.parseCSV('Date,Payee,Category,Memo,Amount\n01/05/2026,CVS PHARMACY,Health,rx,-42.13\n01/06/2026,ASPEN DENTAL,Health,,-210.00'));
+  assert.equal(quicken.description, 1); assert.equal(quicken.memo, 2); assert.equal(quicken.amount, 4);
 });

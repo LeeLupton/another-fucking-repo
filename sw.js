@@ -1,16 +1,16 @@
 /*
  * Service worker: cache the app shell so Itemizer opens offline and installs to a home screen.
  *
- * The cache name carries a version. The Pages deploy stamps the placeholder below with the commit
- * hash, so every deploy invalidates the previous shell without anyone remembering to bump a number;
- * a checkout that is never stamped falls back to the fixed name after the "||".
+ * The cache name carries a version: build.js writes a hash of the shell files into STAMP and commits it,
+ * so every change to the app is a new cache and a docs-only commit is not.
  *
  * A new worker waits until the page asks it to take over (see registerSW in js/app.js), so a version
- * change never swaps the cache under a running session; the page offers a reload instead.
+ * change never swaps the cache under a running session; the page offers a reload instead. Everything is
+ * served from this worker's own cache, so the page and the scripts it loads are always one generation.
  */
-const STAMP = 'bd64682447ba'; // written by build.js (a hash of the shell) and by the deploy (the commit)
-const VERSION = STAMP.startsWith('__') ? 'v7' : STAMP;
-const CACHE = 'itemizer-' + VERSION;
+const PREFIX = 'itemizer-';
+const STAMP = 'c7f43947292d'; // written by build.js: a hash of the files it caches
+const CACHE = PREFIX + STAMP;
 const SHELL = [
   './',
   './index.html',
@@ -33,6 +33,8 @@ const SHELL = [
   './icons/icon-maskable-512.png',
 ];
 const FONT_HOSTS = /(^|\.)(fonts\.googleapis\.com|fonts\.gstatic\.com)$/;
+// The app's own page, so another document on this origin is never mistaken for it.
+const ROOT = new URL('./', self.location).pathname;
 
 self.addEventListener('install', (event) => {
   // cache: 'reload' bypasses the HTTP cache, so a fresh worker never pins ten-minute-old copies of the files it is meant to replace
@@ -40,7 +42,9 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  // Only this app's own old caches: Cache Storage is shared by every site on the origin, and on a
+  // github.io user site that is every other project published from the same account.
+  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith(PREFIX) && k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 // The page posts this once the user chose "Reload" for a waiting update.
@@ -55,23 +59,39 @@ function remember(event, req, res) {
   event.waitUntil(caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {}));
 }
 
+/** The start page from this worker's own cache, so it always matches the scripts served alongside it. */
+function cachedShell() {
+  return caches.open(CACHE).then((c) => c.match('./index.html', { ignoreSearch: true }).then((res) => res || c.match('./', { ignoreSearch: true })));
+}
+
+/** True for a response that really is an HTML page, so a stray file is never stored as the start page. */
+function isPage(res) {
+  return !!res && res.ok && /^text\/html\b/i.test(res.headers.get('content-type') || '');
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
   if (url.origin === self.location.origin) {
-    // Navigations: the network first so a deploy shows up, the cached shell when offline, whatever the URL or query string.
+    // Navigations: the cached shell first, so a stalled connection cannot hold up a launch that needs no
+    // network at all, and so a deploy arrives as one piece when the user accepts the waiting worker.
+    // Any other document on this origin is fetched as it is and never stored as the shell.
     if (req.mode === 'navigate') {
+      const isShell = url.pathname === ROOT || url.pathname === ROOT + 'index.html';
       event.respondWith(
-        fetch(req).then((res) => { remember(event, new Request('./index.html'), res); return res; })
-          .catch(() => caches.match('./index.html', { ignoreSearch: true }).then((cached) => cached || caches.match('./', { ignoreSearch: true })).then((cached) => cached || Response.error()))
+        (isShell ? cachedShell() : Promise.resolve(null)).then((cached) => {
+          const network = fetch(req).then((res) => { if (isShell && isPage(res)) remember(event, new Request('./index.html'), res); return res; });
+          if (cached) { event.waitUntil(network.catch(() => {})); return cached; }
+          return network.catch(() => cachedShell().then((res) => res || Response.error()));
+        })
       );
       return;
     }
     // Shell files: cache first, refreshed in the background; never resolve respondWith with nothing.
     event.respondWith(
-      caches.match(req, { ignoreSearch: true }).then((cached) => {
+      caches.open(CACHE).then((c) => c.match(req, { ignoreSearch: true })).then((cached) => {
         const network = fetch(req).then((res) => { remember(event, req, res); return res; });
         if (cached) { event.waitUntil(network.catch(() => {})); return cached; }
         return network.catch(() => Response.error());

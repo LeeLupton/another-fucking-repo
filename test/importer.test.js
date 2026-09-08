@@ -16,10 +16,24 @@ test('date and amount cells in the usual bank formats', () => {
   assert.equal(I.parseDateCell('Jan 5, 2026'), '2026-01-05');
   assert.equal(I.parseDateCell('05-Jan-2026'), '2026-01-05');
   assert.equal(I.parseDateCell('not a date'), null);
+  // exports that carry a time, spell the month out, or use slashes in ISO order
+  assert.equal(I.parseDateCell('2026-01-05T10:32:00'), '2026-01-05');
+  assert.equal(I.parseDateCell('2026-01-05 10:32:00'), '2026-01-05');
+  assert.equal(I.parseDateCell('01/05/2026 10:32'), '2026-01-05');
+  assert.equal(I.parseDateCell('January 5, 2026'), '2026-01-05');
+  assert.equal(I.parseDateCell('5 Jan 2026'), '2026-01-05');
+  assert.equal(I.parseDateCell('Jan 05 2026'), '2026-01-05');
+  assert.equal(I.parseDateCell('2026/01/05'), '2026-01-05');
   assert.equal(I.parseAmountCell('$1,234.56'), 1234.56);
+  assert.equal(I.parseAmountCell('$ 1,234.56'), 1234.56);
   assert.equal(I.parseAmountCell('(12.00)'), -12);
   assert.equal(I.parseAmountCell('-12.00'), -12);
+  assert.equal(I.parseAmountCell('-$42.13'), -42.13);
+  assert.equal(I.parseAmountCell('$-42.13'), -42.13);
+  assert.equal(I.parseAmountCell('1.234,56'), 1234.56);
   assert.equal(I.parseAmountCell('12.00 CR'), -12);
+  assert.equal(I.parseAmountCell('0.00'), 0);
+  assert.equal(I.parseAmountCell(''), null);
   assert.equal(I.parseAmountCell('abc'), null);
 });
 

@@ -77,11 +77,11 @@ test('a medical visit without a drive gets a mileage suggestion from the payee h
   assert.ok(dental);
   assert.equal(dental.action.entry.lineId, 'med.miles');
   assert.equal(dental.action.entry.amount, 10, 'overall median when the payee has no mileage history');
-  assert.match(dental.body, /average 10 miles/);
+  assert.match(dental.body, /Your medical trips are usually about 10 mi\./);
   const patel = r.recommendations.find((x) => x.title.includes('Dr. Patel') && x.title.includes('Aug 19'));
   assert.ok(patel);
   assert.equal(patel.action.entry.amount, 30, 'this payee\'s own median');
-  assert.match(patel.body, /logged 30 miles for this trip before/);
+  assert.match(patel.body, /You logged 30 mi for this trip before/);
 });
 
 test('an amount far above a payee\'s usual is flagged for a second look', () => {

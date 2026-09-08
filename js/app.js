@@ -21,6 +21,9 @@
   const EXP = globalThis.ItemizerExperiments;
 
   const VIEWS = ['capture', 'ledger', 'advisor', 'insights', 'worksheet', 'settings'];
+  const LEDGER_FILTERS = ['all', 'noreceipt', 'noack', 'dupes', 'samples'];
+  /** A filter the ledger cannot apply would leave every entry listed with no chip pressed, so anything else is "all". */
+  const normalizeLedgerFilter = (f) => (LEDGER_FILTERS.includes(f) ? f : 'all');
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
   /** Attach one delegated handler per event type to a long-lived element; a re-render replaces it instead of stacking another. */
@@ -86,6 +89,12 @@
     return { fromId: home ? home.id : '', toId: '', date: todayInYear(), purpose: '', roundTrip: true, miles: '', lineId: 'med.miles', method: 'manual', result: '', points: null, fromLabel: '', toLabel: '', startedAt: null, endedAt: null };
   }
 
+  /** Throw away a capture in progress, releasing the object URL of a photo that was never saved. */
+  function discardCapture() {
+    if (state.capture && state.capture.receiptURL) URL.revokeObjectURL(state.capture.receiptURL);
+    state.capture = null;
+  }
+
   function todayInYear() {
     // Default entry date: today if we're in the selected tax year, else Dec 31 of that year (or Jan 1 if the year is ahead).
     const t = P.todayISO();
@@ -93,6 +102,31 @@
     const ty = Number(t.slice(0, 4));
     if (y === ty) return t;
     return y < ty ? `${y}-12-31` : `${y}-01-01`;
+  }
+  /** True when the stored tax year is behind the calendar and the user has not chosen it since the year turned. */
+  function shouldAdvanceTaxYear(storedYear, pickedAt, today) {
+    const now = Number(String(today).slice(0, 4));
+    if (!(Number(storedYear) < now)) return false;
+    const picked = Number(String(pickedAt || '').slice(0, 4));
+    return !(picked >= now);
+  }
+  /** On the first launch of a new year, move to it: otherwise today's receipt is filed on Dec 31 of the year before. */
+  async function maybeRollYear() {
+    if (!shouldAdvanceTaxYear(state.settings.taxYear, state.settings.taxYearPickedAt, P.todayISO())) return;
+    const was = Number(state.settings.taxYear);
+    state.settings.taxYear = Number(P.todayISO().slice(0, 4));
+    try { await DB.saveSettings(state.settings); } catch (e) { /* the year still moves for this session */ }
+    toast(`Tax year is now ${state.settings.taxYear}. Pick ${was} from the year menu to keep working on it.`, 12000, { label: `Back to ${was}`, onClick: () => setTaxYear(was) });
+  }
+  /** Switch the year the app is working on. A choice made here survives the New Year roll-over. */
+  async function setTaxYear(year) {
+    state.settings.taxYear = Number(year);
+    state.settings.taxYearPickedAt = P.todayISO();
+    await DB.saveSettings(state.settings);
+    discardCapture();
+    discardRecorder();
+    state.trip = null;
+    render();
   }
 
   function recompute() {
@@ -102,15 +136,18 @@
     // Finished years with snapshots get their final figure, so past forecasts can be checked.
     const thisYear = Number(today.slice(0, 4));
     const finals = {};
-    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
+    // December receipts are typed in January to April, so a year is only graded once its records are in.
+    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear && today >= `${y + 1}-04-15`) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
     state.validation = EXP.validate(snaps, finals);
     const calibration = state.settings.experimentSnapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
-    state.advice = ADV.analyze({ entries: state.entries, settings: state.settings, dismissed: state.dismissed, computed: state.computed, today, calibration });
+    // the advisor recomputes the projection itself, so it needs the same overridden parameters the live figures were built with
+    state.advice = ADV.analyze({ entries: state.entries, settings: Object.assign({}, state.settings, { paramOverrides: state.overrides }), dismissed: state.dismissed, computed: state.computed, today, calibration });
     maybeSnapshot(today);
   }
   /** Once a month, write down the live year's forecast so it can be checked when the year closes. */
   function maybeSnapshot(today) {
     if (state.settings.experimentSnapshots === false) return;
+    if (state.entries.some((e) => e.sample)) return; // a forecast built from example figures would be graded later as if it were real
     const pr = state.advice && state.advice.projection;
     if (!pr || Number(state.settings.taxYear) !== Number(today.slice(0, 4)) || !state.computed.entries.length) return;
     const s = { today, taxYear: state.computed.taxYear, actual: pr.actual, expectedMore: pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore, projectedTotal: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore), standardDeduction: pr.standardDeduction, itemize: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore) > pr.standardDeduction };
@@ -140,7 +177,8 @@
     const once = (k) => { if (state.session.nudged.has(k)) return false; state.session.nudged.add(k); return true; };
     const dayMs = 86400000;
     if (ADV.VISIT_LINES.includes(entry.lineId)) {
-      const hasDrive = state.entries.some((e) => e.lineId === 'med.miles' && Math.abs(new Date(e.date + 'T00:00:00') - new Date(entry.date + 'T00:00:00')) <= dayMs);
+      // rounded to whole days: the day daylight saving ends is 25 hours long, and a raw comparison misses the drive
+      const hasDrive = state.entries.some((e) => e.lineId === 'med.miles' && Math.abs(Math.round((new Date(e.date + 'T00:00:00') - new Date(entry.date + 'T00:00:00')) / dayMs)) <= 1);
       const history = state.entries.filter((e) => e.lineId === 'med.miles').map((e) => Number(e.amount) || 0);
       if (!hasDrive && (history.length || state.places.some((p) => p.category === 'medical')) && once('drive:' + entry.id)) {
         const typical = history.length ? median(history) : '';
@@ -149,22 +187,25 @@
     } else if (entry.lineId === 'se.miles' && !state.entries.some((e) => e.lineId === 'se.total_miles' && Number(e.taxYear) === Number(entry.taxYear)) && once('totalmiles:' + entry.taxYear)) {
       setTimeout(() => toast("Saved. Schedule C also needs the year's total miles.", 9000, { label: 'Log total miles', onClick: () => prefillCapture({ lineId: 'se.total_miles', amount: '', description: 'Odometer, all miles this year', date: `${entry.taxYear}-12-31` }) }), 60);
     } else if (['ch.worship', 'ch.college', 'ch.org', 'ch.cfc', 'ch.other'].includes(entry.lineId) && Number(entry.amount) >= state.computed.params.acknowledgmentThreshold && !entry.hasReceipt && once('ack:' + entry.id)) {
-      setTimeout(() => toast("Saved. Gifts of $250 or more need the charity's written acknowledgment; attach it when it arrives.", 6000), 60);
+      setTimeout(() => toast(`Saved. Gifts of ${money(state.computed.params.acknowledgmentThreshold)} or more need the charity's written acknowledgment; attach it when it arrives.`, 6000), 60);
     }
   }
 
   function yearEntries() { return state.computed ? state.computed.entries : []; }
 
   // ---- toast / modal ---------------------------------------------------------
-  let toastTimer = null;
-  function hideToast() { const el = $('#toast'); if (!el) return; el.classList.remove('is-on'); el.textContent = ''; }
+  let toastTimer = null, toastFrame = null;
+  function cancelToastFrame() { if (toastFrame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(toastFrame); toastFrame = null; }
+  function hideToast() { cancelToastFrame(); const el = $('#toast'); if (!el) return; el.classList.remove('is-on'); el.textContent = ''; }
   function toast(msg, ms, action) {
     const el = $('#toast');
     el.hidden = false; // the live region is always in the accessibility tree; showing and hiding is a class
     clearTimeout(toastTimer);
+    cancelToastFrame();
     // cleared first, filled a frame later: a repeated message is a fresh change that screen readers announce
     el.textContent = ''; el.classList.remove('is-on');
     const show = () => {
+      toastFrame = null;
       el.textContent = msg;
       if (action && action.label) {
         const b = document.createElement('button');
@@ -173,9 +214,10 @@
         el.appendChild(b);
       }
       el.classList.add('is-on');
+      // the countdown starts here: a frame in a background tab can be minutes late, and a toast must not outlive its action
+      toastTimer = setTimeout(hideToast, ms || (action ? 7000 : 2600));
     };
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(show); else show();
-    toastTimer = setTimeout(hideToast, ms || (action ? 7000 : 2600));
+    if (typeof requestAnimationFrame === 'function') toastFrame = requestAnimationFrame(show); else show();
   }
   // The modal is a real dialog: the page behind it is inert, Tab stays inside, and focus returns to the opener on close.
   let modalOpener = null, modalOnCancel = null, modalScrollY = 0;
@@ -186,13 +228,16 @@
     const panel = $('#modalPanel');
     const items = [...panel.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null || el === document.activeElement);
     if (!items.length) { ev.preventDefault(); panel.focus(); return; }
-    const first = items[0], last = items[items.length - 1], inside = panel.contains(document.activeElement);
+    // the panel itself counts as outside: focus starts there on touch devices, and Shift+Tab from it must not leave the dialog
+    const first = items[0], last = items[items.length - 1], inside = panel.contains(document.activeElement) && document.activeElement !== panel;
     if (ev.shiftKey && (document.activeElement === first || !inside)) { ev.preventDefault(); last.focus(); }
     else if (!ev.shiftKey && (document.activeElement === last || !inside)) { ev.preventDefault(); first.focus(); }
   }
   function openModal(html, onOpen, onCancel) {
     const m = $('#modal'), panel = $('#modalPanel');
-    modalOpener = document.activeElement;
+    // a dialog opened over an open one keeps the first one's opener and scroll position: recording them again would lose both
+    const wasOpen = !m.hidden;
+    if (!wasOpen) modalOpener = document.activeElement;
     modalOnCancel = onCancel || null;
     panel.innerHTML = html;
     const heading = panel.querySelector('h2, h3');
@@ -200,10 +245,12 @@
     if (heading) { if (!heading.id) heading.id = 'modalTitle'; panel.setAttribute('aria-labelledby', heading.id); panel.removeAttribute('aria-label'); }
     else { panel.removeAttribute('aria-labelledby'); panel.setAttribute('aria-label', 'Dialog'); }
     m.hidden = false;
-    // iOS ignores overflow:hidden for touch scrolling, so the page is pinned in place and put back on close
-    modalScrollY = window.scrollY || 0;
-    document.body.style.overflow = 'hidden';
-    document.body.style.position = 'fixed'; document.body.style.top = `-${modalScrollY}px`; document.body.style.width = '100%';
+    if (!wasOpen) {
+      // iOS ignores overflow:hidden for touch scrolling, so the page is pinned in place and put back on close
+      modalScrollY = window.scrollY || 0;
+      document.body.style.overflow = 'hidden';
+      document.body.style.position = 'fixed'; document.body.style.top = `-${modalScrollY}px`; document.body.style.width = '100%';
+    }
     for (const el of behindModal()) { el.inert = true; el.setAttribute('aria-hidden', 'true'); }
     panel.addEventListener('keydown', trapTab);
     if (onOpen) onOpen(panel);
@@ -242,6 +289,7 @@
     if (!a || a === document.body) return null;
     if (a.id) return '#' + a.id;
     const d = a.dataset || {};
+    if (d.rec != null && d.recAct != null) return `[data-rec="${d.rec}"][data-rec-act="${d.recAct}"]`; // the two buttons on a card share one data-rec
     for (const k of ['filter', 'themePick', 'mode', 'param', 'sel', 'edit', 'impSel', 'impLine']) if (d[k] != null) return `[data-${k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}="${d[k]}"]`;
     return null;
   }
@@ -269,6 +317,7 @@
     const canvas = document.createElement('canvas');
     canvas.width = cw; canvas.height = ch;
     canvas.getContext('2d').drawImage(source, 0, 0, cw, ch);
+    if (typeof source.close === 'function') source.close(); // a phone photo decodes to tens of megabytes; free it now rather than at the next collection
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
     return blob || file;
   }
@@ -302,27 +351,42 @@
     const q = params ? '?' + new URLSearchParams(params).toString() : '';
     location.hash = view + q;
   }
+  let hashPutBack = false; // set while a hash the Back gesture changed is being restored
   function route() {
     const { view, params } = parseHash();
+    // Back with a sheet open should dismiss the sheet, not swap the view underneath it: close it and put the hash back.
+    if (!$('#modal').hidden) {
+      cancelModal();
+      if (view !== state.view) { hashPutBack = true; location.hash = state.view; }
+      return;
+    }
+    if (hashPutBack) { hashPutBack = false; return; }
     state.view = view;
-    if (view === 'ledger' && params.get('filter')) state.ledger.filter = params.get('filter');
+    const filter = params.get('filter');
+    if (view === 'ledger' && filter) state.ledger.filter = normalizeLedgerFilter(filter);
     render();
     $('#main').scrollTo && window.scrollTo({ top: 0 });
   }
 
   // ---- render ---------------------------------------------------------------
   function render() {
-    recompute();
-    for (const v of VIEWS) {
-      const el = $('#view-' + v);
-      const active = v === state.view;
-      el.hidden = !active;
-      const tab = $('#tab-' + v);
-      if (active) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+    // One bad row must not blank the whole app: on a failure the view already on screen stays, and the user can still reach Settings.
+    try {
+      recompute();
+      for (const v of VIEWS) {
+        const el = $('#view-' + v);
+        const active = v === state.view;
+        el.hidden = !active;
+        const tab = $('#tab-' + v);
+        if (active) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+      }
+      renderYearSelect();
+      ({ capture: renderCapture, ledger: renderLedger, advisor: renderAdvisor, insights: renderInsights, worksheet: renderWorksheet, settings: renderSettings })[state.view]();
+      document.title = state.view === 'capture' ? 'Itemizer' : `Itemizer · ${state.view[0].toUpperCase()}${state.view.slice(1)}`;
+    } catch (err) {
+      console.error(err);
+      toast('Something went wrong drawing this view. Your entries are safe; try another tab or reload the page.', 8000);
     }
-    renderYearSelect();
-    ({ capture: renderCapture, ledger: renderLedger, advisor: renderAdvisor, insights: renderInsights, worksheet: renderWorksheet, settings: renderSettings })[state.view]();
-    document.title = state.view === 'capture' ? 'Itemizer' : `Itemizer · ${state.view[0].toUpperCase()}${state.view.slice(1)}`;
   }
 
   function renderYearSelect() {
@@ -345,7 +409,8 @@
     return '<span class="row-receipt rc-none"></span>';
   }
   function entryRow(e, opts) {
-    const line = S.getLine(e.lineId);
+    // a row whose line a later schema no longer has is still listed and editable, rather than taking the view down with it
+    const line = S.getLine(e.lineId) || { label: e.lineId, sectionId: '', sectionTitle: 'Unrecognised line', unit: 'usd', treatment: 'info' };
     const dupe = opts && opts.dupes && opts.dupes.has(e.id);
     if (opts && opts.select) {
       return `<label class="row row-select">
@@ -380,6 +445,7 @@
   // CAPTURE
   // =====================================================================
   function renderCapture() {
+    const fk = focusKeyOf(); // the sheet returns focus to a row this render is about to replace
     if (!state.capture) { state.capture = freshCapture(); state.capture.date = todayInYear(); }
     const cap = state.capture;
     const R0 = state.computed;
@@ -398,6 +464,7 @@
       $('#view-capture').innerHTML = `${strip}${modeBarHTML(mode)}${mode === 'trip' ? tripModeHTML() : importModeHTML()}`;
       bindModeBar();
       if (mode === 'trip') bindTripMode(); else bindImportMode();
+      restoreFocus(fk);
       return;
     }
 
@@ -439,7 +506,7 @@
           <div class="grid-2">
             <label class="field span-2"><span>Note</span><textarea id="fNote" rows="${cap.note && cap.note.includes('\n') ? Math.min(8, cap.note.split('\n').length) : 2}" placeholder="Who you met, what it was for, lender's name and TIN…">${esc(cap.note)}</textarea></label>
             <label class="field"><span>Repeat monthly</span><select id="fRepeat">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => `<option value="${n}" ${cap.repeat === n ? 'selected' : ''}>${n === 1 ? 'Just once' : `${n} months`}</option>`).join('')}</select></label>
-            <label class="field"><span>Business-use share (%)</span><input id="fShare" inputmode="numeric" value="${esc(cap.share || '')}" placeholder="100"></label>
+            <label class="field"><span>Business-use share (%)</span><input id="fShare" inputmode="decimal" value="${esc(cap.share || '')}" placeholder="100"></label>
             <p class="note span-2">Repeat is for premiums or a monthly pledge: one entry per month from this date. The share is for bills that are partly business, like a phone or internet: only that share is logged, and the full amount goes in the note.</p>
           </div>
         </details>
@@ -454,6 +521,7 @@
       </section>`;
 
     bindCapture();
+    restoreFocus(fk);
   }
 
   function emptyStateHTML() {
@@ -470,12 +538,18 @@
       return `<button class="chip" type="button" data-line="${id}" aria-pressed="${id === cap.lineId}" title="${esc(s && s.because.length ? 'Because: ' + s.because.join(', ') : '')}">${esc(l.label)} <small>· ${esc(l.sectionTitle.replace(' Expenses', '').replace(' Contributions', ''))}</small>${s && s.learned ? ' <small>★</small>' : ''}</button>`;
     }).join('');
   }
+  /** Where a line lands on the return. The medical floor is editable in Settings, so the rate in force is quoted, not a fixed figure. */
+  function treatmentLabel(treatment) {
+    const t = S.TREATMENTS[treatment];
+    if (treatment === 'A-medical' && state.computed) return `Medical (above ${R.pct(state.computed.params.medicalFloorRate)} of AGI)`;
+    return t.label;
+  }
   function lineHintHTML(lineId) {
     if (!lineId) return '';
     const l = S.getLine(lineId);
     const t = S.TREATMENTS[l.treatment];
     const s = state.capture && state.capture.suggestions.find((x) => x.lineId === lineId);
-    return `<b>${esc(l.label)}</b> → ${esc(t.schedule)}: ${esc(t.label)}.${l.hint ? ' ' + esc(l.hint) : ''}${s && s.because.length ? `<div class="because">Suggested because: ${esc(s.because.join(', '))}</div>` : ''}`;
+    return `<b>${esc(l.label)}</b> → ${esc(t.schedule)}: ${esc(treatmentLabel(l.treatment))}.${l.hint ? ' ' + esc(l.hint) : ''}${s && s.because.length ? `<div class="because">Suggested because: ${esc(s.because.join(', '))}</div>` : ''}`;
   }
 
   function bindCapture() {
@@ -498,7 +572,7 @@
     const paper = $('#fPaper'); if (paper) paper.onchange = () => { cap.paper = paper.checked; cap.dirty = true; };
     $('#fNote').addEventListener('input', (ev) => { cap.note = ev.target.value; cap.dirty = true; });
     $('#fRepeat').addEventListener('change', (ev) => { cap.repeat = Number(ev.target.value) || 1; });
-    $('#fShare').addEventListener('input', (ev) => { cap.share = ev.target.value.replace(/[^0-9]/g, ''); cap.dirty = true; });
+    $('#fShare').addEventListener('input', (ev) => { cap.share = ev.target.value.replace(/[^0-9.]/g, ''); cap.dirty = true; updateSaveHint(); }); // a phone or internet split is often 33.3 or 62.5, so the decimal point stays
     listen(root, 'click', (ev) => {
       const b = ev.target.closest('[data-edit]'); if (b) { openEdit(b.dataset.edit); return; }
       const r = ev.target.closest('[data-rec-act]'); if (r) handleRecAction(r);
@@ -1021,12 +1095,16 @@
       await DB.putDismissal(id, at); // one row per dismissed recommendation
       toast('Dismissed for 30 days.');
       render();
+      // the card that had focus is gone; move to the next recommendation rather than dropping focus to the top of the page
+      const next = $(`#view-${state.view} [data-rec-act]`);
+      if (next) next.focus({ preventScroll: true });
+      else { const h = $(`#view-${state.view} h2`); if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); } }
       return;
     }
     const a = rec.action || {};
     if (a.type === 'prefill') prefillCapture(a.entry);
     else if (a.type === 'edit') openEdit(a.entryId);
-    else if (a.type === 'ledger') { state.ledger.filter = a.filter || 'all'; go('ledger', a.filter ? { filter: a.filter } : null); }
+    else if (a.type === 'ledger') { state.ledger.filter = normalizeLedgerFilter(a.filter || 'all'); go('ledger', a.filter ? { filter: a.filter } : null); }
     else if (a.type === 'capture') { state.captureMode = 'expense'; go('capture'); if (state.view === 'capture') renderCapture(); setTimeout(() => { const q = $('#quickInput'); if (q) q.focus(); }, 50); }
     else if (a.type === 'settings') go('settings');
   }
@@ -1106,6 +1184,15 @@
     refreshChips();
     updateSaveHint();
   }
+  /** The business-use share as typed. "33.3" is a real split; "125", "0" and "abc" are not a share at all. */
+  function parseShare(text) {
+    const n = Number(String(text == null ? '' : text).trim());
+    if (!(Number.isFinite(n) && n > 0 && n <= 100)) return { ok: false, share: 0 };
+    return { ok: true, share: Math.round(n * 10) / 10 };
+  }
+  /** That share of an amount, worked in whole cents: 75% of $100.46 is $75.35, not $75.34. */
+  function shareAmount(value, share) { return Math.round(Math.round(value * 100) * share / 100) / 100; }
+
   function captureProblems() {
     const cap = state.capture;
     const problems = [];
@@ -1114,6 +1201,8 @@
     const val = Number(isMiles ? cap.miles : cap.amount);
     if (!(val > 0)) problems.push(isMiles ? 'enter the miles' : 'enter an amount');
     if (!cap.date || !/^\d{4}-\d{2}-\d{2}$/.test(cap.date)) problems.push('pick a date');
+    // a share that cannot be read would otherwise file the whole bill at 100% without saying so
+    if (!isMiles && cap.share !== '' && !parseShare(cap.share).ok) problems.push('give the business-use share as a percentage between 0 and 100');
     return problems;
   }
   function updateSaveHint() {
@@ -1127,7 +1216,10 @@
     else {
       const cap = state.capture;
       const y = Number(cap.date.slice(0, 4));
-      hint.textContent = y !== Number(state.settings.taxYear) ? `Dated ${y} — it will file under tax year ${y}.` : '';
+      // a date that is not today is worth saying out loud: the default is Dec 31 whenever a past year is selected
+      if (y !== Number(state.settings.taxYear)) hint.textContent = `Dated ${P.formatDate(cap.date)} — it will file under tax year ${y}.`;
+      else if (cap.date !== P.todayISO() && !cap.pinned.has('date')) hint.textContent = `Dated ${P.formatDate(cap.date)} (not today) — it will file under tax year ${y}.`;
+      else hint.textContent = '';
     }
   }
 
@@ -1142,9 +1234,9 @@
     const saveBtn = $('#saveBtn'); if (saveBtn) saveBtn.disabled = true;
     const isMiles = S.isMiles(cap.lineId);
     const value = Number(isMiles ? cap.miles : cap.amount);
-    const shareIn = Number(cap.share);
-    const share = !isMiles && cap.share !== '' && shareIn > 0 && shareIn < 100 ? Math.round(shareIn) : 100;
-    const saved = share < 100 ? Math.round(value * share) / 100 : value;
+    const typedShare = isMiles ? { ok: false, share: 0 } : parseShare(cap.share);
+    const share = typedShare.ok ? typedShare.share : 100; // 100% is the same as no share: the whole bill is logged
+    const saved = share < 100 ? shareAmount(value, share) : value;
     const noteText = ((share < 100 ? `${share}% business share of ${moneyCents(value)}. ` : '') + cap.note.trim()).trim();
     const now = new Date().toISOString();
     const line = S.getLine(cap.lineId);
@@ -1176,7 +1268,9 @@
     if (cap.description.trim()) rememberLine(cap.description, cap.lineId);
     const fileYear = entries[0].taxYear;
     const label = isMiles ? fmtMiles(value) : moneyCents(saved);
-    toast(`Saved ${label} → ${line.label}${entries.length > 1 ? ` × ${entries.length} months` : ''}${fileYear !== Number(state.settings.taxYear) ? ` (tax year ${fileYear})` : ''}`);
+    // the year is named whenever the entry lands outside the selected year or outside the year we are living in
+    const noteYear = fileYear !== Number(state.settings.taxYear) || fileYear !== Number(P.todayISO().slice(0, 4));
+    toast(`Saved ${label} → ${line.label}${entries.length > 1 ? ` × ${entries.length} months` : ''}${noteYear ? ` (tax year ${fileYear})` : ''}`);
     if (cap.receiptURL) URL.revokeObjectURL(cap.receiptURL);
     state.capture = freshCapture();
     state.capture.date = todayInYear();
@@ -1242,6 +1336,7 @@
     const fk = focusKeyOf();
     const L = state.ledger;
     const F = ledgerFacts();
+    if (L.filter === 'samples' && !F.samples.length) L.filter = 'all'; // the Examples chip goes when the examples do
     const chip = (id, label, count) => `<button class="chip" type="button" data-filter="${id}" aria-pressed="${L.filter === id}">${esc(label)}${count != null ? ` <span class="count">${count}</span>` : ''}</button>`;
 
     $('#view-ledger').innerHTML = `
@@ -1417,12 +1512,17 @@
   }
 
   // ---- edit sheet -----------------------------------------------------------
+  let openingEdit = false;
   async function openEdit(id) {
+    // a second tap, or a dialog already on screen: another sheet over this one would throw away the edits in it
+    if (openingEdit || !$('#modal').hidden) return;
     const e = state.entries.find((x) => x.id === id);
     if (!e) return;
     const line = S.getLine(e.lineId);
     const isMiles = S.isMiles(e.lineId);
-    const url = await receiptURL(e.receiptId);
+    openingEdit = true;
+    let url = null;
+    try { url = await receiptURL(e.receiptId); } finally { openingEdit = false; }
     openModal(`
       <div class="card-head"><h2>Edit entry</h2><span class="pill-row"><span class="pill pill-accent">${esc(line.sectionTitle)}</span>${!isMiles && !e.hasReceipt && !e.receiptId && (Number(e.amount) || 0) >= state.computed.params.receiptThreshold ? '<span class="pill pill-act">No receipt</span>' : ''}${state.computed.duplicates.some(([a, b]) => a.id === e.id || b.id === e.id) ? '<span class="pill pill-warn">Possible duplicate</span>' : ''}</span></div>
       <div class="grid-2">
@@ -1446,11 +1546,28 @@
       panel.querySelector('[data-close]').onclick = closeModal;
       const lineSel = panel.querySelector('#eLine');
       lineSel.onchange = () => { const m = S.isMiles(lineSel.value); panel.querySelector('#eAmountLabel').textContent = m ? 'Miles' : 'Amount ($)'; panel.querySelector('#eReceiptRow').hidden = m; panel.querySelector('#eHint').innerHTML = lineHintHTML(lineSel.value); };
-      const thumb = panel.querySelector('#eThumb'); if (thumb) thumb.onclick = () => viewReceipt(url, e.description || line.label);
+      // the photo grows inside the sheet: opening it as its own dialog would replace this form and lose whatever is typed in it
+      const thumb = panel.querySelector('#eThumb');
+      if (thumb) thumb.onclick = () => {
+        const img = thumb.querySelector('img');
+        const big = img.className !== 'receipt-full';
+        img.className = big ? 'receipt-full' : 'receipt-thumb';
+        thumb.style.flexBasis = big ? '100%' : ''; // the row wraps, so the opened photo gets a line of its own
+        thumb.setAttribute('aria-label', big ? 'Hide the receipt' : 'View the receipt full size');
+      };
       const attach = panel.querySelector('#eAttach') || panel.querySelector('#eReplace');
       if (attach) attach.onclick = () => { state.pendingReceiptTarget = e.id; closeModal(); $('#receiptPick').click(); };
       const rm = panel.querySelector('#eRemovePhoto');
-      if (rm) rm.onclick = async () => { await DB.deleteReceipt(e.receiptId); dropReceiptURL(e.receiptId); e.receiptId = null; e.hasReceipt = false; e.updatedAt = new Date().toISOString(); await DB.putEntry(e); toast('Photo removed.'); openEdit(e.id); };
+      if (rm) rm.onclick = async () => {
+        await DB.deleteReceipt(e.receiptId); dropReceiptURL(e.receiptId);
+        e.receiptId = null; e.hasReceipt = false; e.updatedAt = new Date().toISOString();
+        await DB.putEntry(e);
+        // only the receipt row is rebuilt: reopening the sheet would discard an amount or note typed but not yet saved
+        const row = panel.querySelector('#eReceiptRow');
+        row.innerHTML = `<button class="btn" type="button" id="eAttach">${ICON.camera} Attach receipt</button><label class="check"><input type="checkbox" id="ePaper"> Paper receipt filed</label>`;
+        row.querySelector('#eAttach').onclick = () => { state.pendingReceiptTarget = e.id; closeModal(); $('#receiptPick').click(); };
+        toast('Photo removed.');
+      };
       panel.querySelector('#eDelete').onclick = async () => {
         closeModal();
         if (!(await confirmDialog('Delete this entry?', `${e.description || line.label} · ${fmtAmount(e)} on ${P.formatDate(e.date)}. This cannot be undone.`, 'Delete', true))) return;
@@ -1567,14 +1684,14 @@
     const tg = $('#toggleMonthsTable'); if (tg) tg.onclick = () => { state.showMonthsTable = !state.showMonthsTable; renderInsights(); };
     listen($('#view-insights'), 'click', (ev) => {
       const go1 = ev.target.closest('[data-go]');
-      if (go1) { ev.preventDefault(); const [view, filter] = go1.dataset.go.split(':'); if (filter) state.ledger.filter = filter; go(view, filter ? { filter } : null); }
+      if (go1) { ev.preventDefault(); const [view, filter] = go1.dataset.go.split(':'); if (filter) state.ledger.filter = normalizeLedgerFilter(filter); go(view, filter ? { filter } : null); }
     });
   }
   function yoyHTML() {
     const R0 = state.computed;
     const prevYear = R0.taxYear - 1;
     if (!state.entries.some((e) => R.taxYearOf(e) === prevYear)) return '';
-    const prev = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: prevYear, today: P.todayISO() }));
+    const prev = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: prevYear, today: P.todayISO(), paramOverrides: state.overrides }));
     const rows = S.SECTIONS.filter((s) => R0.sections[s.id].count || prev.sections[s.id].count).map((s) => ({ title: s.title, now: R0.sections[s.id].value, before: prev.sections[s.id].value }));
     const delta = (a, b) => { const d = Math.round((a - b) * 100) / 100; return `<span class="${d > 0 ? 'delta-up' : d < 0 ? 'delta-down' : ''}">${d > 0 ? '+' : ''}${money(d)}</span>`; };
     return `<section class="card">
@@ -1793,6 +1910,7 @@
   // ADVISOR — recommendations from your own ledger
   // =====================================================================
   function renderAdvisor() {
+    const fk = focusKeyOf(); // a dismissal or a sheet returns focus to a card this render is about to replace
     const adv = state.advice;
     const R0 = state.computed;
     const pr = adv.projection;
@@ -1859,6 +1977,7 @@
     $('#downloadAggregate').onclick = () => downloadText(`itemizer-summary-${R0.taxYear}.json`, JSON.stringify(adv.aggregate, null, 2), 'application/json');
     const ud = $('#undismiss'); if (ud) ud.onclick = async () => { state.dismissed = {}; await DB.clearDismissals(); recompute(); render(); toast('All recommendations are visible again.'); };
     const ics = $('#icsBtn'); if (ics) ics.onclick = () => downloadText(`itemizer-due-dates-${R0.taxYear}.ics`, icsText(), 'text/calendar');
+    restoreFocus(fk);
   }
 
   function forecastCardHTML() {
@@ -1973,7 +2092,7 @@
 
         <section class="card">
           <div class="card-head"><h2>About Itemizer</h2><span class="muted small">v1.0</span></div>
-          <p class="note">Itemizer is modelled on the “Keep track of your expenses” organizer sheet tax preparers hand out. Every line on that sheet is here, plus the arithmetic the sheet leaves to you: the 7.5%-of-AGI medical floor, the state-and-local-tax cap, gift substantiation rules, mileage rates, and the standard-deduction comparison that decides whether any of it matters.</p>
+          <p class="note">Itemizer is modelled on the “Keep track of your expenses” organizer sheet tax preparers hand out. Every line on that sheet is here, plus the arithmetic the sheet leaves to you: the medical floor as a share of AGI, the state-and-local-tax cap, gift substantiation rules, mileage rates, and the standard-deduction comparison that decides whether any of it matters.</p>
           <p class="note" style="margin-top:8px">It is a planning tool, not tax advice. Rates and thresholds change; verify against current IRS publications (Schedule A instructions, Pub. 502, 526, 529, 970) or your preparer before filing.</p>
         </section>
       </div>`;
@@ -2188,6 +2307,10 @@
     state.trips = state.trips.filter((x) => !x.sample);
     discardRecorder();
     state.trip = null;
+    // a forecast an earlier version wrote down while the examples were loaded would be graded later as if it were real
+    const key = EXP.monthKey(P.todayISO()), year = Number(state.settings.taxYear);
+    const kept = state.snapshots.filter((s) => !(s.month === key && s.taxYear === year));
+    if (kept.length !== state.snapshots.length) { state.snapshots = kept; await DB.syncSnapshots(state.snapshots).catch(() => {}); }
     toast(`Removed ${ids.length} example entries.`);
     render();
   }
@@ -2225,7 +2348,8 @@
     state.entries = await DB.getEntries();
     for (const e of state.entries) { try { if (!e.taxYear && typeof e.date === 'string') e.taxYear = Number(e.date.slice(0, 4)); } catch (err) { /* a bad row never blocks start-up */ } }
     try { state.places = await DB.getPlaces(); state.trips = await DB.getTrips(); } catch (e) { state.places = []; state.trips = []; }
-    state.capture = null; state.trip = null; state.importer = null; state.captureMode = 'expense';
+    discardCapture();
+    state.trip = null; state.importer = null; state.captureMode = 'expense';
   }
   async function init() {
     try { await reloadState(); }
@@ -2235,14 +2359,8 @@
       toast(`Local storage could not be opened: ${e && e.message ? e.message : 'unknown error'}. Close other Itemizer tabs and reload; nothing will be saved until then.`, 30000);
     }
     applyTheme();
-    $('#yearSelect').onchange = async (ev) => {
-      state.settings.taxYear = Number(ev.target.value);
-      await DB.saveSettings(state.settings);
-      if (state.capture && state.capture.receiptURL) URL.revokeObjectURL(state.capture.receiptURL);
-      discardRecorder();
-      state.capture = null; state.trip = null;
-      render();
-    };
+    await maybeRollYear();
+    $('#yearSelect').onchange = (ev) => setTaxYear(ev.target.value);
     $('#receiptInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
     $('#receiptPick').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
     $('#importInput').onchange = importBackup;

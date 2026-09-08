@@ -3,9 +3,23 @@
 // same row layer the browser uses.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 require('../js/store.js');
 const Schema = require('../js/schema.js');
 const DB = globalThis.ItemizerStore;
+const STORE = require.resolve('../js/store.js');
+const SCHEMA = require.resolve('../js/schema.js');
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+/**
+ * A few paths (a blocked IndexedDB open, an aborted transaction, the localStorage fallback) need their own browser
+ * globals and their own copy of the module, which this process cannot have twice: run them in a child node process,
+ * where `setup` installs the globals, `body` is an async function body, and what it returns comes back as JSON.
+ */
+function inChild(setup, body) {
+  const src = `${setup}\nrequire(${JSON.stringify(STORE)});\nconst DB = globalThis.ItemizerStore;\n(async () => { const out = await (async () => { ${body} })(); process.stdout.write(JSON.stringify(out)); })().catch((e) => { console.error(e); process.exit(1); });`;
+  return JSON.parse(execFileSync(process.execPath, ['-e', src], { encoding: 'utf8' }));
+}
 
 const legacyDoc = {
   taxYear: 2026, filingStatus: 'mfj', agi: '95000', theme: 'dark', experiments: { snapshots: true, corrections: false, nudges: true },
@@ -136,4 +150,161 @@ test('a restore that replaces the ledger keeps what the app has learned; delete-
   assert.ok(Object.values(c).every((n) => n === 0), JSON.stringify(c));
   const info = await DB.storageInfo();
   assert.equal(info.mode, 'memory'); assert.equal(info.version, 3); assert.deepEqual(info.stores, DB.STORE_NAMES); assert.equal(info.counts.entries, 0);
+});
+
+test('deleting an entry takes the trip that was logged for it, and leaves the other trips alone', async () => {
+  await DB.clearAll();
+  await DB.putEntry({ id: 'e1', date: '2026-03-01', taxYear: 2026, lineId: 'med.miles', amount: 18 });
+  await DB.putEntry({ id: 'e2', date: '2026-03-02', taxYear: 2026, lineId: 'med.miles', amount: 4 });
+  await DB.putTrip({ id: 't1', date: '2026-03-01', taxYear: 2026, miles: 18, lineId: 'med.miles', entryId: 'e1' });
+  await DB.putTrip({ id: 't2', date: '2026-03-02', taxYear: 2026, miles: 4, lineId: 'med.miles', entryId: 'e2' });
+  const removed = await DB.deleteEntry('e1');
+  assert.deepEqual(removed.map((t) => t.id), ['t1'], 'the caller is told which trips went, so it can offer to undo them');
+  assert.deepEqual((await DB.getTrips()).map((t) => t.id), ['t2'], 'the mileage log cannot list a drive the ledger no longer has');
+  assert.deepEqual((await DB.getEntries()).map((e) => e.id), ['e2']);
+  assert.deepEqual((await DB.deleteEntries(['e2'])).map((t) => t.id), ['t2']);
+  assert.equal((await DB.getTrips()).length, 0);
+});
+
+test('a restore keeps the settings the file does not carry, and a patch does not undo what another tab saved', async () => {
+  await DB.clearAll();
+  await DB.saveSettings({ taxpayerName: 'Alex', stateWithholding: '4200', filingStatus: 'single' });
+  await DB.importJSON({ app: 'itemizer', version: 3, entries: [], settings: { filingStatus: 'hoh' } }, { schema: Schema });
+  let s = await DB.getSettings();
+  assert.equal(s.filingStatus, 'hoh', 'the file wins for the keys it carries');
+  assert.equal(s.taxpayerName, 'Alex'); assert.equal(s.stateWithholding, '4200');
+  await DB.importJSON({ app: 'itemizer', version: 2, entries: [], settings: { experiments: { nudges: false } } }, { schema: Schema });
+  s = await DB.getSettings();
+  assert.equal(s.experimentNudges, false, 'the old nested switches still arrive');
+  assert.equal(s.taxpayerName, 'Alex');
+  const stale = await DB.getSettings(); // the copy a tab that has been open a while is holding
+  await DB.updateSettings({ agi: '95000' }); // the other tab
+  await DB.updateSettings({ theme: 'dark' }); // this tab, from its stale copy
+  s = await DB.getSettings();
+  assert.equal(stale.agi, '', 'the stale copy really did not have the AGI');
+  assert.equal(s.theme, 'dark'); assert.equal(s.agi, '95000'); assert.equal(s.taxpayerName, 'Alex');
+});
+
+test('a tab that syncs the keywords it knows does not delete the one another tab has just learned', async () => {
+  await DB.clearAll();
+  await DB.syncWeights({ cvs: 1.2 });
+  const known = await DB.getWeights(); // what this tab loaded
+  await DB.syncWeights({ cvs: 1.2, pharmacy: 0.7 }); // the other tab learns a keyword
+  assert.deepEqual(await DB.syncWeights(Object.assign({}, known, { copay: 1.3 }), known), { put: 1, deleted: 0 });
+  assert.deepEqual(await DB.getWeights(), { cvs: 1.2, pharmacy: 0.7, copay: 1.3 });
+  assert.deepEqual(await DB.syncWeights({}, { cvs: 1.2, copay: 1.3 }), { put: 0, deleted: 2 }, 'keywords the caller did know about are still dropped');
+  assert.deepEqual(await DB.getWeights(), { pharmacy: 0.7 });
+});
+
+test('a backup carries the receipt photos out and back, and deleting the entry takes the photo with it', async () => {
+  await DB.clearAll();
+  await DB.putEntry({ id: 'e1', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 100, hasReceipt: true, receiptId: 'r1' });
+  await DB.putReceipt({ id: 'r1', entryId: 'e1', type: 'image/png', createdAt: '2026-01-05T00:00:00.000Z', blob: await DB.dataURLToBlob(PNG) });
+  const backup = await DB.exportBackup();
+  assert.deepEqual([backup.receipts, backup.failed], [1, 0]);
+  const parsed = JSON.parse(await backup.blob.text());
+  assert.equal(parsed.receipts.length, 1);
+  assert.equal(parsed.receipts[0].dataURL, PNG, 'the photo comes back byte for byte');
+  await DB.clearAll();
+  const res = await DB.importJSON(parsed, { schema: Schema });
+  assert.deepEqual([res.receipts, res.badReceipts, res.dangling], [1, 0, 0]);
+  assert.equal((await DB.getEntries())[0].receiptId, 'r1');
+  assert.equal((await DB.getReceipt('r1')).blob.type, 'image/png');
+  assert.equal(await DB.countRows('receipts'), 1);
+  await DB.deleteEntry('e1');
+  assert.equal(await DB.getReceipt('r1'), null, 'the photo goes with the entry it belonged to');
+});
+
+test('a row keyed like a built-in JavaScript name is refused at the door and never corrupts a map', async () => {
+  assert.equal(DB.sanitizeEntry({ id: '__proto__', date: '2026-01-05', lineId: 'med.doctor', amount: 10 }, Schema), null);
+  assert.equal(DB.sanitizeRow('learned', { key: '__proto__', lineId: 'med.doctor' }, Schema), null);
+  assert.equal(DB.sanitizeRow('dismissals', { id: 'constructor', dismissedAt: '2026-09-18' }), null);
+  await DB.clearAll();
+  await DB.putLearned('constructor', 'med.doctor');
+  const learned = await DB.getLearned();
+  assert.equal(learned.constructor, 'med.doctor');
+  assert.deepEqual(Object.keys(learned), ['constructor']);
+  await DB.putRow('entries', { id: '__proto__', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 10 });
+  const back = await DB.getRow('entries', '__proto__');
+  assert.notEqual(back, Object.prototype, 'the row is a row, not the prototype of every object');
+  assert.equal(back.amount, 10);
+  assert.equal(await DB.countRows('entries'), 1);
+});
+
+test('an upgrade another tab is blocking gives up rather than leave the app waiting for ever', () => {
+  const out = inChild(
+    "globalThis.indexedDB = { open() { const req = {}; setTimeout(() => req.onblocked && req.onblocked({}), 1); globalThis.req = req; return req; } };",
+    `DB.blockedTimeoutMs = 20;
+     const error = await DB.getSettings().then(() => null, (e) => e.message);
+     let closed = false;
+     globalThis.req.result = { close() { closed = true; } };
+     globalThis.req.onsuccess();
+     return { error, notice: DB.notice, closed, mode: DB.mode };`);
+  assert.match(out.error, /Close other Itemizer tabs/);
+  assert.match(out.notice, /Close other Itemizer tabs/);
+  assert.equal(out.closed, true, 'a connection that arrives after we gave up is closed, not left to block the next open');
+  assert.equal(out.mode, 'unavailable', 'the settings screen can say that storage is not working');
+});
+
+test('a request that throws aborts its transaction, so nothing of the batch is written', () => {
+  const out = inChild(
+    `let aborted = false; const written = [];
+     const os = { put(r) { if (r.id === 'bad') { const e = new Error('invalid key'); e.name = 'DataError'; throw e; } written.push(r.id); } };
+     globalThis.written = written; globalThis.state = () => aborted;
+     globalThis.indexedDB = { open() {
+       const req = {};
+       const db = { transaction() { const t = { objectStore: () => os, abort() { aborted = true; queueMicrotask(() => t.onabort && t.onabort({})); } }; queueMicrotask(() => { if (!aborted && t.oncomplete) t.oncomplete({}); }); return t; }, close() {} };
+       setTimeout(() => { req.result = db; req.onsuccess({}); }, 1);
+       return req;
+     } };`,
+    `const error = await DB.putRows('places', [{ id: 'good', name: 'A' }, { id: 'bad', name: 'B' }]).then(() => null, (e) => e.name);
+     return { error, aborted: globalThis.state(), written: globalThis.written };`);
+  assert.equal(out.error, 'DataError');
+  assert.equal(out.aborted, true, 'the row queued before the bad one must not commit on its own');
+  assert.deepEqual(out.written, ['good'], 'that row was queued, which is exactly why the transaction has to be aborted');
+});
+
+test('without IndexedDB the same stores are kept in localStorage, and the pre-v3 document is split into them', () => {
+  const seed = {
+    settings: { taxYear: 2026, filingStatus: 'mfj', learned: { cvs: 'med.prescriptions' }, paramOverrides: { 2026: { mileage: { medical: 0.5 } } } },
+    entries: [{ id: 'e1', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 10 }],
+    places: [{ id: 'p1', name: 'Home', category: 'home', lat: 35, lon: -78 }],
+    trips: [{ id: 't1', date: '2026-02-02', taxYear: 2026, miles: 3, lineId: 'med.miles' }],
+  };
+  const out = inChild(
+    `const m = new Map();
+     globalThis.localStorage = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); } };
+     globalThis.localStorage.setItem('itemizer:fallback', JSON.stringify(${JSON.stringify(seed)}));`,
+    `const entries = (await DB.getEntries()).map((e) => e.id);
+     const first = { mode: DB.mode, entries, learned: await DB.getLearned(), overrides: await DB.getOverrides(), filingStatus: (await DB.getSettings()).filingStatus, legacy: localStorage.getItem('itemizer:fallback'), places: (await DB.getPlaces()).length, trips: (await DB.getTrips()).length };
+     await DB.putEntry({ id: 'e2', date: '2026-01-06', taxYear: 2026, lineId: 'med.doctor', amount: 2 });
+     first.afterPut = (await DB.getEntries()).map((e) => e.id).sort();
+     await DB.deleteEntry('e2');
+     first.afterDelete = (await DB.getEntries()).map((e) => e.id);
+     localStorage.setItem = () => { const e = new Error('no room'); e.name = 'QuotaExceededError'; throw e; };
+     first.quota = await DB.putEntry({ id: 'e3', date: '2026-01-07', taxYear: 2026, lineId: 'med.doctor', amount: 3 }).then(() => null, (e) => e.message);
+     return first;`);
+  assert.equal(out.mode, 'local');
+  assert.deepEqual(out.entries, ['e1']);
+  assert.deepEqual(out.learned, { cvs: 'med.prescriptions' });
+  assert.deepEqual(out.overrides, { 2026: { mileage: { medical: 0.5 } } });
+  assert.equal(out.filingStatus, 'mfj');
+  assert.deepEqual([out.places, out.trips], [1, 1]);
+  assert.equal(out.legacy, null, 'the one document of versions 1 and 2 is gone once it has been split');
+  assert.deepEqual(out.afterPut, ['e1', 'e2']);
+  assert.deepEqual(out.afterDelete, ['e1']);
+  assert.match(out.quota, /Storage is full/);
+});
+
+test('a restore that runs out of room leaves the ledger that was already here', () => {
+  const out = inChild(
+    `const m = new Map();
+     globalThis.localStorage = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { if (k === 'itemizer:store:places') { const e = new Error('no room'); e.name = 'QuotaExceededError'; throw e; } m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); } };`,
+    `const Schema = require(${JSON.stringify(SCHEMA)});
+     await DB.putEntry({ id: 'old', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 1 });
+     const file = { app: 'itemizer', version: 3, entries: [{ id: 'new1', date: '2026-01-06', taxYear: 2026, lineId: 'med.doctor', amount: 2 }], places: [{ id: 'p1', name: 'Home' }] };
+     const error = await DB.importJSON(file, { schema: Schema, replace: true }).then(() => null, (e) => e.message);
+     return { error, entries: (await DB.getEntries()).map((e) => e.id).sort() };`);
+  assert.match(out.error, /Storage is full/);
+  assert.deepEqual(out.entries, ['new1', 'old'], 'a replace only takes the old ledger away once the new one is written');
 });

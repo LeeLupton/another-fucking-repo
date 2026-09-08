@@ -2,18 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Everything the app needs comes from this origin, so an escaping slip in a description or a receipt name cannot run as script. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-xogDogbjmd/BZf7kFrXFCZcxbuJ1vKBxmvV9jQLFPXE='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Itemizer</title>
 <meta name="description" content="Keep track of deductible expenses through the year, know the moment itemizing beats the standard deduction, and hand your preparer a filled-in worksheet.">
 <meta name="theme-color" content="#0e6b52" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0f1412" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Itemizer">
 <link rel="icon" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20512%20512%22%20width%3D%22512%22%20height%3D%22512%22%3E%0A%20%20%3Crect%20width%3D%22512%22%20height%3D%22512%22%20rx%3D%2296%22%20fill%3D%22%230e6b52%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M136%20176h240M136%20256h150M136%20336h190%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%2238%22%20stroke-linecap%3D%22round%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%22368%22%20cy%3D%22328%22%20r%3D%2254%22%20fill%3D%22%23ffffff%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M347%20328l15%2015%2030-32%22%20stroke%3D%22%230e6b52%22%20stroke-width%3D%2216%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20fill%3D%22none%22%2F%3E%0A%3C%2Fsvg%3E%0A" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" crossorigin href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 /* Itemizer — styles
    Tokens first (light on :root, dark under both the OS media query and the explicit toggle),
@@ -226,7 +226,7 @@ img { max-width: 100%; display: block; }
 }
 .chip:hover { background: var(--surface-2); }
 .chip[aria-pressed="true"], .chip.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.chip small { font-weight: 500; opacity: 0.75; }
+.chip small { font-weight: 500; opacity: 0.85; } /* still reads as secondary, and passes AA on the selected chip, where 0.75 did not */
 .chip .count { font-weight: 700; font-variant-numeric: tabular-nums; }
 
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
@@ -253,10 +253,14 @@ img { max-width: 100%; display: block; }
 
 /* tooltip via data-tip (hover + focus), used on chart marks */
 [data-tip] { position: relative; }
-[data-tip]:hover::after, [data-tip]:focus-visible::after {
+body:not(.tips-off) [data-tip]:hover::after, body:not(.tips-off) [data-tip]:focus-visible::after {
   content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%);
   background: var(--ink); color: var(--bg); padding: 6px 9px; border-radius: 6px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; z-index: 5; pointer-events: none;
 }
+/* the pointer can be moved onto the tip to read it: the tip keeps the hover and a bridge covers the 6px gap.
+   A tip shown by keyboard focus stays click-through, so it can never swallow a click meant for what is under it. */
+body:not(.tips-off) [data-tip]:hover::after { pointer-events: auto; }
+body:not(.tips-off) [data-tip]:hover::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 8px; }
 
 /* ---- capture ---- */
 .year-strip { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); text-decoration: none; color: inherit; }
@@ -372,7 +376,9 @@ img { max-width: 100%; display: block; }
 .bar-track { position: relative; height: 22px; }
 .bar-gross { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent-soft); border-radius: 0 4px 4px 0; }
 .bar-counts { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 0 4px 4px 0; }
-.bar-value { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding-left: 8px; font-size: 0.82rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); }
+.bar-value { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 6px; font-size: 0.82rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); background: var(--surface); border-radius: 4px; } /* its own backing: the label is clamped back over the bar on the widest row, and --ink on the solid accent is only 2.6:1 */
+/* the soft fill is 1.3:1 against the card, so a 1px accent edge gives these marks a visible boundary */
+.bar-gross, .month-bar, .meter-proj, .legend-dot { box-shadow: inset 0 0 0 1px var(--accent); }
 .bar-legend { display: flex; gap: 16px; margin-top: 10px; font-size: 0.8rem; color: var(--ink-2); flex-wrap: wrap; }
 @media (max-width: 560px) {
   .bar-row { grid-template-columns: 1fr; gap: 4px; }
@@ -401,7 +407,12 @@ img { max-width: 100%; display: block; }
 
 /* ---- worksheet (paper replica) ---- */
 .sheet-tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
-.sheet { background: var(--paper); color: var(--paper-ink); border: 1px solid var(--line); border-radius: 4px; padding: 26px 28px 30px; box-shadow: var(--shadow); font-family: var(--font-display); color-scheme: light; }
+.sheet {
+  background: var(--paper); color: var(--paper-ink); border: 1px solid var(--line); border-radius: 4px; padding: 26px 28px 30px; box-shadow: var(--shadow); font-family: var(--font-display); color-scheme: light;
+  /* the sheet keeps its paper colours in dark mode and in print, so the ink tokens are re-pointed at the paper here:
+     without this, muted captions and notes inside the sheet were drawn in the dark theme's greys on white. */
+  --ink: var(--paper-ink); --ink-2: #444444; --ink-3: #555555; --surface: var(--paper); --surface-2: #ececec;
+}
 .sheet-bar { background: var(--paper-bar); color: #fff; font-weight: 700; font-size: 1.35rem; padding: 6px 12px; letter-spacing: 0.005em; }
 .sheet-sub { margin-top: 8px; font-size: 0.98rem; }
 .sheet-meta { display: flex; gap: 8px 22px; flex-wrap: wrap; margin-top: 12px; padding: 8px 0; border-top: 1px solid var(--paper-rule); border-bottom: 1px solid var(--paper-rule); font-size: 0.9rem; }
@@ -497,6 +508,7 @@ img { max-width: 100%; display: block; }
 /* ---- tax-time toolkit: toast actions, bulk select, donation tool, receipts sheet, year over year ---- */
 .toast { display: inline-flex; align-items: center; gap: 14px; }
 .toast-action { border: 0; background: transparent; color: inherit; font-weight: 700; text-decoration: underline; padding: 0; cursor: pointer; }
+.toast :focus-visible { outline-color: var(--bg); } /* the toast is inverted: --focus on it is 2.2:1 in dark mode, --bg is 16:1 */
 /* the toast is a permanent live region: invisible when empty, shown by a class, never display:none */
 .toast { opacity: 0; pointer-events: none; transition: opacity 0.15s; }
 .toast.is-on { opacity: 1; }
@@ -514,6 +526,7 @@ img { max-width: 100%; display: block; }
 .yoy tr.total td { border-top: 1px solid var(--line-strong); }
 .donation td, .donation th { vertical-align: middle; }
 .receipt-sheet { margin-top: 16px; }
+.sheet .table-twin th, .sheet .table-twin td { border-bottom-color: var(--paper-rule); }
 .receipt-group { margin: 16px 0 8px; font-size: 1.05rem; }
 .receipt-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 @media (max-width: 640px) { .receipt-grid { grid-template-columns: 1fr 1fr; } }
@@ -899,13 +912,16 @@ window.ITEMIZER_SINGLE_FILE = true;
     { id: 'qss', label: 'Qualifying surviving spouse', married: true },
   ];
   const FILING_BY_ID = Object.fromEntries(FILING_STATUSES.map((f) => [f.id, f]));
-  /** States with no tax on wages: the sales-tax election is the only state-tax deduction available. */
+  /** States with no tax on wages: the sales-tax election is usually the better state-tax deduction there. */
   const NO_INCOME_TAX_STATES = new Set(['AK', 'FL', 'NV', 'NH', 'SD', 'TN', 'TX', 'WA', 'WY']);
 
   // ---- Tax-year parameters -------------------------------------------------
   // Sources: IRS Rev. Proc. 2023-34 / 2024-40 / 2025-32 (inflation adjustments),
-  // IRS standard mileage notices, and P.L. 119-21 (2025) for the SALT cap,
-  // standard deduction, charitable floor, and gambling-loss changes.
+  // IRS standard mileage notices (Notice 2026-10 and Announcement 2026-11 for 2026),
+  // and P.L. 119-21 (2025) for the SALT cap, standard deduction, senior deduction,
+  // charitable floor, and gambling-loss changes.
+  // `mileage` holds the rates from January 1; `mileageJul` holds a mid-year set when
+  // the IRS changed the rates during the year, and is null when it did not.
   const PARAMS = {
     2024: {
       standardDeduction: { single: 14600, mfj: 29200, mfs: 14600, hoh: 21900, qss: 29200 },
@@ -914,8 +930,15 @@ window.ITEMIZER_SINGLE_FILE = true;
       saltCap: { default: 10000, mfs: 5000 },
       saltPhaseout: null,
       mileage: { business: 0.67, medical: 0.21, charity: 0.14 },
+      mileageJul: null,
+      // §213(d)(10) eligible long-term-care premiums by age at the end of the year (Rev. Proc. 2023-34 §3.28).
+      ltcPremiumLimits: { to40: 470, to50: 880, to60: 1760, to70: 4710, over70: 5880 },
       studentLoanInterestCap: 2500,
-      studentLoanPhaseout: { single: [80000, 95000], mfj: [165000, 195000] },
+      studentLoanPhaseout: { single: { start: 80000, end: 95000 }, mfj: { start: 165000, end: 195000 } },
+      // §25A(d): the education-credit range is set by statute and is not indexed.
+      educationCreditPhaseout: { single: { start: 80000, end: 90000 }, mfj: { start: 160000, end: 180000 } },
+      educatorExpenseCap: 300,
+      seniorDeduction: null,
       mealsDeductibleRate: 0.5,
       gamblingLossRate: 1.0,
       charityCashAgiLimit: 0.6,
@@ -937,8 +960,14 @@ window.ITEMIZER_SINGLE_FILE = true;
       saltCap: { default: 40000, mfs: 20000 },
       saltPhaseout: { start: { default: 500000, mfs: 250000 }, rate: 0.3, floor: { default: 10000, mfs: 5000 } },
       mileage: { business: 0.70, medical: 0.21, charity: 0.14 },
+      mileageJul: null,
+      ltcPremiumLimits: { to40: 480, to50: 900, to60: 1800, to70: 4810, over70: 6020 }, // Rev. Proc. 2024-40 §3.28
       studentLoanInterestCap: 2500,
-      studentLoanPhaseout: { single: [85000, 100000], mfj: [170000, 200000] },
+      studentLoanPhaseout: { single: { start: 85000, end: 100000 }, mfj: { start: 170000, end: 200000 } },
+      educationCreditPhaseout: { single: { start: 80000, end: 90000 }, mfj: { start: 160000, end: 180000 } },
+      educatorExpenseCap: 300,
+      // P.L. 119-21 §70103: an extra $6,000 per person aged 65 or older for 2025 through 2028, itemizing or not.
+      seniorDeduction: { perPerson: 6000, phaseoutStart: { default: 75000, mfj: 150000 }, rate: 0.06 },
       mealsDeductibleRate: 0.5,
       gamblingLossRate: 1.0,
       charityCashAgiLimit: 0.6,
@@ -959,9 +988,14 @@ window.ITEMIZER_SINGLE_FILE = true;
       medicalFloorRate: 0.075,
       saltCap: { default: 40400, mfs: 20200 },
       saltPhaseout: { start: { default: 505000, mfs: 252500 }, rate: 0.3, floor: { default: 10000, mfs: 5000 } },
-      mileage: { business: 0.725, medical: 0.21, charity: 0.14 },
+      mileage: { business: 0.725, medical: 0.205, charity: 0.14 }, // Notice 2026-10: Jan 1 – Jun 30
+      mileageJul: { from: '2026-07-01', business: 0.76, medical: 0.235, charity: 0.14 }, // Announcement 2026-11: from Jul 1
+      ltcPremiumLimits: { to40: 500, to50: 930, to60: 1860, to70: 4960, over70: 6200 }, // Rev. Proc. 2025-32 §3.27
       studentLoanInterestCap: 2500,
-      studentLoanPhaseout: { single: [85000, 100000], mfj: [175000, 205000] }, // Rev. Proc. 2025-32
+      studentLoanPhaseout: { single: { start: 85000, end: 100000 }, mfj: { start: 175000, end: 205000 } }, // Rev. Proc. 2025-32
+      educationCreditPhaseout: { single: { start: 80000, end: 90000 }, mfj: { start: 160000, end: 180000 } },
+      educatorExpenseCap: 350, // Rev. Proc. 2025-32 §3.12
+      seniorDeduction: { perPerson: 6000, phaseoutStart: { default: 75000, mfj: 150000 }, rate: 0.06 },
       mealsDeductibleRate: 0.5,
       gamblingLossRate: 0.9,
       charityCashAgiLimit: 0.6,
@@ -974,7 +1008,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       nonCashAppraisal: 5000,
       acknowledgmentThreshold: 250,
       receiptThreshold: 75,
-      pmiPhaseout: { default: [100000, 109000], mfs: [50000, 54500] }, // P.L. 119-21 §70108
+      pmiPhaseout: { default: { start: 100000, end: 109000 }, mfs: { start: 50000, end: 54500 } }, // P.L. 119-21 §70108
     },
   };
   const KNOWN_YEARS = Object.keys(PARAMS).map(Number).sort();
@@ -991,23 +1025,69 @@ window.ITEMIZER_SINGLE_FILE = true;
     { path: 'medicalFloorRate', label: 'Medical floor (share of AGI)', kind: 'rate' },
     { path: 'saltCap.default', label: 'State & local tax cap', kind: 'usd' },
     { path: 'saltCap.mfs', label: 'State & local tax cap (married filing separately)', kind: 'usd' },
-    { path: 'mileage.business', label: 'Business mileage rate ($/mile)', kind: 'permile' },
-    { path: 'mileage.medical', label: 'Medical mileage rate ($/mile)', kind: 'permile' },
-    { path: 'mileage.charity', label: 'Charitable mileage rate ($/mile)', kind: 'permile' },
+    { path: 'mileage.business', label: 'Business mileage rate (¢/mile)', kind: 'permile' },
+    { path: 'mileage.medical', label: 'Medical mileage rate (¢/mile)', kind: 'permile' },
+    { path: 'mileage.charity', label: 'Charitable mileage rate (¢/mile)', kind: 'permile' },
     { path: 'studentLoanInterestCap', label: 'Student loan interest cap', kind: 'usd' },
+    { path: 'studentLoanPhaseout.single.start', label: 'Student loan interest phase-out starts', kind: 'usd' },
+    { path: 'studentLoanPhaseout.single.end', label: 'Student loan interest phase-out ends', kind: 'usd' },
+    { path: 'studentLoanPhaseout.mfj.start', label: 'Student loan interest phase-out starts (joint)', kind: 'usd' },
+    { path: 'studentLoanPhaseout.mfj.end', label: 'Student loan interest phase-out ends (joint)', kind: 'usd' },
+    { path: 'educatorExpenseCap', label: 'Educator classroom-expense deduction', kind: 'usd' },
+    { path: 'ltcPremiumLimits.to40', label: 'Long-term-care premium limit — age 40 or under', kind: 'usd' },
+    { path: 'ltcPremiumLimits.to50', label: 'Long-term-care premium limit — age 41 to 50', kind: 'usd' },
+    { path: 'ltcPremiumLimits.to60', label: 'Long-term-care premium limit — age 51 to 60', kind: 'usd' },
+    { path: 'ltcPremiumLimits.to70', label: 'Long-term-care premium limit — age 61 to 70', kind: 'usd' },
+    { path: 'ltcPremiumLimits.over70', label: 'Long-term-care premium limit — over 70', kind: 'usd' },
     { path: 'mealsDeductibleRate', label: 'Business meals deductible share', kind: 'rate' },
     { path: 'gamblingLossRate', label: 'Share of gambling losses allowed', kind: 'rate' },
     { path: 'charityFloorRate', label: 'Charitable floor for itemizers (share of AGI)', kind: 'rate' },
+    { path: 'charityCashAgiLimit', label: 'Charitable gift limit (share of AGI)', kind: 'rate' },
+    { path: 'casualtyPerEvent', label: 'Casualty loss reduction per event', kind: 'usd' },
+    { path: 'casualtyQualifiedPerEvent', label: 'Qualified disaster loss reduction per event', kind: 'usd' },
+    { path: 'casualtyAgiRate', label: 'Casualty loss reduction (share of AGI)', kind: 'rate' },
+    { path: 'nonCashForm8283', label: 'Non-cash gifts needing Form 8283', kind: 'usd' },
+    { path: 'nonCashAppraisal', label: 'Non-cash gifts needing a qualified appraisal', kind: 'usd' },
     { path: 'acknowledgmentThreshold', label: 'Gift size needing written acknowledgment', kind: 'usd' },
     { path: 'receiptThreshold', label: 'Expense size flagged when no receipt', kind: 'usd' },
+  ];
+
+  // Rows that only exist in some years: shown when the year has a figure to correct.
+  const CONDITIONAL_PARAM_FIELDS = [
+    { path: 'mileageJul.business', label: 'Business mileage rate from July 1 (¢/mile)', kind: 'permile' },
+    { path: 'mileageJul.medical', label: 'Medical mileage rate from July 1 (¢/mile)', kind: 'permile' },
+    { path: 'mileageJul.charity', label: 'Charitable mileage rate from July 1 (¢/mile)', kind: 'permile' },
+    { path: 'saltPhaseout.start.default', label: 'State & local cap phase-down starts', kind: 'usd' },
+    { path: 'saltPhaseout.start.mfs', label: 'State & local cap phase-down starts (married filing separately)', kind: 'usd' },
+    { path: 'saltPhaseout.rate', label: 'State & local cap phase-down (share of income above the threshold)', kind: 'rate' },
+    { path: 'saltPhaseout.floor.default', label: 'State & local cap floor', kind: 'usd' },
+    { path: 'saltPhaseout.floor.mfs', label: 'State & local cap floor (married filing separately)', kind: 'usd' },
+    { path: 'nonItemizerCharity.single', label: 'Cash gift deduction without itemizing', kind: 'usd' },
+    { path: 'nonItemizerCharity.mfj', label: 'Cash gift deduction without itemizing (joint)', kind: 'usd' },
+    { path: 'seniorDeduction.perPerson', label: 'Senior deduction per person aged 65 or older', kind: 'usd' },
+    { path: 'seniorDeduction.phaseoutStart.default', label: 'Senior deduction phase-out starts', kind: 'usd' },
+    { path: 'seniorDeduction.phaseoutStart.mfj', label: 'Senior deduction phase-out starts (joint)', kind: 'usd' },
+    { path: 'seniorDeduction.rate', label: 'Senior deduction phase-out (share of income above the threshold)', kind: 'rate' },
+    { path: 'pmiPhaseout.default.start', label: 'Mortgage insurance phase-out starts', kind: 'usd' },
+    { path: 'pmiPhaseout.default.end', label: 'Mortgage insurance phase-out ends', kind: 'usd' },
+    { path: 'pmiPhaseout.mfs.start', label: 'Mortgage insurance phase-out starts (married filing separately)', kind: 'usd' },
+    { path: 'pmiPhaseout.mfs.end', label: 'Mortgage insurance phase-out ends (married filing separately)', kind: 'usd' },
   ];
 
   // ---- helpers -------------------------------------------------------------
 
   const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   const usdCents = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  function money(n) { return usd.format(Math.round(n || 0)); }
+  // Round half away from zero so a gain and a loss of the same size print the same,
+  // and never show a signed zero: -$0 reads as a fall when nothing really moved.
+  function money(n) {
+    const v = Number(n) || 0;
+    const r = (v < 0 ? -1 : 1) * Math.round(Math.abs(v));
+    return usd.format(r === 0 ? 0 : r);
+  }
   function moneyCents(n) { return usdCents.format(n || 0); }
+  /** Margins decide the verdict, so print the cents when the whole-dollar figure would read as $0. */
+  function moneyNear(n) { return Math.abs(Number(n) || 0) < 1 ? moneyCents(n) : money(n); }
   function cents(n) { return Math.round((Number(n) || 0) * 100) / 100; }
   function pct(rate) { const p = rate * 100; return (Number.isInteger(p) ? p : p.toFixed(1).replace(/\.0$/, '')) + '%'; }
   function perMile(rate) { return (rate * 100).toFixed(1).replace(/\.0$/, '') + '¢/mile'; }
@@ -1041,6 +1121,32 @@ window.ITEMIZER_SINGLE_FILE = true;
     return Object.assign({}, merged, { year: y, baseYear, isFallback: baseYear !== y, hasOverrides: !!(overrides && overrides[y] && Object.keys(overrides[y]).length) });
   }
 
+  /** The settings rows that apply to one year: the standing list plus whatever that year actually has. */
+  function paramFields(taxYear, overrides) {
+    const P = getParams(taxYear, overrides);
+    return PARAM_FIELDS.concat(CONDITIONAL_PARAM_FIELDS.filter((f) => getPath(P, f.path) != null));
+  }
+
+  /**
+   * The mileage rate for one date. The IRS sometimes changes the rates mid-year
+   * (it did on July 1, 2026), so a year can have two sets and the entry's date picks one.
+   * An entry with no date takes the rate from the start of the year.
+   */
+  function mileageRate(P, key, dateISO) {
+    const late = P.mileageJul;
+    const from = late ? (late.from || `${P.baseYear || P.year}-07-01`) : null;
+    if (late && dateISO && String(dateISO) >= from) return Number(late[key]) || 0;
+    return (P.mileage && Number(P.mileage[key])) || 0;
+  }
+
+  /** "21¢/mile", or both figures when the rate changed during the year. */
+  function perMileText(P, key) {
+    const early = (P.mileage && Number(P.mileage[key])) || 0;
+    const late = P.mileageJul ? Number(P.mileageJul[key]) || 0 : early;
+    if (late === early) return perMile(early);
+    return `${perMile(early)} before July 1 and ${perMile(late)} after`;
+  }
+
   function taxYearOf(entry) {
     if (entry.taxYear) return Number(entry.taxYear);
     return Number(String(entry.date || '').slice(0, 4)) || null;
@@ -1067,7 +1173,7 @@ window.ITEMIZER_SINGLE_FILE = true;
 
     // per-line totals
     const lines = {};
-    for (const line of Schema.LINES) lines[line.id] = { id: line.id, total: 0, count: 0, missingReceipts: 0, entries: [] };
+    for (const line of Schema.LINES) lines[line.id] = { id: line.id, total: 0, count: 0, milesValue: 0, missingReceipts: 0, entries: [] };
     const months = new Array(12).fill(0);
     const monthsBySection = {};
     for (const sec of Schema.SECTIONS) monthsBySection[sec.id] = new Array(12).fill(0);
@@ -1077,16 +1183,17 @@ window.ITEMIZER_SINGLE_FILE = true;
       const amt = Number(e.amount) || 0;
       const L = lines[line.id];
       L.total += amt; L.count += 1; L.entries.push(e);
+      // Miles are valued one entry at a time, because the rate can change during the year.
+      if (line.unit === 'miles' && line.rate) L.milesValue += amt * mileageRate(P, line.rate, e.date);
       if (line.unit === 'usd' && amt >= P.receiptThreshold && !e.hasReceipt) L.missingReceipts += 1;
     }
-    for (const id of Object.keys(lines)) lines[id].total = cents(lines[id].total);
+    for (const id of Object.keys(lines)) { lines[id].total = cents(lines[id].total); lines[id].milesValue = cents(lines[id].milesValue); }
 
     const T = (id) => lines[id].total;
-    const rateFor = (line) => (line.rate ? P.mileage[line.rate] || 0 : 0);
-    /** dollar value of a line: dollars, or miles × rate; info lines carry no value */
+    /** dollar value of a line: dollars, or miles at the rate for each entry's date; info lines carry no value */
     const valueOf = (line) => {
       if (line.treatment === 'info') return 0;
-      return line.unit === 'miles' ? cents(T(line.id) * rateFor(line)) : T(line.id);
+      return line.unit === 'miles' ? lines[line.id].milesValue : T(line.id);
     };
 
     // month buckets (in dollar value)
@@ -1095,7 +1202,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       if (line.treatment === 'info') continue;
       const m = Number(String(e.date || '').slice(5, 7)) - 1;
       if (m < 0 || m > 11) continue;
-      const v = line.unit === 'miles' ? (Number(e.amount) || 0) * rateFor(line) : (Number(e.amount) || 0);
+      const v = line.unit === 'miles' ? (Number(e.amount) || 0) * mileageRate(P, line.rate, e.date) : (Number(e.amount) || 0);
       months[m] += v;
       monthsBySection[line.sectionId][m] += v;
     }
@@ -1115,10 +1222,18 @@ window.ITEMIZER_SINGLE_FILE = true;
 
     // ---- Schedule A ----
     const medicalLines = Schema.linesForSection('medical');
-    const medGross = cents(medicalLines.reduce((a, l) => a + valueOf(l), 0));
+    // §213(d)(10) caps long-term-care premiums by age, and the cap is per insured person. One worksheet
+    // line cannot tell one policy from two, so only an obviously excessive figure is trimmed: the top
+    // band, doubled on a joint return where both spouses can be insured. The preparer applies each age.
+    const ltcPaid = T('med.ltc');
+    const ltcLimits = P.ltcPremiumLimits || null;
+    const ltcBound = ltcLimits ? cents((s.age65 ? ltcLimits.over70 : ltcLimits.to70) * (s.filingStatus === 'mfj' ? 2 : 1)) : null;
+    const ltcCounted = ltcBound == null ? ltcPaid : Math.min(ltcPaid, ltcBound);
+    const medGross = cents(medicalLines.reduce((a, l) => a + valueOf(l), 0) - (ltcPaid - ltcCounted));
     const medFloor = agi == null ? null : cents(agi * P.medicalFloorRate);
     const medical = {
       gross: medGross,
+      ltc: { paid: ltcPaid, counted: cents(ltcCounted), bound: ltcBound, limits: ltcLimits, capped: ltcCounted < ltcPaid },
       milesValue: valueOf(Schema.getLine('med.miles')),
       floor: medFloor,
       deductible: medFloor == null ? null : cents(Math.max(0, medGross - medFloor)),
@@ -1126,9 +1241,10 @@ window.ITEMIZER_SINGLE_FILE = true;
       shortfall: medFloor == null ? null : cents(Math.max(0, medFloor - medGross)),
     };
 
-    // W-2 state and local withholding is usually the largest SALT item and is never an entry; states without an income tax use the sales-tax election instead.
+    // W-2 state and local withholding is usually the largest SALT item and is never an entry. It counts
+    // wherever it was withheld: someone living in a state with no income tax may still work in one.
     const stateCode = String(s.state || '').toUpperCase() || null;
-    const withheld = NO_INCOME_TAX_STATES.has(stateCode || '') ? 0 : cents(Math.max(0, Number(s.stateWithholding) || 0));
+    const withheld = cents(Math.max(0, Number(s.stateWithholding) || 0));
     const taxGross = cents(sections.taxes.value + withheld);
     let saltCap = isMFS ? P.saltCap.mfs : P.saltCap.default;
     let saltPhasedOut = false;
@@ -1200,14 +1316,19 @@ window.ITEMIZER_SINGLE_FILE = true;
     }
     const perCondition = married ? P.additionalStdDed.married : P.additionalStdDed.unmarried;
     const baseStd = P.standardDeduction[s.filingStatus];
+    // From 2026 a non-itemizer also deducts cash gifts (§170(p)), so they belong on the standard-deduction
+    // side of the comparison, exactly like a qualified disaster loss.
+    const nonItemizerCap = P.nonItemizerCharity ? (s.filingStatus === 'mfj' ? P.nonItemizerCharity.mfj : P.nonItemizerCharity.single) : 0;
     const standardDeduction = {
       base: Number.isFinite(baseStd) ? baseStd : P.standardDeduction.single,
       additional: cents(conditions.length * perCondition),
       conditions,
       disasterLoss: casualty.addedToStandard ? casualty.deductible : 0,
+      charity: P.nonItemizerCharity ? cents(Math.min(nonItemizerCap, charity.cash)) : 0,
+      charityCap: P.nonItemizerCharity ? nonItemizerCap : 0,
       total: 0,
     };
-    standardDeduction.total = cents(standardDeduction.base + standardDeduction.additional + standardDeduction.disasterLoss);
+    standardDeduction.total = cents(standardDeduction.base + standardDeduction.additional + standardDeduction.disasterLoss + standardDeduction.charity);
 
     const sliPaid = T('edu.loan_interest');
     const saltFloor = P.saltPhaseout ? (isMFS ? P.saltPhaseout.floor.mfs : P.saltPhaseout.floor.default) : Infinity;
@@ -1217,7 +1338,8 @@ window.ITEMIZER_SINGLE_FILE = true;
       progress: standardDeduction.total ? Math.min(1, scheduleA.total / standardDeduction.total) : 0,
       medicalPending: medical.pending,
       // Without an AGI the engine assumes the best case for every income-based limit; say so instead of staying quiet.
-      agiPending: agi == null && !!(medical.pending || charity.floorPending || charity.limitPending || taxGross > saltFloor || (casGross > 0 && s.casualtyFederalDisaster) || sliPaid > 0),
+      // A qualified disaster loss is fully sized without an AGI, so it is not waiting on one.
+      agiPending: agi == null && !!(medical.pending || charity.floorPending || charity.limitPending || taxGross > saltFloor || (casGross > 0 && casualty.federalDisaster && casualty.afterLimits == null) || sliPaid > 0),
     };
 
     // ---- above the line / credits ----
@@ -1226,15 +1348,36 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (P.studentLoanPhaseout && agi != null && sliPaid > 0) {
       const range = s.filingStatus === 'mfj' ? P.studentLoanPhaseout.mfj : P.studentLoanPhaseout.single; // the joint range is for joint returns only
       if (isMFS) { sliDeductible = 0; sliPhase = 'mfs'; }
-      else if (agi >= range[1]) { sliDeductible = 0; sliPhase = 'out'; }
-      else if (agi > range[0]) { sliDeductible = cents(sliDeductible * (1 - (agi - range[0]) / (range[1] - range[0]))); sliPhase = 'partial'; }
+      else if (agi >= range.end) { sliDeductible = 0; sliPhase = 'out'; }
+      else if (agi > range.start) { sliDeductible = cents(sliDeductible * (1 - (agi - range.start) / (range.end - range.start))); sliPhase = 'partial'; }
       else sliPhase = 'full';
     } else if (isMFS && sliPaid > 0) { sliDeductible = 0; sliPhase = 'mfs'; }
     const adjustments = { studentLoanInterest: { paid: sliPaid, cap: P.studentLoanInterestCap, deductible: sliDeductible, phase: sliPhase, phaseoutChecked: !!(P.studentLoanPhaseout && agi != null) || isMFS } };
 
+    // P.L. 119-21 §70103 (§151(d)(5)): $6,000 for each person aged 65 or older, 2025 through 2028,
+    // whether or not you itemize. The reduction applies to each person's own $6,000, and married
+    // taxpayers must file jointly to claim it.
+    adjustments.seniorDeduction = null;
+    if (P.seniorDeduction) {
+      const seniors = (s.age65 ? 1 : 0) + (s.filingStatus === 'mfj' && s.spouseAge65 ? 1 : 0);
+      const startAt = s.filingStatus === 'mfj' ? P.seniorDeduction.phaseoutStart.mfj : P.seniorDeduction.phaseoutStart.default;
+      const perPerson = agi == null ? P.seniorDeduction.perPerson : Math.max(0, cents(P.seniorDeduction.perPerson - P.seniorDeduction.rate * Math.max(0, agi - startAt)));
+      const amount = isMFS ? 0 : cents(seniors * perPerson);
+      adjustments.seniorDeduction = {
+        people: seniors,
+        perPerson: isMFS ? 0 : perPerson,
+        amount,
+        phase: isMFS ? 'mfs' : agi == null ? 'unchecked' : amount === 0 && seniors > 0 ? 'out' : perPerson < P.seniorDeduction.perPerson ? 'partial' : 'full',
+      };
+    }
+
+    const eduRange = P.educationCreditPhaseout ? (s.filingStatus === 'mfj' ? P.educationCreditPhaseout.mfj : P.educationCreditPhaseout.single) : null;
     const credits = {
       educationCosts: cents(['edu.expenses', 'edu.tuition', 'edu.books', 'edu.lab', 'edu.supplies'].reduce((a, id) => a + T(id), 0)),
       tuition: T('edu.tuition'),
+      // §25A(d) phases both education credits out on income; the ranges are statutory, not indexed.
+      educationCreditRange: eduRange,
+      educationCreditPhase: isMFS ? 'mfs' : !eduRange || agi == null ? 'unchecked' : agi >= eduRange.end ? 'out' : agi > eduRange.start ? 'partial' : 'full',
     };
 
     // ---- Schedule C ----
@@ -1244,7 +1387,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const mealsDeductible = cents(mealsPaid * P.mealsDeductibleRate);
     const actualCar = T('se.car');
     const bizMiles = T('se.miles');
-    const bizMilesValue = cents(bizMiles * P.mileage.business);
+    const bizMilesValue = valueOf(Schema.getLine('se.miles'));
     const totalMiles = T('se.total_miles');
     const scheduleC = {
       otherExpenses: seOther,
@@ -1308,6 +1451,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     const inYear = today.getFullYear() === R.taxYear;
     const isMFS0 = R.filingStatus === 'mfs';
     const month = today.getMonth() + 1;
+    // What the standard-deduction side of the comparison is made of, when it is more than the table figure.
+    const stdPlus = SD.charity > 0 ? `${money(SD.total)} standard deduction (including ${money(SD.charity)} of cash gifts, which count without itemizing)` : `${money(SD.total)} standard deduction`;
 
     const noIncomeTax0 = NO_INCOME_TAX_STATES.has(R.state || '');
     if (P.isFallback) add('warn', `No built-in figures for ${R.taxYear}`, `Using ${P.baseYear} standard deductions, caps, and mileage rates. Check Settings → Rates & thresholds and enter the ${R.taxYear} figures when the IRS publishes them.`, { view: 'settings' });
@@ -1316,43 +1461,53 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (R.entries.length === 0) {
       add('info', `Nothing logged for ${R.taxYear} yet`, `Your standard deduction is ${money(SD.total)}. Log expenses as they happen and this page will tell you the moment itemizing starts to pay.`);
     } else if (V.itemize) {
-      add('good', `Itemizing wins by ${money(V.difference)}`, `Schedule A deductions of ${money(A.total)} beat your ${money(SD.total)} standard deduction. Every additional dollar you log now lowers your taxable income — keep the receipts.${V.agiPending ? ' This assumes the full state-and-local cap and no income-based limits; enter your estimated AGI in Settings to confirm.' : ''}`, V.agiPending ? { view: 'settings' } : undefined);
+      add('good', `Itemizing wins by ${moneyNear(V.difference)}`, `Schedule A deductions of ${money(A.total)} beat your ${stdPlus}.${inYear ? ' Every additional dollar you log now lowers your taxable income — keep the receipts.' : ' Keep the receipts with the return.'}${V.agiPending ? ' This assumes the full state-and-local cap and no income-based limits; enter your estimated AGI in Settings to confirm.' : ''}`, V.agiPending ? { view: 'settings' } : undefined);
     } else {
-      const need = money(-V.difference);
-      let body = `Your itemized deductions come to ${money(A.total)} after floors and caps, against a ${money(SD.total)} standard deduction. You would need ${need} more for itemizing to help.`;
+      const need = moneyNear(-V.difference);
+      let body = `Your itemized deductions come to ${money(A.total)} after floors and caps, against a ${stdPlus}. You would need ${need} more for itemizing to help.`;
       if (V.medicalPending) body += ` Medical expenses are not counted yet — enter your AGI in Settings.`;
       if (!A.taxes.withheld && !noIncomeTax0 && T('tax.state_income') + T('tax.real_estate') > 0) body += ` State and local income tax withheld from your pay (W-2 boxes 17 and 19) also counts — enter it in Settings.`;
       add('info', 'Standard deduction still wins', body, { view: 'settings' });
       const closeEnough = -V.difference <= Math.max(3000, SD.total * 0.3);
-      if (closeEnough && A.total > 0) {
+      if (closeEnough && A.total > 0 && inYear) {
         add('act', 'Close to the line — consider bunching', `Paying deductible bills before Dec 31 that you would otherwise pay in January (a property-tax installment, next year's charitable pledge, an elective medical procedure) can push ${R.taxYear} over the standard deduction. Then take the standard deduction the following year. Two years of bunched deductions beat two years of just missing.`);
+      } else if (closeEnough && A.total > 0) {
+        // The year is over, so this is history: say what happened and where bunching still helps.
+        add('info', `${R.taxYear} fell ${need} short of itemizing`, `Nothing can change ${R.taxYear} now. Bunching is the play for a year you can still act on: pay two years of deductible bills in one calendar year — a property-tax installment, a charitable pledge, elective medical work — and take the standard deduction in the other.`);
       }
     }
 
     // Medical
     if (A.medical.gross > 0) {
       if (agi == null) add('act', 'Enter your estimated AGI', `Medical expenses only count above ${pct(P.medicalFloorRate)} of adjusted gross income. Without an AGI, ${money(A.medical.gross)} of medical costs cannot be evaluated and is left out of the itemized total.`, { view: 'settings' });
-      else if (A.medical.deductible === 0) add('info', `Medical costs are under the ${pct(P.medicalFloorRate)} floor`, `${money(A.medical.gross)} logged; the first ${money(A.medical.floor)} (${pct(P.medicalFloorRate)} of ${money(agi)}) never counts. Another ${money(A.medical.shortfall)} of medical spending would start to count — dental work, glasses, and after-tax premiums add up faster than people expect.`);
+      else if (A.medical.deductible === 0) add('info', `Medical costs are under the ${pct(P.medicalFloorRate)} floor`, `${money(A.medical.gross)} logged; the first ${money(A.medical.floor)} (${pct(P.medicalFloorRate)} of ${money(agi)}) never counts. ${A.medical.shortfall === 0 ? 'You are exactly on the floor, so the next dollar of medical spending starts to count' : `Another ${moneyNear(A.medical.shortfall)} of medical spending would start to count`} — dental work, glasses, and after-tax premiums add up faster than people expect.`);
       else add('good', `${money(A.medical.deductible)} of medical costs count`, `${money(A.medical.gross)} logged, less the ${money(A.medical.floor)} floor (${pct(P.medicalFloorRate)} of AGI).`);
     }
     if (A.medical.gross > 0 && T('med.insurance') === 0) add('info', 'Check for after-tax insurance premiums', 'Medicare Part B/D, marketplace premiums you paid yourself, and dental or vision plans paid after tax all count on the Medical/Dental Insurance line. Premiums withheld pre-tax from a paycheck do not.');
-    if (T('med.miles') > 0) add('info', `Medical miles are worth ${money(A.medical.milesValue)}`, `${T('med.miles').toLocaleString()} miles at ${perMile(P.mileage.medical)}. Parking and tolls on those trips go under Other Medical Transportation.`);
-    if (R.scheduleC.hasActivity && T('med.insurance') > 0) add('act', 'Self-employed? Move health premiums above the line', `With self-employment profit, health, dental, and long-term-care premiums (${money(T('med.insurance') + T('med.ltc'))}) can be deducted on Schedule 1 with no ${pct(P.medicalFloorRate)} floor — usually far better than Schedule A. Tell your preparer which it is.`);
+    if (T('med.miles') > 0) add('info', `Medical miles are worth ${money(A.medical.milesValue)}`, `${T('med.miles').toLocaleString()} miles at ${perMileText(P, 'medical')}. Parking and tolls on those trips go under Other Medical Transportation.`);
+    const LTC = A.medical.ltc;
+    if (LTC && LTC.paid > 0 && LTC.limits) {
+      const bands = `${money(LTC.limits.to40)} at age 40 or under, ${money(LTC.limits.to50)} at 41 to 50, ${money(LTC.limits.to60)} at 51 to 60, ${money(LTC.limits.to70)} at 61 to 70, and ${money(LTC.limits.over70)} over 70`;
+      if (LTC.capped) add('warn', 'Long-term-care premiums are limited by age', `You logged ${money(LTC.paid)}; ${money(LTC.counted)} is counted, which is the most any one insured person of your age can claim in ${R.taxYear}. The limit for ${R.taxYear} is ${bands} — per insured person, so a couple who each hold a policy get two limits. Tell your preparer the age of each insured person.`);
+      else add('info', 'Long-term-care premiums have an age limit', `Only part of a long-term-care premium counts as a medical expense: ${bands} for ${R.taxYear}. The limit is per insured person, so each spouse's policy has its own. Your preparer applies the band for each age.`);
+    }
+    if (R.scheduleC.hasActivity && T('med.insurance') > 0) add('act', 'Self-employed? Move health premiums above the line', `With self-employment profit, health, dental, and long-term-care premiums (${money(T('med.insurance') + (LTC ? LTC.counted : T('med.ltc')))}) can be deducted on Schedule 1 with no ${pct(P.medicalFloorRate)} floor — usually far better than Schedule A. The same age limit applies to the long-term-care part. Tell your preparer which it is.`);
 
     // Taxes
     if (A.taxes.withheld > 0) add('info', `${money(A.taxes.withheld)} of state tax withholding is counted`, 'Income tax withheld from your pay (W-2 boxes 17 and 19) counts toward the state-and-local deduction alongside the payments you log here.');
-    if (A.taxes.excess > 0) add('warn', 'State and local taxes hit the cap', `${money(A.taxes.gross)} ${A.taxes.withheld > 0 ? 'logged and withheld' : 'logged'} but only ${money(A.taxes.cap)} can be deducted${A.taxes.phasedOut ? ' (the cap is reduced at your income level)' : ''}. ${money(A.taxes.excess)} will not count — there is no reason to prepay more this year.`);
+    if (A.taxes.excess > 0) add('warn', 'State and local taxes hit the cap', `${money(A.taxes.gross)} ${A.taxes.withheld > 0 ? 'logged and withheld' : 'logged'} but only ${money(A.taxes.cap)} can be deducted${A.taxes.phasedOut ? ' (the cap is reduced at your income level)' : ''}. ${money(A.taxes.excess)} will not count${inYear ? ' — there is no reason to prepay more this year' : ''}.`);
     if (T('tax.personal_property') > 0) add('info', 'Only the value-based part of vehicle fees counts', 'Personal property tax must be based on the item\'s value (ad valorem). Flat registration or plate fees are not deductible — check the registration notice for the breakdown.');
     if (T('int.mortgage') > 0 && T('tax.real_estate') === 0) add('act', 'Mortgage interest logged but no property tax', 'If your lender pays property tax from escrow, the amount disbursed is on Form 1098 box 10 or your annual escrow statement — it belongs on the Real Estate Tax line.', { view: 'capture' });
     const noIncomeTax = NO_INCOME_TAX_STATES.has(R.state || '');
     if (T('tax.state_income') > 0 && !noIncomeTax) add('info', 'State payments: timing matters', `Estimated payments and any prior-year state balance actually paid during ${R.taxYear} count for ${R.taxYear} — including a Q4 estimate paid by Dec 31. Withholding is already on your W-2.`);
-    if (noIncomeTax) add('info', `${R.state} has no income tax: deduct sales tax instead`, 'Schedule A lets you deduct general sales taxes in place of state income tax. Your preparer uses the IRS table for your state, income, and household size, and can add the sales tax on a vehicle, boat, or home-building materials bought this year — keep those receipts.');
+    if (noIncomeTax) add('info', `${R.state} has no income tax: sales tax may be the better claim`, 'Schedule A lets you deduct either the state and local income tax you paid or general sales taxes, whichever is larger. Your preparer uses the IRS table for your state, income, and household size, and can add the sales tax on a vehicle, boat, or home-building materials bought this year — keep those receipts.');
+    if (noIncomeTax && A.taxes.withheld > 0) add('info', `The ${money(A.taxes.withheld)} of withholding is counted as another state's tax`, `${R.state} has no income tax on wages, so withholding on your W-2 is presumably another state's or a local one — someone who lives in one state and works in another. It counts toward the state-and-local deduction. Clear the figure in Settings if it is not income tax.`, { view: 'settings' });
 
     // Interest
     if (T('int.individual') > 0) add('act', 'Record the private lender\'s name, address, and TIN', 'With no Form 1098, Schedule A requires the individual lender\'s name, address, and Social Security or employer ID number. Put them in the entry note.', { view: 'ledger' });
     if (T('int.second') > 0) add('info', 'Home equity interest has a use test', 'Interest on a HELOC or second mortgage counts only if the money was used to buy, build, or substantially improve the home securing it — not for cars, tuition, or paying off cards.');
     if (T('int.points') > 0) add('info', 'Points: purchase vs. refinance', 'Points paid to buy your main home are deductible in full this year. Points on a refinance are spread evenly over the life of the loan (any unamortized balance is deductible when that loan is paid off).');
-    if (R.taxYear >= 2026 && P.pmiPhaseout && T('int.mortgage') > 0) add('info', 'Mortgage insurance premiums count again from 2026', `Premiums for mortgage insurance (Form 1098 box 5 — PMI, FHA, VA, or USDA) are deductible as mortgage interest again starting 2026, phasing out between ${money(isMFS0 ? P.pmiPhaseout.mfs[0] : P.pmiPhaseout.default[0])} and ${money(isMFS0 ? P.pmiPhaseout.mfs[1] : P.pmiPhaseout.default[1])} of AGI. Log the box 5 amount on the Home Mortgage Interest line.`);
+    if (R.taxYear >= 2026 && P.pmiPhaseout && T('int.mortgage') > 0) add('info', 'Mortgage insurance premiums count again from 2026', `Premiums for mortgage insurance (Form 1098 box 5 — PMI, FHA, VA, or USDA) are deductible as mortgage interest again starting 2026, phasing out between ${money(isMFS0 ? P.pmiPhaseout.mfs.start : P.pmiPhaseout.default.start)} and ${money(isMFS0 ? P.pmiPhaseout.mfs.end : P.pmiPhaseout.default.end)} of AGI. Log the box 5 amount on the Home Mortgage Interest line.`);
     if (T('int.investment') > 0) add('info', 'Investment interest is limited to investment income', 'Margin and other investment interest is deductible only up to net investment income, on Form 4952; the excess carries forward.');
 
     // Charity
@@ -1360,10 +1515,10 @@ window.ITEMIZER_SINGLE_FILE = true;
       const n = R.substantiation.giftsNoAck.length;
       add('act', `${n} ${plural(n, 'gift needs', 'gifts need')} a written acknowledgment`, `Any single gift of ${money(P.acknowledgmentThreshold)} or more requires a contemporaneous written acknowledgment from the charity stating the amount and whether you received anything in return. A cancelled check is not enough. Attach the letter or email to the entry.`, { view: 'ledger', filter: 'noack' });
     }
-    if (A.charity.nonCashNeedsAppraisal) add('act', 'Non-cash gifts over $5,000 need a qualified appraisal', `${money(A.charity.noncash)} of donated goods. Items or groups of similar items over ${money(P.nonCashAppraisal)} require a qualified appraisal and Section B of Form 8283.`);
+    if (A.charity.nonCashNeedsAppraisal) add('act', `Donated goods pass ${money(P.nonCashAppraisal)} — check whether a qualified appraisal is needed`, `A qualified appraisal and Section B of Form 8283 are required for any single item, or group of similar items, worth more than ${money(P.nonCashAppraisal)}. You logged ${money(A.charity.noncash)} of donated goods across the year, so check whether any one group crosses the line.`);
     else if (A.charity.nonCashNeedsForm8283) add('act', 'Non-cash gifts total over $500 — Form 8283', `${money(A.charity.noncash)} of donated goods requires Form 8283. For each drop-off keep the dated receipt plus your own list: item, condition, and thrift-shop value. Items must be in good used condition or better.`);
     if (T('ch.cfc') > 0) add('info', 'CFC: keep the pledge card and final pay statement', 'Payroll-deducted Combined Federal Campaign gifts are substantiated by your pledge confirmation together with the last pay statement of the year showing the total withheld.');
-    if (A.charity.volunteer > 0) add('info', 'Volunteer costs count, your time does not', `${money(A.charity.volunteer)} of out-of-pocket volunteer costs${T('vol.miles') > 0 ? ` (including ${T('vol.miles').toLocaleString()} miles at ${perMile(P.mileage.charity)})` : ''} are treated as gifts to the organization. Keep a note of the event and the organization for each.`);
+    if (A.charity.volunteer > 0) add('info', 'Volunteer costs count, your time does not', `${money(A.charity.volunteer)} of out-of-pocket volunteer costs${T('vol.miles') > 0 ? ` (including ${T('vol.miles').toLocaleString()} miles at ${perMileText(P, 'charity')})` : ''} are treated as gifts to the organization. Keep a note of the event and the organization for each.`);
     if (A.charity.carryforward > 0) add('warn', 'Gifts exceed the AGI limit', `Charitable gifts are deductible up to ${pct(P.charityCashAgiLimit)} of AGI (${money(A.charity.cashLimit)}) this year, so ${money(A.charity.carryforward)} is left out of the total. It is not lost — it carries forward up to five years. Gifts of property can be subject to lower 30% or 50% limits that this worksheet cannot tell apart; your preparer will.`);
     else if (A.charity.limitPending && A.charity.gross > 0 && A.charity.gross > 5000) add('info', 'Large gifts: enter your AGI', `Gifts are deductible only up to ${pct(P.charityCashAgiLimit)} of AGI in a year. Enter your estimated AGI in Settings to see whether ${money(A.charity.gross)} all counts this year.`, { view: 'settings' });
     if (P.charityFloorRate > 0 && A.charity.gross > 0 && V.itemize) {
@@ -1371,8 +1526,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       else add('info', `First ${money(A.charity.floor)} of gifts does not count`, `Itemizers lose the first ${pct(P.charityFloorRate)} of AGI of charitable gifts starting ${R.taxYear}. ${money(A.charity.deductible)} of your ${money(A.charity.gross)} counts.`);
     }
     if (P.nonItemizerCharity && !V.itemize && A.charity.cash > 0) {
-      const cap = R.filingStatus === 'mfj' ? P.nonItemizerCharity.mfj : P.nonItemizerCharity.single; // $2,000 is for joint returns only
-      add('good', 'Cash gifts count even without itemizing', `Starting ${R.taxYear}, non-itemizers can deduct up to ${money(cap)} of cash gifts. You have logged ${money(A.charity.cash)} — ${money(Math.min(cap, A.charity.cash))} of it counts on top of the standard deduction.`);
+      add('good', 'Cash gifts count even without itemizing', `Starting ${R.taxYear}, non-itemizers can deduct up to ${money(SD.charityCap)} of cash gifts. You have logged ${money(A.charity.cash)}, and ${money(SD.charity)} of it is already counted on top of your standard deduction above. Only cash to a public charity counts — not a gift to a donor-advised fund (Fidelity Charitable, Schwab Charitable, Vanguard Charitable), not a gift to a supporting organization, and not donated goods.`);
     }
 
     // Other / casualty
@@ -1396,12 +1550,26 @@ window.ITEMIZER_SINGLE_FILE = true;
       else add(SLI.phaseoutChecked ? 'good' : 'info', `${money(SLI.deductible)} of student loan interest ${SLI.phaseoutChecked ? 'counts' : 'may count'} without itemizing`, `${SLI.paid > SLI.cap ? `Capped at ${money(SLI.cap)} of the ${money(SLI.paid)} paid. ` : ''}This is an adjustment to income, so it helps even if you take the standard deduction. Your servicer's Form 1098-E is the proof.${SLI.phaseoutChecked ? '' : (agi == null ? ' It phases out at higher incomes — enter your estimated AGI in Settings to check.' : ' It phases out at higher incomes and the range for this year is not built in — see IRS Publication 970.')}`, SLI.phaseoutChecked ? undefined : { view: 'settings' });
     }
     if (R.credits.tuition > 0 && R.filingStatus === 'mfs') add('warn', 'Education credits are not allowed when married filing separately', `The American Opportunity and Lifetime Learning credits require a joint return for married couples, so ${money(R.credits.tuition)} of tuition earns no credit on a separate return. Filing jointly may be worth more than the separate returns — ask your preparer.`);
-    else if (R.credits.tuition > 0) add('good', 'Tuition may qualify for an education credit', `The American Opportunity Credit (up to $2,500 per student, first four years) or Lifetime Learning Credit (up to $2,000) is usually worth far more than a deduction. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged).`);
-    else if (R.credits.educationCosts > 0) add('info', 'Education costs: tell your preparer the purpose', `${money(R.credits.educationCosts)} logged. Costs for a degree program may support a credit; K-12 educators can deduct up to $300 of classroom expenses above the line; job-related training for employees is generally not deductible.`);
+    else if (R.credits.tuition > 0) {
+      const range = R.credits.educationCreditRange;
+      const band = range ? `${money(range.start)} and ${money(range.end)} of income (${money(P.educationCreditPhaseout.mfj.start)} to ${money(P.educationCreditPhaseout.mfj.end)} on a joint return)` : '';
+      if (R.credits.educationCreditPhase === 'out') add('warn', 'Income is above the education-credit phase-out', `At ${money(agi)} of AGI both the American Opportunity and Lifetime Learning credits are fully phased out, so ${money(R.credits.tuition)} of tuition earns no credit on your return. It can still matter: a tax-free 529 withdrawal, employer tuition assistance, a state credit, or the student's own return if they are no longer your dependent. Ask your preparer.`);
+      else if (R.credits.educationCreditPhase === 'partial') add('info', 'Education credits are partly phased out', `At ${money(agi)} of AGI the American Opportunity and Lifetime Learning credits are reduced; they phase out between ${band}. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged) so your preparer can work out what is left.`);
+      else add('good', 'Tuition may qualify for an education credit', `The American Opportunity Credit (up to $2,500 per student, first four years) or Lifetime Learning Credit (up to $2,000) is usually worth far more than a deduction. Bring Form 1098-T and receipts for required books and supplies (${money(R.credits.educationCosts)} logged).${R.credits.educationCreditPhase === 'unchecked' && range ? ` The credits phase out between ${band} — enter your estimated AGI in Settings to check.` : ''}`, R.credits.educationCreditPhase === 'unchecked' ? { view: 'settings' } : undefined);
+    }
+    else if (R.credits.educationCosts > 0) add('info', 'Education costs: tell your preparer the purpose', `${money(R.credits.educationCosts)} logged. Costs for a degree program may support a credit; K-12 educators can deduct up to ${money(P.educatorExpenseCap)} of classroom expenses above the line${R.taxYear >= 2026 ? ', and from 2026 an educator can also itemize classroom expenses above that cap' : ''}; other job-related training for employees is generally not deductible.`);
+    const SENIOR = R.adjustments.seniorDeduction;
+    if (SENIOR && SENIOR.people > 0) {
+      const years = `${R.taxYear} through 2028`;
+      if (SENIOR.phase === 'mfs') add('info', 'The senior deduction needs a joint return', `A married taxpayer filing separately cannot take the extra ${money(P.seniorDeduction.perPerson)} deduction for being 65 or older. Filing jointly may be worth more than two separate returns — ask your preparer.`);
+      else if (SENIOR.phase === 'unchecked') add('info', `An extra ${money(SENIOR.perPerson)} deduction for being 65 or older`, `For ${years}, each person aged 65 or older deducts up to ${money(P.seniorDeduction.perPerson)} whether or not they itemize. It shrinks by ${pct(P.seniorDeduction.rate)} of income above ${money(R.filingStatus === 'mfj' ? P.seniorDeduction.phaseoutStart.mfj : P.seniorDeduction.phaseoutStart.default)} — enter your estimated AGI in Settings to see the figure.`, { view: 'settings' });
+      else if (SENIOR.phase === 'out') add('info', 'Income is above the senior deduction', `The extra ${money(P.seniorDeduction.perPerson)} deduction for being 65 or older is fully phased out at ${money(agi)} of AGI. It falls by ${pct(P.seniorDeduction.rate)} of income above ${money(R.filingStatus === 'mfj' ? P.seniorDeduction.phaseoutStart.mfj : P.seniorDeduction.phaseoutStart.default)}.`);
+      else add('good', `${money(SENIOR.amount)} senior deduction on top of everything else`, `For ${years}, each person aged 65 or older deducts up to ${money(P.seniorDeduction.perPerson)}${SENIOR.people > 1 ? ` (two of you, so ${money(2 * P.seniorDeduction.perPerson)} before any reduction)` : ''}, whether or not you itemize.${SENIOR.phase === 'partial' ? ` At ${money(agi)} of AGI it is reduced to ${money(SENIOR.perPerson)} each.` : ''} This is separate from the extra standard deduction for age, which the figures above already include. Remind your preparer.`);
+    }
 
     // Schedule C
     const C = R.scheduleC;
-    if (C.vehicle.methodConflict) add('warn', 'Pick one vehicle method', `You logged both actual car expenses (${money(C.vehicle.actual)}) and business miles (${C.vehicle.miles.toLocaleString()} mi = ${money(C.vehicle.milesValue)} at ${perMile(P.mileage.business)}). Only one method per vehicle is allowed; the ${C.vehicle.best === 'standard' ? 'standard mileage rate' : 'actual expense method'} is worth more so far.`);
+    if (C.vehicle.methodConflict) add('warn', 'Pick one vehicle method', `You logged both actual car expenses (${money(C.vehicle.actual)}) and business miles (${C.vehicle.miles.toLocaleString()} mi = ${money(C.vehicle.milesValue)} at ${perMileText(P, 'business')}). Only one method per vehicle is allowed; the ${C.vehicle.best === 'standard' ? 'standard mileage rate' : 'actual expense method'} is worth more so far.`);
     if (C.vehicle.miles > 0 && C.vehicle.totalMiles === 0) add('act', 'Log total miles for the year', 'Schedule C asks for the vehicle\'s total miles (all purposes) to compute business-use percentage. Note the odometer on Jan 1 and Dec 31 and enter the difference on the Total Miles line.', { view: 'capture' });
     if (C.vehicle.miles > 0 && C.vehicle.totalMiles > 0 && C.vehicle.miles > C.vehicle.totalMiles) add('warn', 'Business miles exceed total miles', 'Business miles cannot be more than the total miles the vehicle was driven. Check the Total Miles entry.');
     if (C.meals.paid > 0) add('info', `Business meals: ${money(C.meals.deductible)} of ${money(C.meals.paid)} counts`, `Meals are ${pct(C.meals.rate)} deductible. For each, note who you met and the business purpose — the receipt alone is not enough.`);
@@ -1420,7 +1588,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     return out.sort((a, b) => order[a.level] - order[b.level]);
   }
 
-  return { FILING_STATUSES, NO_INCOME_TAX_STATES, PARAMS, PARAM_FIELDS, KNOWN_YEARS, getParams, compute, taxYearOf, money, moneyCents, cents, pct, perMile, deepMerge, getPath, setPath };
+  return { FILING_STATUSES, NO_INCOME_TAX_STATES, PARAMS, PARAM_FIELDS, CONDITIONAL_PARAM_FIELDS, KNOWN_YEARS, getParams, paramFields, compute, taxYearOf, money, moneyCents, moneyNear, cents, pct, perMile, perMileText, mileageRate, deepMerge, getPath, setPath };
 });
 
 ;
@@ -1449,7 +1617,10 @@ window.ITEMIZER_SINGLE_FILE = true;
   // Words that, when they end the description, are worth keeping ("donated" tells the classifier a lot).
   const KEEP_IF_ALONE = new Set(['donated', 'gave']);
   // A bare integer followed by one of these is a quantity, not a dollar amount.
-  const COUNT_NOUNS = new Set(['bag', 'bags', 'box', 'boxes', 'item', 'items', 'piece', 'pieces', 'session', 'sessions', 'visit', 'visits', 'trip', 'trips', 'night', 'nights', 'day', 'days', 'week', 'weeks', 'month', 'months', 'hour', 'hours', 'people', 'kids', 'ticket', 'tickets', 'pair', 'pairs', 'unit', 'units', 'dose', 'doses', 'pill', 'pills', 'round', 'rounds', 'times', 'x', 'shirts', 'coats', 'shoes', 'books', 'chairs', 'tables', 'toys', 'gallons', 'gal', 'lbs', 'pounds', 'oz', 'pct', 'percent', '%', 'copies', 'pages', 'stamps', 'rolls', 'cans', 'bottles', 'cases', 'packs', 'meals', 'lunches', 'dinners', 'appointments', 'appts', 'prescriptions', 'refills', 'loads', 'cartons']);
+  // Units of time, distance and weight belong here too: "45 min" and "18 km" are measurements, not money.
+  const COUNT_NOUNS = new Set(['bag', 'bags', 'box', 'boxes', 'item', 'items', 'piece', 'pieces', 'session', 'sessions', 'visit', 'visits', 'trip', 'trips', 'night', 'nights', 'day', 'days', 'week', 'weeks', 'month', 'months', 'hour', 'hours', 'people', 'kids', 'ticket', 'tickets', 'pair', 'pairs', 'unit', 'units', 'dose', 'doses', 'pill', 'pills', 'round', 'rounds', 'times', 'x', 'shirts', 'coats', 'shoes', 'books', 'chairs', 'tables', 'toys', 'gallons', 'gal', 'lbs', 'pounds', 'oz', 'pct', 'percent', '%', 'copies', 'pages', 'stamps', 'rolls', 'cans', 'bottles', 'cases', 'packs', 'meals', 'lunches', 'dinners', 'appointments', 'appts', 'prescriptions', 'refills', 'loads', 'cartons', 'min', 'mins', 'minute', 'minutes', 'hr', 'hrs', 'sec', 'secs', 'km', 'kms', 'lb', 'kg', 'yr', 'yrs', 'year', 'years', 'mo', 'mos', 'wk', 'wks', 'pants', 'socks']);
+  // Number words accepted in "two days ago" and the like.
+  const WORD_N = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 
   const pad2 = (n) => String(n).padStart(2, '0');
   const iso = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
@@ -1508,19 +1679,46 @@ window.ITEMIZER_SINGLE_FILE = true;
       result.dateSource = source;
     };
 
+    // Months are counted back from the first of the month, then the day is clamped: a month before Mar 31 is Feb 28.
+    const setMonthsBack = (n) => {
+      const dt = new Date(today);
+      const day = dt.getDate();
+      dt.setDate(1);
+      dt.setMonth(dt.getMonth() - n);
+      dt.setDate(Math.min(day, new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate()));
+      result.date = isoFromDate(dt);
+      result.dateSource = 'relative';
+    };
+
     let m;
     if (!result.date && (m = /\bday before yesterday\b/i.exec(s))) { setRelative(-2, 'relative'); s = cut(s, m); }
-    if (!result.date && (m = /\b(yesterday|yday)\b/i.exec(s))) { setRelative(-1, 'relative'); s = cut(s, m); }
-    if (!result.date && (m = /\b(today|tonight|this morning|this afternoon|just now)\b/i.exec(s))) { setRelative(0, 'relative'); s = cut(s, m); }
-    if (!result.date && (m = /\b(\d{1,2})\s+days?\s+ago\b/i.exec(s))) { setRelative(-Number(m[1]), 'relative'); s = cut(s, m); }
+    // The possessive is taken with the word, so "yesterday's lunch" does not leave a stray "'s" behind.
+    if (!result.date && (m = /\b(yesterday|yday)(?:'s)?\b/i.exec(s))) { setRelative(-1, 'relative'); s = cut(s, m); }
+    if (!result.date && (m = /\b(today|tonight|this morning|this afternoon|just now)(?:'s)?\b/i.exec(s))) { setRelative(0, 'relative'); s = cut(s, m); }
+    if (!result.date && (m = /\b(\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(day|week|month)s?\s+ago\b/i.exec(s))) {
+      const n = WORD_N[m[1].toLowerCase()] || Number(m[1]);
+      if (m[2].toLowerCase() === 'month') setMonthsBack(n);
+      else setRelative(-n * (m[2].toLowerCase() === 'week' ? 7 : 1), 'relative');
+      s = cut(s, m);
+    }
+    if (!result.date && (m = /\blast\s+(week|month)(?:'s)?\b/i.exec(s))) {
+      if (m[1].toLowerCase() === 'month') setMonthsBack(1);
+      else setRelative(-7, 'relative');
+      s = cut(s, m);
+    }
     // "last tue" / "this past Wed." take abbreviations; a bare "on" needs the full weekday so "on sunscreen" stays a word.
-    if (!result.date && (m = (new RegExp('\\b(?:last|this past)\\s+' + WEEKDAY_RE + '\\.?(?=\\s|$)', 'i').exec(s) || new RegExp('\\bon\\s+' + WEEKDAY_FULL_RE + '\\b', 'i').exec(s)))) {
-      const target = WEEKDAYS.findIndex((w) => w.startsWith(m[1].toLowerCase().slice(0, 3)));
-      if (target >= 0) {
-        let back = (today.getDay() - target + 7) % 7;
-        if (back === 0) back = 7;
-        setRelative(-back, 'relative');
-        s = cut(s, m);
+    if (!result.date) {
+      const lastForm = new RegExp('\\b(?:last|this past)\\s+' + WEEKDAY_RE + '(?:\'s)?\\.?(?=[\\s,;:!?]|$)', 'i').exec(s);
+      m = lastForm || new RegExp('\\bon\\s+' + WEEKDAY_FULL_RE + '(?:\'s)?\\b', 'i').exec(s);
+      if (m) {
+        const target = WEEKDAYS.findIndex((w) => w.startsWith(m[1].toLowerCase().slice(0, 3)));
+        if (target >= 0) {
+          let back = (today.getDay() - target + 7) % 7;
+          // "last Sunday" written on a Sunday means the week before; "on Sunday" written on a Sunday means today.
+          if (back === 0 && lastForm) back = 7;
+          setRelative(-back, 'relative');
+          s = cut(s, m);
+        }
       }
     }
     // ISO 2026-03-14
@@ -1543,16 +1741,19 @@ window.ITEMIZER_SINGLE_FILE = true;
       }
     }
     // "Mar 14", "March 14th, 2026", "mar. 14"
+    // As with the numeric form, the span is consumed only when the number reads as a day, so "May 40" leaves the 40 for the amount.
     if (!result.date && (m = new RegExp('\\b' + MONTH_RE + '\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(20\\d{2}))?\\b', 'i').exec(s))) {
       const mon = MONTHS[m[1].toLowerCase()];
+      const day = Number(m[2]);
       const yearGiven = m[3] != null;
-      if (mon) { setDate(yearGiven ? Number(m[3]) : defaultYear, mon, Number(m[2]), 'month-name', yearGiven); s = cut(s, m); }
+      if (mon && (setDate(yearGiven ? Number(m[3]) : defaultYear, mon, day, 'month-name', yearGiven) || (day >= 1 && day <= 31))) s = cut(s, m);
     }
-    // "14 Mar", "14th of March 2026"
-    if (!result.date && (m = new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + MONTH_RE + '\\.?(?:,?\\s+(20\\d{2}))?\\b', 'i').exec(s))) {
+    // "14 Mar", "14th of March 2026" — the day must start a word, so the 20 in "$20 Dec" is money, not a day.
+    if (!result.date && (m = new RegExp('(?:^|[\\s(])(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + MONTH_RE + '\\.?(?:,?\\s+(20\\d{2}))?\\b', 'i').exec(s))) {
       const mon = MONTHS[m[2].toLowerCase()];
+      const day = Number(m[1]);
       const yearGiven = m[3] != null;
-      if (mon) { setDate(yearGiven ? Number(m[3]) : defaultYear, mon, Number(m[1]), 'month-name', yearGiven); s = cut(s, m); }
+      if (mon && (setDate(yearGiven ? Number(m[3]) : defaultYear, mon, day, 'month-name', yearGiven) || (day >= 1 && day <= 31))) s = cut(s, m);
     }
 
     // ---- miles -------------------------------------------------------------
@@ -1564,26 +1765,34 @@ window.ITEMIZER_SINGLE_FILE = true;
     // ---- amount ------------------------------------------------------------
     // A period followed by a space or the end is punctuation ("Lunch 20."), so the lookaheads allow it.
     const amountPatterns = [
-      /(^|\s)-?\$\s?(\d[\d,]*(?:\.\d{1,2})?)(?!\.?\d)(?=[\s,.;)]|$)/, // $42.13 / $1,200 — never truncates $42.135 or $1.2k
+      /(^|\s)-?\$\s?(\d[\d,]*(?:\.\d{1,2})?|\.\d{1,2})(?!\.?\d)(?=[\s,.;)]|$)/, // $42.13 / $1,200 / $.50 — never truncates $42.135 or $1.2k
       /(^|\s)(\d[\d,]*\.\d{1,2})(?=[\s,;)]|\.(?:\s|$)|$)/, // 42.13 / 12.5
       /(^|\s)(\d[\d,]*(?:\.\d+)?)\s*(?:dollars|bucks|usd)\b/i, // 40 dollars
       /(^|\s)(\d[\d,]*)(?=[\s,;)]|\.(?:\s|$)|$)(?!\s*(?:st|nd|rd|th)\b)/g, // bare 40 (skipped when it is clearly a count: "4 bags")
     ];
     const isBareYear = (str) => /^(19|20)\d{2}$/.test(str);
+    // "Dec 2025 property tax": a year that names a bill period is never the amount. Only the word
+    // before the number is needed, so a short window is read rather than the rest of the text.
+    const yearCtx = new RegExp('^(?:' + MONTH_RE + '\\.?,?|year|fy)$', 'i');
+    const prevWord = (c) => (/(\S+)$/.exec(s.slice(Math.max(0, c.index - 32), c.index)) || [])[1] || '';
     for (const re of amountPatterns) {
       re.lastIndex = 0;
       let found = null;
       const candidates = [];
       while ((m = re.exec(s))) {
-        const after = s.slice(m.index + m[0].length).trim().split(/\s+/)[0] || '';
+        // Only the next word matters, so the remainder is not re-scanned for every candidate.
+        const end = m.index + m[0].length;
+        const after = (/^\s*(\S+)/.exec(s.slice(end, end + 64)) || [])[1] || '';
         if (re.global && COUNT_NOUNS.has(after.toLowerCase().replace(/[.,;]+$/, ''))) continue;
+        if (re.global && isBareYear(m[2]) && yearCtx.test(prevWord(m))) continue;
         candidates.push(m);
         if (!re.global) break;
       }
       // "property tax 2025 3120": a bare four-digit year is only the amount when nothing else could be.
       found = candidates.find((c) => !isBareYear(c[2])) || candidates[0] || null;
       if (found) {
-        const n = toNumber(found[2]);
+        // A typed minus is kept: "-$40 refund" is a credit, not a $40 expense.
+        const n = toNumber(found[2]) * (/^\s*-/.test(found[0]) ? -1 : 1);
         if (!isNaN(n)) { result.amount = n; s = cut(s, found); break; }
       }
     }
@@ -1599,21 +1808,31 @@ window.ITEMIZER_SINGLE_FILE = true;
       if (tokens.length && isFiller(tokens[0]) && !KEEP_IF_ALONE.has(tokens[0].toLowerCase())) { tokens.shift(); changed = true; }
       if (tokens.length && isFiller(tokens[tokens.length - 1]) && !(tokens.length === 1 && KEEP_IF_ALONE.has(tokens[0].toLowerCase()))) { tokens.pop(); changed = true; }
       for (let i = 0; i < tokens.length - 1; i++) {
-        if (isFiller(tokens[i]) && isFiller(tokens[i + 1])) { tokens.splice(i, 2); changed = true; break; }
+        if (isFiller(tokens[i]) && isFiller(tokens[i + 1])) {
+          // "donated to goodwill": a leading verb worth keeping stays, and only the word after it goes.
+          const keep = i === 0 && KEEP_IF_ALONE.has(tokens[0].toLowerCase());
+          tokens.splice(keep ? 1 : i, keep ? 1 : 2);
+          changed = true;
+          break;
+        }
       }
     }
     let desc = tokens.join(' ').replace(/\s+([,.;])/g, '$1').replace(/^[,;.\-–—\s]+|[,;.\-–—\s]+$/g, '').trim();
-    if (desc) desc = desc.charAt(0).toUpperCase() + desc.slice(1);
+    // A first word the user capitalised themselves is left alone, so "iPhone" does not become "IPhone".
+    if (desc && !/[A-Z]/.test(tokens[0] || '')) desc = desc.charAt(0).toUpperCase() + desc.slice(1);
     result.description = desc;
     return result;
   }
+
+  // Built once: a date formatter is expensive to construct, and the ledger formats one date per row.
+  const DAY_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+  const DAY_YEAR_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   /** Human-readable date, e.g. "Mar 14, 2026". */
   function formatDate(isoStr, withYear) {
     if (!isoStr) return '';
     const [y, mo, d] = isoStr.split('-').map(Number);
-    const dt = new Date(y, mo - 1, d);
-    return dt.toLocaleDateString('en-US', withYear === false ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+    return (withYear === false ? DAY_FMT : DAY_YEAR_FMT).format(new Date(y, mo - 1, d));
   }
 
   function todayISO() { return isoFromDate(new Date()); }
@@ -1813,6 +2032,8 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   const DAY = 86400000;
   const DISMISS_DAYS = 30;
+  // A payee logged from a monthly bank statement can be six weeks late without having stopped.
+  const LAPSE_FLOOR_DAYS = 45;
   const CADENCES = [
     { id: 'weekly', label: 'weekly', days: 7, tol: 2, min: 3, perYear: 52 },
     { id: 'biweekly', label: 'every two weeks', days: 14, tol: 3, min: 3, perYear: 26 },
@@ -1853,7 +2074,12 @@ window.ITEMIZER_SINGLE_FILE = true;
   }
   const money = Rules.money;
   const cents = Rules.cents;
-  function fmtDate(iso) { const d = toDate(iso); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  // ctxYear is the year the reader is looking at: a date outside it carries its year, so "Dec 10" is never mistaken for this year's
+  function fmtDate(iso, ctxYear) {
+    const d = toDate(iso);
+    const withYear = ctxYear && iso.slice(0, 4) !== String(ctxYear);
+    return d.toLocaleDateString('en-US', withYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
+  }
   function fmtValue(lineId, n) { return Schema.isMiles(lineId) ? `${Number(n).toLocaleString('en-US', { maximumFractionDigits: 1 })} mi` : money(n); }
   function keyOf(e) { const k = Classify.keyFor(e.description || ''); return (k || '-') + '|' + e.lineId; }
   /** The next estimated-tax deadline strictly after a date (Sep 15 rolls to Jan 15 of the next year). */
@@ -1862,20 +2088,27 @@ window.ITEMIZER_SINGLE_FILE = true;
     for (const md of ESTIMATED_DEADLINES) { const d = `${y}-${md}`; if (d > iso) return d; }
     return `${y + 1}-${ESTIMATED_DEADLINES[0]}`;
   }
+  /** The estimated-tax deadline a payment on this date satisfies, or null: quarterly payments are often made early. */
+  function nearestDeadline(iso) {
+    const y = Number(iso.slice(0, 4));
+    return [y - 1, y, y + 1].flatMap((yy) => ESTIMATED_DEADLINES.map((md) => `${yy}-${md}`)).find((d) => Math.abs(daysBetween(d, iso)) <= ESTIMATED.tol) || null;
+  }
   /** The k-th occurrence after an anchor date, generated from the anchor so month-ends never drift. */
   function nth(anchorIso, cadence, k) {
-    if (cadence.id === 'estimated') { let d = anchorIso; for (let i = 0; i < k; i++) d = nextDeadline(d); return d; }
+    // snap to the deadline the anchor payment satisfied, so a payment made early does not re-expect its own deadline
+    if (cadence.id === 'estimated') { let d = nearestDeadline(anchorIso) || anchorIso; for (let i = 0; i < k; i++) d = nextDeadline(d); return d; }
     if (MONTHS_PER[cadence.id]) return addMonths(anchorIso, k * MONTHS_PER[cadence.id]);
     return addDays(anchorIso, Math.round(k * cadence.days));
   }
   function step(iso, cadence) { return nth(iso, cadence, 1); }
+  /** How far past due a payee has to be before we call it stopped. */
+  function lapseDaysFor(cadence) { return Math.max(cadence.days + 2 * cadence.tol, LAPSE_FLOOR_DAYS); }
   /** True when every occurrence sits near an estimated-tax deadline and at least three distinct deadlines are hit. */
   function looksEstimated(occ) {
     if (occ.length < ESTIMATED.min) return false;
     const hit = new Set();
     for (const o of occ) {
-      const y = Number(o.date.slice(0, 4));
-      const near = [y - 1, y, y + 1].flatMap((yy) => ESTIMATED_DEADLINES.map((md) => `${yy}-${md}`)).find((d) => Math.abs(daysBetween(d, o.date)) <= ESTIMATED.tol);
+      const near = nearestDeadline(o.date);
       if (!near) return false;
       hit.add(near);
     }
@@ -1903,7 +2136,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       if (!byLine.has(e.lineId)) byLine.set(e.lineId, []);
       byLine.get(e.lineId).push({ date: e.date, amount: Number(e.amount) || 0, key: k });
     }
-    const out = [];
+    const cands = [];
     for (const [key, list] of groups) {
       if (list.length < 2) continue;
       list.sort((a, b) => a.date.localeCompare(b.date));
@@ -1921,7 +2154,8 @@ window.ITEMIZER_SINGLE_FILE = true;
       const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
       const line = Schema.getLine(list[0].lineId);
       let cadence = null;
-      if (line.sectionId === 'taxes' && looksEstimated(occ)) cadence = ESTIMATED;
+      // only the state income tax line follows the IRS calendar; property tax quarters that happen to land near a deadline do not
+      if (line.id === 'tax.state_income' && looksEstimated(occ)) cadence = ESTIMATED;
       for (const c of CADENCES) {
         if (cadence) break;
         if (occ.length < c.min || Math.abs(med - c.days) > c.tol) continue;
@@ -1931,18 +2165,27 @@ window.ITEMIZER_SINGLE_FILE = true;
         if (misses <= (occ.length >= 5 ? 1 : 0)) { cadence = c; break; }
       }
       if (!cadence) continue;
+      cands.push({ key, occ, cadence, line });
+    }
+    // A payee with a cadence of its own never stands in for another one, or a group that stopped would be
+    // walked forward by its neighbour instead of lapsing, and both would project the same months.
+    const recurringKeys = new Set(cands.map((c) => c.key));
+    const out = [];
+    for (const { key, occ, cadence, line } of cands) {
       const last = occ[occ.length - 1];
       const typicalAmount = cents(median(occ.map((o) => o.amount)));
       // An expected date already covered by a same-line entry filed under a different spelling counts as done.
-      const others = (byLine.get(line.id) || []).filter((o) => o.key !== key);
+      const others = (byLine.get(line.id) || []).filter((o) => o.key !== key && !recurringKeys.has(o.key));
       const satisfied = (d) => others.some((o) => Math.abs(daysBetween(o.date, d)) <= cadence.tol && Math.abs(o.amount - typicalAmount) <= 0.25 * Math.max(typicalAmount, 1));
       let k = 1;
       while (k < 60 && satisfied(nth(last.date, cadence, k))) k++;
       const next = nth(last.date, cadence, k);
       const overdueBy = daysBetween(next, today);
       let status = 'upcoming';
-      // more than a full period past due: the payee probably stopped, so nothing is projected for it
-      if (overdueBy > cadence.days + 2 * cadence.tol) status = 'lapsed';
+      // More than a full period past due: the payee probably stopped, so nothing is projected for it.
+      // The 45-day floor keeps a weekly or biweekly payee alive when the user logs from a monthly statement.
+      const lapseAfter = lapseDaysFor(cadence);
+      if (overdueBy > lapseAfter) status = 'lapsed';
       else if (overdueBy > cadence.tol) status = 'overdue';
       else if (overdueBy >= -cadence.tol) status = 'due';
       // occurrences still expected inside the tax year (overdue ones included — they probably happened)
@@ -1974,7 +2217,7 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   // ---- habits ------------------------------------------------------------------
 
-  function computeHabits(yearEntries, allEntries, today) {
+  function computeHabits(yearEntries, allEntries, today, taxYear) {
     // createdAt is a UTC timestamp; compare calendar days in local time like `today`
     const created = allEntries.filter((e) => e.createdAt && !e.sample && !e.projected).map((e) => { const d = new Date(e.createdAt); return isNaN(d) ? null : isoOf(d); }).filter(Boolean).sort();
     const distinct = [...new Set(created)];
@@ -1994,14 +2237,17 @@ window.ITEMIZER_SINGLE_FILE = true;
     for (const c of created) weekdayCounts[toDate(c).getDay()]++;
     const busiestWeekday = created.length >= 5 ? weekdayCounts.indexOf(Math.max(...weekdayCounts)) : null;
     const dates = yearEntries.map((e) => e.date).sort();
-    const weeks = dates.length ? Math.max(1, daysBetween(dates[0], today) / 7) : 1;
-    return { typicalGapDays, daysSinceLast, receiptsBySection, busiestWeekday, weekdayCounts, entriesPerWeek: Math.round((yearEntries.length / weeks) * 10) / 10, loggingDays: distinct.length };
+    // a closed year is measured to Dec 31, or the rate would shrink every week the user looks back at it
+    const yearEnd = `${taxYear}-12-31`;
+    const end = taxYear && today > yearEnd ? yearEnd : today;
+    const weeks = dates.length ? Math.max(1, daysBetween(dates[0], end) / 7) : 1;
+    return { typicalGapDays, daysSinceLast, lastLoggedDay: distinct.length ? distinct[distinct.length - 1] : null, receiptsBySection, busiestWeekday, weekdayCounts, entriesPerWeek: Math.round((yearEntries.length / weeks) * 10) / 10, loggingDays: distinct.length };
   }
 
   // ---- recommendations --------------------------------------------------------
 
   function buildRecommendations(ctx) {
-    const { computed, projected, projection, recurrences, yearEntries, entries, habits, today, taxYear } = ctx;
+    const { computed, projected, projection, recurrences, yearEntries, entries, projectedEntries, settings, habits, today, taxYear } = ctx;
     const P = computed.params;
     const recs = [];
     const yearStart = `${taxYear}-01-01`, yearEnd = `${taxYear}-12-31`;
@@ -2014,7 +2260,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       recs.push({
         id: `recur:${r.key}:${r.nextDate}`, kind: 'log',
         priority: r.status === 'overdue' ? 80 + Math.min(15, Math.floor(r.overdueBy / 7)) : 60,
-        title: r.status === 'overdue' ? `${r.description}: nothing logged since ${fmtDate(r.lastDate)}` : `${r.description} is due about now`,
+        title: r.status === 'overdue' ? `${r.description}: nothing logged since ${fmtDate(r.lastDate, taxYear)}` : `${r.description} is due about now`,
         body: `Logged ${r.count} times, ${r.cadenceLabel}, usually ${amountText}; expected around ${fmtDate(r.nextDate)}. If it was paid, log it. If it stopped, dismiss this.`,
         because: `${r.count} ${r.cadenceLabel} entries on the ${r.label} line`,
         action: { type: 'prefill', entry: { description: r.description, lineId: r.lineId, amount: r.typicalAmount, date: r.nextDate <= today ? r.nextDate : today } },
@@ -2042,13 +2288,15 @@ window.ITEMIZER_SINGLE_FILE = true;
         .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
       for (const v of visits) {
         const known = byPayee.get(Classify.keyFor(v.description || ''));
-        const typical = known && known.length ? median(known) : overall;
+        // a tenth of a mile, like every other mileage figure in the app: a median of 12.3 and 12.6 was never logged
+        const typical = Math.round((known && known.length ? median(known) : overall) * 10) / 10;
         if (!(typical > 0)) continue;
         const what = v.description || Schema.getLine(v.lineId).label;
+        const sameEveryTime = known && known.length && known.every((n) => Math.round(n * 10) / 10 === typical);
         recs.push({
           id: `miles:${v.id}`, kind: 'log', priority: 50,
           title: `Add the drive to ${what} on ${fmtDate(v.date)}?`,
-          body: `${known && known.length ? `You logged ${typical} miles for this trip before.` : `Your medical trips average ${typical} miles.`} At ${Rules.perMile(P.mileage.medical)} each one is small, but a year of visits adds up.`,
+          body: `${sameEveryTime ? `You logged ${fmtValue('med.miles', typical)} for this trip before.` : known && known.length ? `Your drives to ${what} are usually about ${fmtValue('med.miles', typical)}.` : `Your medical trips are usually about ${fmtValue('med.miles', typical)}.`} At ${Rules.perMile(P.mileage.medical)} each one is small, but a year of visits adds up.`,
           because: 'a medical visit with no mileage entry within a day of it',
           action: { type: 'prefill', entry: { description: `Round trip — ${what}`, lineId: 'med.miles', amount: typical, date: v.date } },
         });
@@ -2091,10 +2339,14 @@ window.ITEMIZER_SINGLE_FILE = true;
     // 4. Amounts far outside a payee's usual range
     const amountsByKey = new Map();
     for (const e of entries) { const k = keyOf(e); if (!amountsByKey.has(k)) amountsByKey.set(k, []); amountsByKey.get(k).push(Number(e.amount) || 0); }
+    // one median per payee, not one per entry: re-sorting the same list for every entry made this quadratic
+    const medByKey = new Map();
+    for (const [k, arr] of amountsByKey) if (arr.length >= 4) medByKey.set(k, median(arr));
     for (const e of yearEntries) {
-      const amounts = amountsByKey.get(keyOf(e));
+      const kk = keyOf(e);
+      const amounts = amountsByKey.get(kk);
       if (!amounts || amounts.length < 4) continue;
-      const med = median(amounts), amt = Number(e.amount) || 0;
+      const med = medByKey.get(kk), amt = Number(e.amount) || 0;
       // entries with no description are one pool per line, not one payee: demand a much clearer outlier and say so
       const dk = Classify.keyFor(e.description || '');
       const undescribed = !dk || dk === Classify.keyFor(Schema.getLine(e.lineId).label);
@@ -2123,31 +2375,55 @@ window.ITEMIZER_SINGLE_FILE = true;
         recs.push({ id: `plan:itemize:${taxYear}`, kind: 'good', priority: 30, title: `On pace to itemize: about ${money(projection.projectedTotal)} against ${money(std)}`, body: `${money(projection.actual)} counts so far${projection.expectedMore > 0 ? `, and recurring items should add about ${money(projection.expectedMore)} by Dec 31` : ''}. Keep every Schedule A receipt this year.`, because: 'recurring entries projected to year end', action: null });
       } else {
         const gap = projection.gap;
-        const candidates = [];
+        // Telling someone to stop keeping receipts needs evidence: either most of the year is behind us, or
+        // enough recurring payees are known that the projection stands for the months still to come.
+        const monthsElapsed = today < yearStart ? 0 : Number(today.slice(5, 7));
+        const founded = monthsElapsed >= 9 || (projection.projectedEntries > 0 && recurrences.filter((r) => r.status !== 'lapsed' && !r.muted).length >= 2);
+        // What a prepayment is worth is what the engine deducts, not what it costs: the SALT cap, its
+        // phase-down and the medical floor can each swallow a payment whole.
+        const base = projected.scheduleA.total;
+        const synth = (c) => [{ id: `bunch:${c.r.key}`, date: `${taxYear}-12-31`, taxYear, lineId: c.r.lineId, amount: c.gross, description: c.r.description, hasReceipt: true, projected: true }];
+        const priceOf = (extra) => cents(Rules.compute(entries.concat(projectedEntries, extra), Object.assign({}, settings, { today })).scheduleA.total - base);
+        const raw = [];
         for (const r of recurrences) {
           if (r.unit === 'miles' || r.status === 'lapsed' || r.muted) continue;
           const prepayable = ['taxes', 'charity', 'volunteer'].includes(r.sectionId) || r.lineId === 'med.insurance';
           if (!prepayable) continue;
-          if (r.perYear >= 12) { if (r.sectionId === 'charity') candidates.push({ label: `make next year's ${r.description} gifts in December`, amount: Math.round(r.typicalAmount * r.perYear) }); continue; }
-          if (r.nextYearEarly.length) candidates.push({ label: `pay the ${fmtDate(r.nextYearEarly[0])} ${r.description} before Dec 31`, amount: Math.round(r.typicalAmount) });
+          if (r.perYear >= 12) { if (r.sectionId === 'charity') raw.push({ label: `make next year's ${r.description} gifts in December`, gross: Math.round(r.typicalAmount * r.perYear), r }); continue; }
+          if (r.nextYearEarly.length) raw.push({ label: `pay the ${fmtDate(r.nextYearEarly[0], taxYear)} ${r.description} before Dec 31`, gross: Math.round(r.typicalAmount), r });
         }
+        raw.sort((a, b) => b.gross - a.gross);
+        const candidates = [];
+        for (const c of raw.slice(0, 6)) { c.amount = priceOf(synth(c)); if (c.amount > 0) candidates.push(c); } // the cap keeps the number of engine runs small
         candidates.sort((a, b) => b.amount - a.amount);
-        const sum = candidates.reduce((a, c) => a + c.amount, 0);
-        if (candidates.length && sum >= gap) {
-          const picked = []; let acc = 0;
-          for (const c of candidates) { if (acc >= gap) break; picked.push(c); acc += c.amount; }
+        const sum = candidates.length ? priceOf(candidates.flatMap(synth)) : 0;
+        const picked = [];
+        let acc = 0;
+        // candidates interact (two SALT items share one cap), so the whole picked set is re-priced at each step
+        if (sum >= gap) for (const c of candidates) { if (acc >= gap) break; picked.push(c); acc = priceOf(picked.flatMap(synth)); }
+        const saltRoom = projected.scheduleA.taxes.deductible < projected.scheduleA.taxes.cap;
+        const medicalCounts = projected.scheduleA.medical.deductible > 0;
+        if (picked.length && acc >= gap) {
           recs.push({ id: `plan:bunch:${taxYear}`, kind: 'plan', priority: 70, title: `Bunching closes the ${money(gap)} gap this year`, body: `Projected ${money(projection.projectedTotal)} against a ${money(std)} standard deduction. To get over it: ${picked.map((c) => `${c.label} (+${money(c.amount)})`).join('; ')}. Then take the standard deduction next year. Two bunched years beat two years of just missing.`, because: 'deductible bills that usually fall early next year', action: null });
+        } else if (gap > std * 0.3 && founded) {
+          recs.push({ id: `plan:stop:${taxYear}`, kind: 'plan', priority: 40, title: 'On this pace you will not itemize, so you can stop chasing Schedule A receipts', body: `On what is logged and projected so far, ${money(projection.projectedTotal)} against ${money(std)}, ${money(gap)} short${sum > 0 ? ` even after ${money(sum)} of bunching` : ''}. Keep logging business costs and student loan interest, which count regardless, and keep medical receipts only if a large expense is coming.`, because: 'projection to year end', action: null });
         } else if (gap > std * 0.3) {
-          recs.push({ id: `plan:stop:${taxYear}`, kind: 'plan', priority: 40, title: 'You will not itemize this year, so stop chasing Schedule A receipts', body: `Projected ${money(projection.projectedTotal)} against ${money(std)}, ${money(gap)} short${candidates.length ? ` even after ${money(sum)} of bunching` : ''}. Keep logging business costs and student loan interest, which count regardless, and keep medical receipts only if a large expense is coming.`, because: 'projection to year end', action: null });
+          recs.push({ id: `plan:early:${taxYear}`, kind: 'plan', priority: 30, title: `On what is logged so far, ${money(gap)} short of itemizing`, body: `So far ${money(projection.projectedTotal)} counts against a ${money(std)} standard deduction, and too little of the year is logged to project the rest. Keep logging; the plan firms up as recurring payees appear.`, because: 'too little of the year logged to call it', action: null });
         } else {
-          recs.push({ id: `plan:close:${taxYear}`, kind: 'plan', priority: 55, title: `${money(gap)} short of itemizing, which planning can close`, body: `${candidates.length ? `Bunching covers ${money(sum)}: ${candidates.map((c) => c.label).join('; ')}. ` : ''}Elective dental or vision work, a gift you planned for next year, or a state estimated payment made by Dec 31 could cover the rest.`, because: 'projection to year end', action: null });
+          // only offer the levers this return can still use: medical under the floor and SALT at the cap buy nothing
+          const rest = [];
+          if (medicalCounts) rest.push('elective dental or vision work');
+          rest.push('a gift you planned for next year');
+          if (saltRoom) rest.push('a state estimated payment made by Dec 31');
+          const restText = rest.length > 1 ? `${rest.slice(0, -1).join(', ')} or ${rest[rest.length - 1]}` : rest[0];
+          recs.push({ id: `plan:close:${taxYear}`, kind: 'plan', priority: 55, title: `${money(gap)} short of itemizing, which planning can close`, body: `${sum > 0 ? `Bunching covers ${money(sum)}: ${candidates.map((c) => c.label).join('; ')}. ` : ''}${restText[0].toUpperCase()}${restText.slice(1)} could cover the rest.`, because: 'projection to year end', action: null });
         }
       }
     }
 
     // 6. Logging cadence
     if (habits.typicalGapDays != null && habits.daysSinceLast != null && habits.daysSinceLast > Math.max(7, 2 * habits.typicalGapDays)) {
-      recs.push({ id: `habit:cadence:${today.slice(0, 7)}`, kind: 'habit', priority: 25, title: `${habits.daysSinceLast} days since your last entry`, body: `You usually log something every ${Math.round(habits.typicalGapDays)} days. Receipts fade and memories blur; a five-minute catch-up now beats reconstructing a quarter in April.`, because: 'the gaps between your logging days', action: { type: 'capture' } });
+      recs.push({ id: `habit:cadence:${habits.lastLoggedDay || today.slice(0, 10)}`, kind: 'habit', priority: 25, title: `${habits.daysSinceLast} days since your last entry`, body: `You usually log something every ${Math.round(habits.typicalGapDays)} days. Receipts fade and memories blur; a five-minute catch-up now beats reconstructing a quarter in April.`, because: 'the gaps between your logging days', action: { type: 'capture' } });
     }
 
     // 7. Receipt habits
@@ -2181,7 +2457,6 @@ window.ITEMIZER_SINGLE_FILE = true;
       sections,
       scheduleATotal: round100(computed.scheduleA.total),
       standardDeduction: computed.standardDeduction.base, // the base follows from filing status; the add-ons would reveal age or blindness
-      hasAdditionalStandardDeduction: computed.standardDeduction.additional > 0,
       itemizes: computed.verdict.itemize,
       receiptRate: Math.round(computed.substantiation.coverage * 20) / 20,
       recurringItems: recurrences.length,
@@ -2205,7 +2480,16 @@ window.ITEMIZER_SINGLE_FILE = true;
     const yearEntries = computed.entries;
     const recurrences = detectRecurrences(entries, { today, taxYear });
     const dismissedAt = input.dismissed || settings.advisorDismissed || {}; // one row per dismissal in the store; the settings shape still works for older callers
-    const isDismissed = (id) => { const at = dismissedAt[id]; return !!at && daysBetween(String(at).slice(0, 10), today) < DISMISS_DAYS; };
+    // "If it stopped, dismiss this" has to outlast the payee's own period, or a yearly one comes back after
+    // thirty days and is nagged about and projected for the rest of the year. The window runs to the day the
+    // payee would lapse by itself, so a dismissal is followed by "Stopped?", never by the same nudge again.
+    const cadenceOf = (id) => CADENCES.find((c) => c.id === id) || (id === ESTIMATED.id ? ESTIMATED : null);
+    const windows = {};
+    for (const r of recurrences) {
+      const c = cadenceOf(r.cadence);
+      if (c) windows[`recur:${r.key}:${r.nextDate}`] = Math.max(DISMISS_DAYS, Math.ceil(lapseDaysFor(c) + c.tol));
+    }
+    const isDismissed = (id) => { const at = dismissedAt[id]; return !!at && daysBetween(String(at).slice(0, 10), today) < (windows[id] || DISMISS_DAYS); };
     // "If it stopped, dismiss this" also stops the projection for that payee
     for (const r of recurrences) if (isDismissed(`recur:${r.key}:${r.nextDate}`)) r.muted = true;
     const closed = today > `${taxYear}-12-31`;
@@ -2232,9 +2516,9 @@ window.ITEMIZER_SINGLE_FILE = true;
       projection.gap = cents(projection.standardDeduction - projection.projectedTotal);
     }
     projection.calibration = calib || { factor: 1, n: 0, basis: 'none' };
-    const habits = computeHabits(yearEntries, entries, today);
+    const habits = computeHabits(yearEntries, entries, today, taxYear);
     projection.closed = closed;
-    const all = buildRecommendations({ computed, projected, projection, recurrences, yearEntries, entries, habits, today, taxYear });
+    const all = buildRecommendations({ computed, projected, projection, recurrences, yearEntries, entries, projectedEntries, settings, habits, today, taxYear });
     const recommendations = [], dismissed = [];
     for (const r of all) { if (isDismissed(r.id)) dismissed.push(r); else recommendations.push(r); }
     return { recommendations: recommendations.slice(0, 12), dismissed, recurrences, projection, habits, aggregate: aggregateProfile(computed, habits, recurrences, today) };
@@ -2294,19 +2578,29 @@ window.ITEMIZER_SINGLE_FILE = true;
    * tiny wobbles are ignored, and impossible jumps (teleports) are dropped.
    */
   function trackMeters(points, opts) {
-    const o = Object.assign({ maxAccuracy: 60, maxSpeed: 70, minStep: 6, minSpeed: 0.5 }, opts || {}); // speeds in m/s
-    let total = 0, last = null, pending = null;
+    const o = Object.assign({ maxAccuracy: 60, maxSpeed: 70, minStep: 6, minSpeed: 0.5, stillWindow: 90, stillFactor: 5 }, opts || {}); // speeds in m/s, window in s
+    let total = 0, last = null, pending = null, recent = [];
     for (const p of points || []) {
-      if (p && p.gap) { last = null; pending = null; continue; } // a pause: the straight line to the resume point is not driven
+      if (p && p.gap) { last = null; pending = null; recent = []; continue; } // a pause: the straight line to the resume point is not driven
       if (!p || !isFinite(p.lat) || !isFinite(p.lon)) continue;
       if (p.acc != null && p.acc > o.maxAccuracy) continue;
+      const speed = p.speed != null && isFinite(p.speed) && p.speed >= 0 ? p.speed : null;
       // a fix that reports itself as standing still is jitter, not distance
-      if (p.speed != null && isFinite(p.speed) && p.speed >= 0 && p.speed < o.minSpeed) continue;
+      if (speed != null && speed < o.minSpeed) continue;
+      recent.push(p);
+      while (recent.length > 1 && (Number(p.t) - Number(recent[0].t)) / 1000 > o.stillWindow) recent.shift();
       if (!last) { last = p; continue; }
       const d = haversineMeters(last, p);
       // a point must move farther than its own error radius before it counts, or a parked car drifts for miles
       const step = Math.max(o.minStep, ((Number(last.acc) || 0) + (Number(p.acc) || 0)) / 2);
       if (d < step) continue;
+      // Wi-Fi and network fixes carry no speed, and drift clears the step above every few seconds, so a parked
+      // phone books miles. Ask the whole window to have gone somewhere before such a fix may extend the track.
+      if (speed == null && recent.length > 1) {
+        const first = recent[0];
+        const span = (Number(p.t) - Number(first.t)) / 1000;
+        if (span >= 30 && haversineMeters(first, p) < Math.max(o.minSpeed * span, o.stillFactor * Math.max(Number(p.acc) || 0, Number(first.acc) || 0))) continue;
+      }
       if (p.t != null && last.t != null) {
         const dt = (p.t - last.t) / 1000;
         if (dt <= 0 || d / dt > o.maxSpeed) {
@@ -2416,32 +2710,52 @@ window.ITEMIZER_SINGLE_FILE = true;
   function getPosition(opts) {
     return new Promise((resolve, reject) => {
       if (!hasGeolocation()) { reject(new Error('This device does not offer location.')); return; }
-      navigator.geolocation.getCurrentPosition((pos) => resolve(toPoint(pos)), (err) => reject(new Error(geoErrorText(err))), Object.assign({ enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }, opts || {}));
+      navigator.geolocation.getCurrentPosition((pos) => resolve(toPoint(pos)), (err) => reject(new Error(geoErrorText(err, false))), Object.assign({ enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }, opts || {}));
     });
   }
 
-  function geoErrorText(err) {
+  /** `watching` is true for the recorder's watch, which keeps trying; a one-shot request that timed out is over. */
+  function geoErrorText(err, watching) {
     if (!err) return 'Location unavailable.';
     if (err.code === 1) return 'Location permission was denied. Allow it in the browser settings to record trips.';
     if (err.code === 2) return 'Location is unavailable right now.';
-    if (err.code === 3) return 'Waiting for a GPS fix…';
+    if (err.code === 3) return watching ? 'Waiting for a GPS fix…' : 'No location fix arrived in time. Move somewhere with a clearer view of the sky, or type the coordinates.';
     return err.message || 'Location unavailable.';
   }
 
+  const CHECKPOINT_FIXES = 10, CHECKPOINT_MS = 30000;
   /**
    * A user-controlled trip recorder. Nothing runs until start() is called, and stop()
    * releases the position watch and the screen wake lock.
+   * handlers.onCheckpoint is handed the track so far every few fixes: a phone that discards the
+   * page mid-drive loses only the seconds since the last one. Pass a checkpoint back as
+   * `resumeFrom` to carry the same trip on.
    */
-  function createRecorder(handlers) {
+  function createRecorder(handlers, resumeFrom) {
     handlers = handlers || {};
     const rec = { state: 'idle', points: [], miles: 0, startedAt: null, endedAt: null, pausedMs: 0, pausedAt: null, last: null, error: null, waiting: false, watchId: null, wakeLock: null };
+    let fromCheckpoint = false, sinceCheckpoint = 0, checkpointAt = 0;
+    if (resumeFrom && resumeFrom.points && resumeFrom.points.length) {
+      rec.points = resumeFrom.points.slice();
+      rec.startedAt = resumeFrom.startedAt || Date.now();
+      rec.pausedMs = Number(resumeFrom.pausedMs) || 0;
+      rec.miles = roundMiles(trackMiles(rec.points));
+      fromCheckpoint = true;
+    }
+    const checkpoint = (force) => {
+      if (!handlers.onCheckpoint) return;
+      const now = Date.now();
+      if (!force && sinceCheckpoint < CHECKPOINT_FIXES && now - checkpointAt < CHECKPOINT_MS) return;
+      sinceCheckpoint = 0; checkpointAt = now;
+      handlers.onCheckpoint({ points: rec.points.slice(), miles: rec.miles, startedAt: rec.startedAt, pausedMs: rec.pausedMs, state: rec.state });
+    };
     const update = () => { rec.miles = roundMiles(trackMiles(rec.points)); if (handlers.onUpdate) handlers.onUpdate(rec); };
     const clearWatch = () => { if (rec.watchId != null && hasGeolocation()) navigator.geolocation.clearWatch(rec.watchId); rec.watchId = null; };
-    const onPos = (pos) => { if (rec.state !== 'recording') return; const p = toPoint(pos); rec.points.push(p); rec.last = p; rec.error = null; rec.waiting = false; update(); };
+    const onPos = (pos) => { if (rec.state !== 'recording') return; const p = toPoint(pos); rec.points.push(p); rec.last = p; rec.error = null; rec.waiting = false; sinceCheckpoint++; update(); checkpoint(false); };
     const onErr = (err) => {
       if (rec.state !== 'recording') return;
       if (err && err.code === 3) { rec.waiting = true; update(); return; } // no fix yet: a quiet status, not an error
-      rec.error = geoErrorText(err);
+      rec.error = geoErrorText(err, true);
       if (err && err.code === 1) { clearWatch(); unlock(); rec.state = 'idle'; rec.endedAt = Date.now(); } // permission denied: nothing is being recorded
       if (handlers.onError) handlers.onError(rec.error, rec);
       update();
@@ -2463,7 +2777,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     rec.start = function () {
       if (!hasGeolocation()) { rec.error = 'This device does not offer location.'; if (handlers.onError) handlers.onError(rec.error, rec); return false; }
       if (rec.state === 'recording') return true;
-      if (rec.state === 'idle') { rec.points = []; rec.miles = 0; rec.startedAt = Date.now(); rec.endedAt = null; rec.pausedMs = 0; }
+      if (rec.state === 'idle') {
+        // a recorder built from a checkpoint carries the same trip on: the interval the app was not running
+        // was not recorded, so it is marked as a gap rather than counted as driven
+        if (fromCheckpoint) { fromCheckpoint = false; rec.endedAt = null; rec.points.push({ gap: true }); }
+        else { rec.points = []; rec.miles = 0; rec.startedAt = Date.now(); rec.endedAt = null; rec.pausedMs = 0; }
+      }
       if (rec.state === 'paused') {
         if (rec.pausedAt) rec.pausedMs += Date.now() - rec.pausedAt;
         if (rec.points.length) rec.points.push({ gap: true }); // the distance between the pause and resume points was not driven
@@ -2484,6 +2803,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', onVis);
       unlock();
       update();
+      checkpoint(true);
     };
     rec.resume = function () { if (rec.state === 'paused') rec.start(); };
     rec.stop = function () {
@@ -2496,6 +2816,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       rec.endedAt = Date.now();
       rec.error = null; rec.waiting = false;
       update();
+      checkpoint(true); // the track is still only in memory until the trip is logged
       return { points: thin(rec.points, 10), miles: rec.miles, startedAt: rec.startedAt, endedAt: rec.endedAt, pausedMs: rec.pausedMs };
     };
     return rec;
@@ -2508,16 +2829,19 @@ window.ITEMIZER_SINGLE_FILE = true;
   async function fetchJSON(url, opts) {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => ctl.abort(), (opts && opts.timeout) || 9000) : null;
-    let res;
+    // the timer stays armed until the body has been read, so a reply that stalls halfway also times out
     try {
-      res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctl ? ctl.signal : undefined });
-    } catch (e) {
-      throw new Error(/abort/i.test(String(e && e.name)) ? 'The lookup timed out.' : 'Online lookup is not available here. Check the connection, or enter the value by hand.');
+      let res;
+      try {
+        res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctl ? ctl.signal : undefined });
+      } catch (e) {
+        throw new Error(/abort/i.test(String(e && e.name)) ? 'The lookup timed out.' : 'Online lookup is not available here. Check the connection, or enter the value by hand.');
+      }
+      // the status says what went wrong; "check the connection" would be misleading for a refusal
+      if (res.status === 429) throw new Error('The lookup service is busy; try again in a minute.');
+      if (!res.ok) throw new Error(`The lookup service refused this request (${res.status}). Enter the value by hand.`);
+      try { return await res.json(); } catch (e) { throw new Error(/abort/i.test(String(e && e.name)) ? 'The lookup timed out.' : 'The lookup service sent an unreadable reply. Enter the value by hand.'); }
     } finally { if (timer) clearTimeout(timer); }
-    // the status says what went wrong; "check the connection" would be misleading for a refusal
-    if (res.status === 429) throw new Error('The lookup service is busy; try again in a minute.');
-    if (!res.ok) throw new Error(`The lookup service refused this request (${res.status}). Enter the value by hand.`);
-    try { return await res.json(); } catch (e) { throw new Error('The lookup service sent an unreadable reply. Enter the value by hand.'); }
   }
 
   const NOMINATIM = 'https://nominatim.openstreetmap.org';
@@ -2551,23 +2875,57 @@ window.ITEMIZER_SINGLE_FILE = true;
    */
   /** "Wake (County)", "Orleans (Parish)", "Wake County" → "wake": the bare area name for exact comparison. */
   const areaName = (s) => String(s || '').toLowerCase().replace(/\s*\(.*\)\s*$/, '').replace(/\s+(county|parish|borough|census area|municipality|municipio|independent city|city and borough)$/, '').trim();
+  /** The same trim with the capitals left alone: FEMA's own filter is case-sensitive, and this is what we show. */
+  const bareArea = (s) => String(s || '').replace(/\s*\(.*\)\s*$/, '').replace(/\s+(county|parish|borough|census area|municipality|municipio|independent city|city and borough)$/i, '').trim();
   async function femaDeclarations(params) {
     const state = String(params.state || '').toUpperCase();
     if (!/^[A-Z]{2}$/.test(state)) throw new Error('Pick a state first.');
     const since = params.since || `${new Date().getFullYear()}-01-01`;
+    const until = params.until || '';
     const county = areaName(params.county);
-    // A declaration is often dated weeks after the incident, so match either date against the tax year; a county filter runs
-    // on the server too, so the row cap applies to this county's declarations rather than to the whole state's.
-    let filter = `state eq '${state}' and (declarationDate ge '${since}T00:00:00.000z' or incidentBeginDate ge '${since}T00:00:00.000z')`;
-    if (county) filter += ` and (substringof('${county.replace(/'/g, "''")}', designatedArea) or designatedArea eq 'Statewide')`;
-    const url = `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=${encodeURIComponent(filter)}&$orderby=declarationDate%20desc&$top=1000&$select=disasterNumber,declarationTitle,declarationDate,declarationType,designatedArea,incidentType,incidentBeginDate,incidentEndDate,state`;
-    const data = await fetchJSON(url, { timeout: 12000 });
-    let items = (data && data.DisasterDeclarationsSummaries) || [];
+    // A declaration is often dated weeks after the incident, so match either date against the tax year. The upper bound is
+    // on the incident, so a late declaration of an in-year event still counts while a later year's disaster does not.
+    let base = `state eq '${state}' and (declarationDate ge '${since}T00:00:00.000z' or incidentBeginDate ge '${since}T00:00:00.000z')`;
+    if (until) base += ` and incidentBeginDate lt '${until}T00:00:00.000z'`;
+    const ask = async (filter) => {
+      const url = `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=${encodeURIComponent(filter)}&$orderby=declarationDate%20desc&$top=1000&$select=disasterNumber,declarationTitle,declarationDate,declarationType,designatedArea,incidentType,incidentBeginDate,incidentEndDate,state`;
+      const data = await fetchJSON(url, { timeout: 12000 });
+      return (data && data.DisasterDeclarationsSummaries) || [];
+    };
+    // The county filter runs on the server too, so the row cap applies to this county's declarations rather than to the
+    // whole state's. It is a case-sensitive string match, so the name goes over the wire as FEMA writes it.
+    let items = await ask(county ? `${base} and (substringof('${bareArea(params.county).replace(/'/g, "''")}', designatedArea) or designatedArea eq 'Statewide')` : base);
+    // a county spelled differently from FEMA's own list must not read as "no disasters here": ask again for the
+    // whole state and narrow it below
+    if (county && !items.length) items = await ask(base);
     if (county) items = items.filter((d) => areaName(d.designatedArea) === county || /statewide/i.test(d.designatedArea || ''));
-    // one row per declaration number
-    const seen = new Set();
-    return items.filter((d) => { if (seen.has(d.disasterNumber)) return false; seen.add(d.disasterNumber); return true; })
-      .map((d) => ({ number: d.disasterNumber, title: d.declarationTitle, type: d.declarationType, declared: String(d.declarationDate || '').slice(0, 10), area: d.designatedArea, incident: d.incidentType, begin: String(d.incidentBeginDate || '').slice(0, 10), end: String(d.incidentEndDate || '').slice(0, 10) }));
+    if (until) items = items.filter((d) => { const b = String(d.incidentBeginDate || '').slice(0, 10); return !b || b < until; });
+    // FEMA lists a declaration once per designated area. Gather them all: naming whichever row came first would
+    // tell the user their own county is or is not covered on the strength of an accident of ordering.
+    const byNumber = new Map();
+    for (const d of items) {
+      let rec = byNumber.get(d.disasterNumber);
+      if (!rec) {
+        rec = { number: d.disasterNumber, title: d.declarationTitle, type: d.declarationType, declared: String(d.declarationDate || '').slice(0, 10), incident: d.incidentType, begin: String(d.incidentBeginDate || '').slice(0, 10), end: String(d.incidentEndDate || '').slice(0, 10), areas: [], areaCount: 0, statewide: false, coversCounty: county ? false : null, area: '' };
+        byNumber.set(d.disasterNumber, rec);
+      }
+      if (/statewide/i.test(d.designatedArea || '')) { rec.statewide = true; if (county) rec.coversCounty = true; }
+      else {
+        const name = bareArea(d.designatedArea);
+        if (name && rec.areas.indexOf(name) < 0) rec.areas.push(name);
+        if (county && areaName(d.designatedArea) === county) rec.coversCounty = true;
+      }
+    }
+    const out = Array.from(byNumber.values());
+    for (const rec of out) {
+      rec.areas.sort();
+      rec.areaCount = rec.areas.length;
+      rec.area = rec.statewide ? 'Statewide'
+        : rec.coversCounty ? `covers ${bareArea(params.county)}`
+        : rec.areaCount === 1 ? rec.areas[0]
+        : rec.areaCount ? `${rec.areaCount} areas designated` : 'Designated areas not listed';
+    }
+    return out;
   }
 
   const osmLink = (lat, lon) => `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=15/${lat}/${lon}`;
@@ -2677,8 +3035,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
     if (/\bCR\b/i.test(s)) { neg = true; s = s.replace(/\bCR\b/i, ''); }
     s = s.replace(/\bDR\b/i, '').replace(/[$€£\s]/g, '');
-    // European exports: 1.234,56 — a comma with one or two digits after it is the decimal mark
-    if (/^[-+]?\d{1,3}(\.\d{3})*,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
+    // European exports: 1.234,56 or 1234,56 — a comma with one or two digits after it is the decimal
+    // mark, since a US thousands comma is always followed by exactly three digits
+    if (/^[-+]?\d+(\.\d{3})*,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
     else s = s.replace(/,/g, '');
     if (s.startsWith('-')) { neg = !neg; s = s.slice(1); }
     if (s.startsWith('+')) s = s.slice(1);
@@ -3132,7 +3491,7 @@ window.ITEMIZER_SINGLE_FILE = true;
  *   entries      id          { id, date, taxYear, lineId, amount, description, note, hasReceipt, receiptId, createdAt, updatedAt, sample, source?, items?, tripId?, fullAmount?, share? }
  *   receipts     id          { id, entryId, type, createdAt, blob }
  *   places       id          { id, name, category, address, lat, lon, note, sample, updatedAt }
- *   trips        id          { id, date, taxYear, fromId, toId, fromLabel, toLabel, purpose, miles, roundTrip, method, lineId, entryId, points, startedAt, endedAt, createdAt }
+ *   trips        id          { id, date, taxYear, fromId, toId, fromLabel, toLabel, purpose, miles, roundTrip, method, lineId, entryId, sample, points, startedAt, endedAt, createdAt }
  *   settings     key         { key: 'main', value: { scalar configuration only, see DEFAULT_SETTINGS } }
  *   learned      key         { key, lineId, updatedAt }                       a payee key and the worksheet line it was filed on
  *   weights      keyword     { keyword, weight, updatedAt }                   a classifier keyword and its learned multiplier
@@ -3202,14 +3561,23 @@ window.ITEMIZER_SINGLE_FILE = true;
   const LEGACY_EXPERIMENT_FLAGS = { snapshots: 'experimentSnapshots', corrections: 'experimentCorrections', nudges: 'experimentNudges' };
 
   let dbPromise = null;
-  let mode = 'idb'; // 'idb' | 'local' (localStorage, one key per store) | 'memory' (nothing survives the session)
+  let mode = 'idb'; // 'idb' | 'local' (localStorage, one key per store) | 'memory' (nothing survives the session) | 'unavailable' (the open failed)
   let notice = null; // a storage condition the UI should mention ("close other tabs")
+  let blockedTimeoutMs = 3000; // how long an upgrade blocked by another tab may hold the app before openDB gives up
+  const BLOCKED_NOTICE = 'Close other Itemizer tabs to finish updating storage.';
 
   const nowISO = () => new Date().toISOString();
   const str = (v, max) => (v == null ? '' : String(v).slice(0, max));
   const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
   const MONTH = /^\d{4}-\d{2}$/;
   const PARAM_PATH = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
+  const ID = /^[A-Za-z0-9_.:-]{1,64}$/; // ids the app makes: crypto.randomUUID() or the 'id-…' fallback in uid()
+  const RESERVED_KEY = /^(?:__proto__|constructor|prototype)$/; // a row keyed like this would be lost in the maps the app builds
+  const okId = (v) => typeof v === 'string' && ID.test(v) && !RESERVED_KEY.test(v);
+  const okKey = (v) => !!v && !RESERVED_KEY.test(v);
+  const TRIP_METHODS = ['road', 'estimate', 'gps', 'manual']; // METHOD_LABEL in app.js
+  const PLACE_CATEGORIES = ['home', 'medical', 'business', 'charity', 'school', 'other']; // PLACE_CATEGORIES in geo.js
+  const MAX_POINTS = 5000; // a recorded track is thinned to about one point per ten metres, so this is a very long drive
   const yearOf = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 2000 && n <= 2100 ? n : null; };
   const finite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
   const schemaOf = (opts) => (opts && opts.schema) || root.ItemizerSchema || null;
@@ -3241,23 +3609,23 @@ window.ITEMIZER_SINGLE_FILE = true;
     switch (store) {
       case 'learned': {
         const key = str(r.key, 120).trim();
-        if (!key || typeof r.lineId !== 'string' || !r.lineId || r.lineId.length > 40) return null;
+        if (!okKey(key) || typeof r.lineId !== 'string' || !r.lineId || r.lineId.length > 40) return null;
         if (schema && schema.getLine && !schema.getLine(r.lineId)) return null;
         return { key, lineId: r.lineId, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }
       case 'weights': {
         const keyword = str(r.keyword, 120).trim(), weight = finite(r.weight);
-        if (!keyword || weight == null || weight <= 0 || weight > 10) return null;
+        if (!okKey(keyword) || weight == null || weight <= 0 || weight > 10) return null;
         return { keyword, weight: Math.round(weight * 1000) / 1000, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }
       case 'dismissals': {
         const id = str(r.id, 200).trim(), dismissedAt = str(r.dismissedAt, 10);
-        if (!id || !ISO_DAY.test(dismissedAt)) return null;
+        if (!okKey(id) || !ISO_DAY.test(dismissedAt)) return null;
         return { id, dismissedAt };
       }
       case 'layouts': {
         const signature = str(r.signature, 400).trim();
-        if (!signature || !r.map || typeof r.map !== 'object') return null;
+        if (!okKey(signature) || !r.map || typeof r.map !== 'object') return null;
         const map = {};
         for (const c of ['date', 'description', 'amount', 'debit', 'credit', 'type', 'memo']) { const n = Number(r.map[c]); map[c] = Number.isInteger(n) && n >= -1 && n < 200 ? n : -1; }
         map.headerRow = r.map.headerRow !== false;
@@ -3279,12 +3647,14 @@ window.ITEMIZER_SINGLE_FILE = true;
         if (taxYear == null || !PARAM_PATH.test(path) || value == null) return null;
         return { id: `${taxYear}:${path}`, taxYear, path, value, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }
-      case 'places': return r && typeof r.id === 'string' && r.id && typeof r.name === 'string' ? r : null;
-      case 'trips': return r && typeof r.id === 'string' && r.id && typeof r.date === 'string' && ISO_DAY.test(r.date) ? r : null;
+      case 'places': return sanitizePlace(r);
+      case 'trips': return sanitizeTrip(r, schema);
       case 'settings': return r && typeof r.key === 'string' ? { key: r.key, value: sanitizeSettings(r.value) } : null;
       default: return r && r[STORES[store].key] != null ? r : null;
     }
   }
+  /** Every row of `list` that `store` can trust, in order; the rest are dropped. */
+  const cleanRows = (store, list, schema) => (Array.isArray(list) ? list : []).map((r) => sanitizeRow(store, r, schema)).filter(Boolean);
 
   // ---- overrides: the tax engine reads them nested by year, the store keeps one row per parameter ----
   function setPath(obj, path, value) {
@@ -3361,16 +3731,28 @@ window.ITEMIZER_SINGLE_FILE = true;
         }
         if (ev.oldVersion > 0 && ev.oldVersion < 3) migrateSettingsDocument(t);
       };
+      let settled = false, blockedTimer = null;
       req.onsuccess = () => {
         const db = req.result;
+        if (blockedTimer) clearTimeout(blockedTimer);
+        // the open finished after we gave up waiting: close it, or it would itself block the next one
+        if (settled) { try { db.close(); } catch (e) { /* already closed */ } return; }
+        settled = true;
+        mode = 'idb';
         notice = null;
         // another tab wants to upgrade, or the browser closed the connection: let go and reopen on the next call
         db.onversionchange = () => { db.close(); dbPromise = null; notice = 'Storage was updated in another tab; reload to continue.'; };
         db.onclose = () => { dbPromise = null; };
         migrateFallback(db).then(() => resolve(db), () => resolve(db));
       };
-      req.onerror = () => { dbPromise = null; reject(req.error || new Error('The browser refused to open local storage.')); };
-      req.onblocked = () => { notice = 'Close other Itemizer tabs to finish updating storage.'; /* onsuccess still fires once they close */ };
+      req.onerror = () => { if (blockedTimer) clearTimeout(blockedTimer); if (settled) return; settled = true; mode = 'unavailable'; dbPromise = null; reject(req.error || new Error('The browser refused to open local storage.')); };
+      // an older tab holds the database open. It usually lets go in a moment, but a frozen tab never does, so give up
+      // rather than leave the app waiting on a promise that would never settle; the next call tries again.
+      req.onblocked = () => {
+        notice = BLOCKED_NOTICE;
+        if (blockedTimer) return;
+        blockedTimer = setTimeout(() => { if (settled) return; settled = true; mode = 'unavailable'; dbPromise = null; reject(new Error(BLOCKED_NOTICE)); }, blockedTimeoutMs);
+      };
     });
     return dbPromise;
   }
@@ -3385,7 +3767,9 @@ window.ITEMIZER_SINGLE_FILE = true;
       }
       const os = t.objectStore(store);
       let result;
-      try { result = fn(os); } catch (e) { reject(e); return; }
+      // a request that throws leaves the ones already queued in the transaction; abort so the caller's "nothing was
+      // changed" is true, whichever row of a batch was the bad one
+      try { result = fn(os); } catch (e) { try { t.abort(); } catch (e2) { /* already inactive */ } reject(e); return; }
       t.oncomplete = () => resolve(result && 'result' in result ? result.result : result);
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error || new Error('transaction aborted'));
@@ -3399,7 +3783,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     return memoryArea;
   }
   const LS = {
-    read(store) { try { const o = JSON.parse(storageArea().getItem(LS_PREFIX + store) || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } },
+    // rows are keyed by ids that came out of a backup, so the container has no prototype: a row keyed '__proto__' is
+    // then an ordinary property instead of a write that disappears
+    read(store) { try { const o = JSON.parse(storageArea().getItem(LS_PREFIX + store) || '{}'); return Object.assign(Object.create(null), o && typeof o === 'object' && !Array.isArray(o) ? o : null); } catch (e) { return Object.create(null); } },
     write(store, obj) { try { storageArea().setItem(LS_PREFIX + store, JSON.stringify(obj)); } catch (e) { throw new Error('Storage is full or unavailable; nothing was saved. Download a backup and free some space.'); } },
     all(store) { return Object.values(this.read(store)); },
     get(store, key) { const o = this.read(store); return o[key] === undefined ? null : o[key]; },
@@ -3417,7 +3803,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     try { legacy = JSON.parse(area.getItem(LS_LEGACY_KEY) || 'null'); } catch (e) { legacy = null; }
     if (!legacy || typeof legacy !== 'object') return;
     try {
-      for (const s of ['entries', 'places', 'trips']) LS.putMany(s, (Array.isArray(legacy[s]) ? legacy[s] : []).filter((r) => r && typeof r.id === 'string' && LS.get(s, r.id) == null));
+      LS.putMany('entries', (Array.isArray(legacy.entries) ? legacy.entries : []).filter((r) => r && typeof r.id === 'string' && LS.get('entries', r.id) == null));
+      for (const s of ['places', 'trips']) LS.putMany(s, cleanRows(s, legacy[s]).filter((r) => LS.get(s, r.id) == null));
       if (legacy.settings) {
         const split = splitLegacySettings(legacy.settings, root.ItemizerSchema || null);
         if (!LS.get('settings', SETTINGS_KEY)) LS.put('settings', { key: SETTINGS_KEY, value: split.settings });
@@ -3435,7 +3822,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     let legacy = null;
     try { legacy = JSON.parse(area.getItem(LS_LEGACY_KEY) || 'null'); } catch (e) { legacy = null; }
     if (legacy && typeof legacy === 'object') {
-      for (const s of ['entries', 'places', 'trips']) add(s, (Array.isArray(legacy[s]) ? legacy[s] : []).filter((r) => r && typeof r.id === 'string'));
+      add('entries', (Array.isArray(legacy.entries) ? legacy.entries : []).filter((r) => r && typeof r.id === 'string'));
+      for (const s of ['places', 'trips']) add(s, cleanRows(s, legacy[s]));
       if (legacy.settings) { const split = splitLegacySettings(legacy.settings, root.ItemizerSchema || null); add('settings', [{ key: SETTINGS_KEY, value: split.settings }]); for (const s of ROW_STORES) add(s, split[s]); }
     }
     for (const s of STORE_NAMES) add(s, LS.all(s));
@@ -3479,17 +3867,29 @@ window.ITEMIZER_SINGLE_FILE = true;
   }
   async function deleteRow(store, key) {
     const db = await openDB();
-    if (!db) { LS.del(store, key); return; }
+    if (!db) { if (store === 'receipts') memoryReceipts.delete(key); LS.del(store, key); return; }
     await tx(db, store, 'readwrite', (os) => os.delete(key));
+  }
+  async function deleteRows(store, keys) {
+    if (!keys.length) return;
+    const db = await openDB();
+    if (!db) { if (store === 'receipts') keys.forEach((k) => memoryReceipts.delete(k)); LS.delMany(store, keys); return; }
+    await tx(db, store, 'readwrite', (os) => { keys.forEach((k) => os.delete(k)); });
+  }
+  /** Just the keys of a store: a restore compares them without loading the rows (receipts are photos). */
+  async function allKeys(store) {
+    const db = await openDB();
+    if (!db) return store === 'receipts' && receiptsInMemory() ? Array.from(memoryReceipts.keys()) : Object.keys(LS.read(store));
+    return (await tx(db, store, 'readonly', (os) => os.getAllKeys())) || [];
   }
   async function clearStore(store) {
     const db = await openDB();
-    if (!db) { LS.clear(store); return; }
+    if (!db) { if (store === 'receipts') memoryReceipts.clear(); LS.clear(store); return; }
     await tx(db, store, 'readwrite', (os) => os.clear());
   }
   async function countRows(store) {
     const db = await openDB();
-    if (!db) return LS.count(store);
+    if (!db) return store === 'receipts' && receiptsInMemory() ? memoryReceipts.size : LS.count(store);
     return (await tx(db, store, 'readonly', (os) => os.count())) || 0;
   }
   const withoutStamp = (r) => { const c = Object.assign({}, r); delete c.updatedAt; return JSON.stringify(c, Object.keys(c).sort()); };
@@ -3518,22 +3918,40 @@ window.ITEMIZER_SINGLE_FILE = true;
   const getEntries = () => allRows('entries');
   const putEntry = (entry) => putRow('entries', entry);
   const putEntries = (entries) => putRows('entries', entries);
-  async function deleteEntry(id) {
-    const entry = await getRow('entries', id);
-    await deleteRow('entries', id);
-    if (entry && entry.receiptId) await deleteReceipt(entry.receiptId);
+  /**
+   * Delete entries with what belongs to them: each receipt photo, and any trip logged for the entry, so the mileage log
+   * never lists a drive the ledger no longer has. Returns the trips that went, so a caller can offer to undo them too.
+   */
+  async function deleteEntries(ids) {
+    const wanted = new Set(ids);
+    for (const id of ids) {
+      const entry = await getRow('entries', id);
+      await deleteRow('entries', id);
+      if (entry && entry.receiptId) await deleteReceipt(entry.receiptId);
+    }
+    const trips = (await allRows('trips')).filter((t) => t && wanted.has(t.entryId));
+    await deleteRows('trips', trips.map((t) => t.id));
+    return trips;
   }
-  async function deleteEntries(ids) { for (const id of ids) await deleteEntry(id); }
+  const deleteEntry = (id) => deleteEntries([id]);
 
+  // With no IndexedDB and no localStorage (tests) receipts are held in memory for the session; localStorage itself must
+  // not carry photos, so there the app still says so and keeps the ledger without them.
+  const memoryReceipts = new Map();
+  const receiptsInMemory = () => mode === 'memory';
   async function putReceipt(receipt) {
     const db = await openDB();
-    if (!db) throw new Error('Receipt photos need IndexedDB, which this browser does not provide.');
+    if (!db) {
+      if (!receiptsInMemory()) throw new Error('Receipt photos need IndexedDB, which this browser does not provide.');
+      memoryReceipts.set(receipt.id, receipt);
+      return receipt;
+    }
     await tx(db, 'receipts', 'readwrite', (os) => os.put(receipt));
     return receipt;
   }
-  async function getReceipt(id) { if (!id) return null; const db = await openDB(); if (!db) return null; return (await tx(db, 'receipts', 'readonly', (os) => os.get(id))) || null; }
-  async function deleteReceipt(id) { if (!id) return; const db = await openDB(); if (!db) return; await tx(db, 'receipts', 'readwrite', (os) => os.delete(id)); }
-  async function getAllReceipts() { const db = await openDB(); if (!db) return []; return (await tx(db, 'receipts', 'readonly', (os) => os.getAll())) || []; }
+  async function getReceipt(id) { if (!id) return null; const db = await openDB(); if (!db) return (receiptsInMemory() && memoryReceipts.get(id)) || null; return (await tx(db, 'receipts', 'readonly', (os) => os.get(id))) || null; }
+  async function deleteReceipt(id) { if (!id) return; const db = await openDB(); if (!db) { memoryReceipts.delete(id); return; } await tx(db, 'receipts', 'readwrite', (os) => os.delete(id)); }
+  async function getAllReceipts() { const db = await openDB(); if (!db) return receiptsInMemory() ? Array.from(memoryReceipts.values()) : []; return (await tx(db, 'receipts', 'readonly', (os) => os.getAll())) || []; }
 
   const getPlaces = () => allRows('places');
   const putPlace = (place) => putRow('places', place);
@@ -3553,10 +3971,21 @@ window.ITEMIZER_SINGLE_FILE = true;
     await putRow('settings', { key: SETTINGS_KEY, value });
     return value;
   }
+  /**
+   * Change only the keys in `patch`, on top of what is stored right now. A tab that has been open for an hour holds a
+   * stale copy of every other key, so writing the whole row from it would undo what another tab saved. Returns the
+   * settings as they now stand.
+   */
+  async function updateSettings(patch) {
+    const value = sanitizeSettings(Object.assign({}, await getSettings(), patch));
+    await putRow('settings', { key: SETTINGS_KEY, value });
+    return value;
+  }
 
   // ---- the six stores the app reads as maps and lists ----------------------------------
 
-  const mapOf = (rows, k, v) => { const o = {}; for (const r of rows) o[r[k]] = v ? r[v] : r; return o; };
+  // defineProperty, not assignment: a key like '__proto__' has to become an ordinary entry of the map, not a write that vanishes
+  const mapOf = (rows, k, v) => { const o = {}; for (const r of rows) Object.defineProperty(o, r[k], { value: v ? r[v] : r, writable: true, enumerable: true, configurable: true }); return o; };
 
   /** { payeeKey: lineId } */
   const getLearned = async () => mapOf(await allRows('learned'), 'key', 'lineId');
@@ -3566,7 +3995,13 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   /** { keyword: weight } */
   const getWeights = async () => mapOf(await allRows('weights'), 'keyword', 'weight');
-  const syncWeights = (map) => syncRows('weights', Object.entries(map || {}).map(([keyword, weight]) => sanitizeRow('weights', { keyword, weight })).filter(Boolean));
+  /** `known` is the map the caller started from: only keywords it knew about may be deleted, so one open tab does not drop what another just learned. */
+  const syncWeights = (map, known) => {
+    const rows = Object.entries(map || {}).map(([keyword, weight]) => sanitizeRow('weights', { keyword, weight })).filter(Boolean);
+    if (!known) return syncRows('weights', rows);
+    const keys = new Set(Object.keys(known));
+    return syncRows('weights', rows, (r) => keys.has(r.keyword));
+  };
   const clearWeights = () => clearStore('weights');
 
   /** { recommendationId: 'YYYY-MM-DD' } */
@@ -3581,7 +4016,13 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   /** snapshots, oldest month first */
   const getSnapshots = async () => (await allRows('snapshots')).sort((a, b) => a.month.localeCompare(b.month) || a.taxYear - b.taxYear);
-  const syncSnapshots = (list) => syncRows('snapshots', (list || []).map((s) => sanitizeRow('snapshots', s)).filter(Boolean));
+  /** `known` is the list the caller started from: only months it knew about may be deleted (see syncWeights). */
+  const syncSnapshots = (list, known) => {
+    const rows = cleanRows('snapshots', list);
+    if (!known) return syncRows('snapshots', rows);
+    const ids = new Set(cleanRows('snapshots', known).map((r) => r.id));
+    return syncRows('snapshots', rows, (r) => ids.has(r.id));
+  };
   const clearSnapshots = () => clearStore('snapshots');
 
   /** { taxYear: nested overrides } as rules.getParams reads them */
@@ -3592,8 +4033,12 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   // ---- backup / restore -------------------------------------------------------
 
-  function blobToDataURL(blob) {
-    return new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(r.error); r.readAsDataURL(blob); });
+  /** A stored photo as a data URL. Done from the bytes rather than with FileReader, so it works wherever the app and its tests run. */
+  async function blobToDataURL(blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return `data:${blob.type || 'image/jpeg'};base64,${btoa(bin)}`;
   }
   const IMAGE_DATA_URL = /^data:(image\/(?:jpeg|jpg|png|webp|gif|heic|heif));base64,([A-Za-z0-9+/=\s]+)$/i;
   const MAX_RECEIPT_BYTES = 25 * 1024 * 1024;
@@ -3646,12 +4091,12 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   /** An entry from a backup, or null when it cannot be trusted. `schema` (ItemizerSchema) validates the line id when given. */
   function sanitizeEntry(e, schema) {
-    if (!e || typeof e !== 'object' || typeof e.id !== 'string' || !e.id || typeof e.lineId !== 'string' || typeof e.date !== 'string' || !ISO_DAY.test(e.date)) return null;
+    if (!e || typeof e !== 'object' || !okId(e.id) || typeof e.lineId !== 'string' || typeof e.date !== 'string' || !ISO_DAY.test(e.date)) return null;
     if (schema && schema.getLine && !schema.getLine(e.lineId)) return null;
     const amount = Number(e.amount);
     if (!Number.isFinite(amount) || amount < 0) return null;
     const out = {
-      id: e.id.slice(0, 64), date: e.date, taxYear: Number(e.taxYear) || Number(e.date.slice(0, 4)), lineId: e.lineId, amount: Math.round(amount * 100) / 100,
+      id: e.id, date: e.date, taxYear: Number(e.taxYear) || Number(e.date.slice(0, 4)), lineId: e.lineId, amount: Math.round(amount * 100) / 100,
       description: str(e.description, 300), note: str(e.note, 4000), hasReceipt: !!e.hasReceipt, receiptId: typeof e.receiptId === 'string' ? e.receiptId.slice(0, 64) : null,
       createdAt: str(e.createdAt, 40) || nowISO(), updatedAt: str(e.updatedAt, 40) || nowISO(), sample: !!e.sample,
     };
@@ -3663,39 +4108,127 @@ window.ITEMIZER_SINGLE_FILE = true;
     return out;
   }
 
+  /** A place from a backup, or null when it cannot be trusted: only the fields the app writes survive. */
+  function sanitizePlace(p) {
+    if (!p || typeof p !== 'object' || !okId(p.id)) return null;
+    const name = str(p.name, 120).trim();
+    if (!name) return null;
+    const lat = finite(p.lat), lon = finite(p.lon);
+    // a place is only useful with both coordinates, and half a pair would measure trips as NaN
+    const located = lat != null && lon != null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+    return {
+      id: p.id, name, category: PLACE_CATEGORIES.includes(p.category) ? p.category : 'other', address: str(p.address, 300),
+      lat: located ? lat : null, lon: located ? lon : null, note: str(p.note, 1000), sample: !!p.sample, updatedAt: str(p.updatedAt, 40) || nowISO(),
+    };
+  }
+
+  /** A recorded track from a backup: points with real coordinates, the pause markers kept, and a limit on how many. */
+  function sanitizePoints(points) {
+    if (!Array.isArray(points)) return null;
+    const out = [];
+    for (const p of points.slice(0, MAX_POINTS)) {
+      if (!p || typeof p !== 'object') continue;
+      if (p.gap) { out.push({ gap: true }); continue; }
+      const lat = finite(p.lat), lon = finite(p.lon);
+      if (lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+      const point = { lat, lon };
+      const t = finite(p.t); if (t != null) point.t = t;
+      const acc = finite(p.acc); if (acc != null) point.acc = acc;
+      out.push(point);
+    }
+    return out.length ? out : null;
+  }
+
+  /**
+   * A trip from a backup, or null when it cannot be trusted. The mileage log is a tax record, so a trip needs a date and
+   * a number of miles; `schema` (ItemizerSchema) checks the worksheet line when given. Trips from before the app kept a
+   * line have none, which is why a missing line is allowed and only a wrong one is rejected.
+   */
+  function sanitizeTrip(t, schema) {
+    if (!t || typeof t !== 'object' || !okId(t.id) || typeof t.date !== 'string' || !ISO_DAY.test(t.date)) return null;
+    const miles = finite(t.miles);
+    if (miles == null || miles < 0) return null;
+    const lineId = typeof t.lineId === 'string' && t.lineId.length <= 40 ? t.lineId : '';
+    if (lineId && schema && schema.getLine && !(schema.getLine(lineId) && (!schema.isMiles || schema.isMiles(lineId)))) return null;
+    const ref = (v) => (okId(v) ? v : null);
+    const time = (v) => (finite(v) != null ? Number(v) : str(v, 40) || null); // a recorded trip keeps milliseconds, an older one an ISO string
+    return {
+      id: t.id, date: t.date, taxYear: yearOf(t.taxYear) != null ? yearOf(t.taxYear) : Number(t.date.slice(0, 4)),
+      fromId: ref(t.fromId), toId: ref(t.toId), fromLabel: str(t.fromLabel, 120), toLabel: str(t.toLabel, 120),
+      purpose: str(t.purpose, 300), miles: Math.round(miles * 10) / 10, roundTrip: !!t.roundTrip,
+      method: TRIP_METHODS.includes(t.method) ? t.method : 'manual', lineId: lineId || null, entryId: ref(t.entryId), sample: !!t.sample,
+      points: sanitizePoints(t.points), startedAt: time(t.startedAt), endedAt: time(t.endedAt), createdAt: str(t.createdAt, 40) || nowISO(),
+    };
+  }
+
+  /** True when a write failed because there is no room, rather than because the row was bad. */
+  const isStorageFull = (e) => !!e && (e.name === 'QuotaExceededError' || /Storage is full/.test(e.message || ''));
+
   /**
    * Merge a backup in. Existing rows with the same key are replaced; version-2 backups (collections inside `settings`)
-   * are split into rows on the way in. Returns counts, including rows that were rejected.
+   * are split into rows on the way in. Every row is checked before the first one is written, and a restore that replaces
+   * the ledger takes the old rows away only once the new ones are in, so a file that cannot be read and a disk that runs
+   * out of room both leave the device with something. Returns counts, including rows that were rejected.
    */
   async function importJSON(data, opts) {
     opts = opts || {};
     if (!data || typeof data !== 'object' || Array.isArray(data) || data.app !== 'itemizer' || !Array.isArray(data.entries)) throw new Error('That file is not an Itemizer backup.');
     const schema = schemaOf(opts);
-    if (opts.replace) await clearAll({ keepSettings: true });
     const entries = data.entries.map((e) => sanitizeEntry(e, schema)).filter(Boolean);
     const skipped = data.entries.length - entries.length;
-    await putEntries(entries);
-    let receipts = 0, badReceipts = 0;
-    for (const r of data.receipts || []) {
-      if (!r || typeof r.id !== 'string' || !r.dataURL) { badReceipts++; continue; }
-      try { await putReceipt({ id: r.id.slice(0, 64), entryId: typeof r.entryId === 'string' ? r.entryId : null, type: /^image\//.test(r.type) ? r.type : 'image/jpeg', createdAt: typeof r.createdAt === 'string' ? r.createdAt : nowISO(), blob: await dataURLToBlob(r.dataURL) }); receipts++; } catch (e) { badReceipts++; }
-    }
-    await putRows('places', (Array.isArray(data.places) ? data.places : []).map((p) => sanitizeRow('places', p)).filter(Boolean));
-    await putRows('trips', (Array.isArray(data.trips) ? data.trips : []).map((t) => sanitizeRow('trips', t)).filter(Boolean));
+    const places = cleanRows('places', data.places, schema);
+    const trips = cleanRows('trips', data.trips, schema);
     // the six memory stores: rows in a version-3 file, or split out of the settings document of an older one
     const rows = {};
     const legacy = isLegacySettings(data.settings) ? splitLegacySettings(data.settings, schema) : null;
     for (const store of ROW_STORES) {
-      const incoming = Array.isArray(data[store]) ? data[store].map((r) => sanitizeRow(store, r, schema)).filter(Boolean) : [];
+      const incoming = cleanRows(store, data[store], schema);
       rows[store] = legacy ? legacy[store].concat(incoming) : incoming;
-      await putRows(store, rows[store]);
+    }
+    // a replace takes the old ledger away only once the new one is written, so a storage failure part-way leaves what
+    // was here rather than nothing
+    const replaced = opts.replace ? await Promise.all(DATA_STORES.map(allKeys)) : null;
+    // photos first: an entry may only keep its receipt mark once the photo it names is really here. One at a time, so a
+    // year of them is never all in memory at once.
+    const known = new Set(entries.map((e) => e.id));
+    if (!replaced) for (const k of await allKeys('entries')) known.add(k);
+    let receipts = 0, badReceipts = 0, orphanReceipts = 0;
+    const stored = new Set();
+    for (const r of data.receipts || []) {
+      if (!r || typeof r.id !== 'string' || !r.dataURL) { badReceipts++; continue; }
+      const id = r.id.slice(0, 64), entryId = typeof r.entryId === 'string' ? r.entryId : null;
+      if (entryId && !known.has(entryId)) { orphanReceipts++; continue; }
+      try {
+        await putReceipt({ id, entryId, type: /^image\//.test(r.type) ? r.type : 'image/jpeg', createdAt: typeof r.createdAt === 'string' ? r.createdAt : nowISO(), blob: await dataURLToBlob(r.dataURL) });
+        receipts++; stored.add(id);
+      } catch (e) { if (isStorageFull(e)) throw e; badReceipts++; }
+    }
+    if (!replaced) for (const k of await allKeys('receipts')) stored.add(k);
+    let dangling = 0;
+    // hasReceipt is left alone: it can mean a paper receipt. Only the claim to a photo has to be true.
+    for (const e of entries) if (e.receiptId && !stored.has(e.receiptId)) { e.receiptId = null; dangling++; }
+    await putEntries(entries);
+    await putRows('places', places);
+    await putRows('trips', trips);
+    for (const store of ROW_STORES) await putRows(store, rows[store]);
+    if (replaced) {
+      const fresh = { entries: entries.map((e) => e.id), receipts: Array.from(stored), places: places.map((p) => p.id), trips: trips.map((t) => t.id) };
+      for (let i = 0; i < DATA_STORES.length; i++) {
+        const store = DATA_STORES[i], kept = new Set(fresh[store]);
+        await deleteRows(store, replaced[i].filter((k) => !kept.has(k)));
+      }
     }
     if (data.settings && typeof data.settings === 'object' && opts.settings !== false) {
-      const cur = await getSettings();
-      await saveSettings(Object.assign({}, cur, sanitizeSettings(data.settings)));
+      // only the settings the file actually carries: an older backup has fewer keys, and the rest must survive it
+      const incoming = {};
+      for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in data.settings) incoming[k] = data.settings[k];
+      if (data.settings.experiments && typeof data.settings.experiments === 'object') {
+        for (const [old, flat] of Object.entries(LEGACY_EXPERIMENT_FLAGS)) if (!(flat in incoming) && old in data.settings.experiments) incoming[flat] = data.settings.experiments[old] !== false;
+      }
+      await updateSettings(incoming);
     }
     const counts = {}; for (const store of ROW_STORES) counts[store] = rows[store].length;
-    return { entries: entries.length, skipped, receipts, badReceipts, rows: counts };
+    return { entries: entries.length, skipped, receipts, badReceipts, dangling, orphanReceipts, rows: counts };
   }
 
   /** Remove everything; with keepSettings, only the ledger (entries, receipts, places, trips) goes and what the app has learned stays. */
@@ -3725,7 +4258,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     for (const e of sorted) {
       const line = Schema.getLine(e.lineId);
       rows.push([e.date, e.taxYear || String(e.date).slice(0, 4), line ? line.sectionTitle : '', line ? line.label : e.lineId, Number(e.amount) || 0, line ? line.unit : ''].map(csvEscape)
-        .concat([csvText(e.description), csvText(e.note)], [e.hasReceipt ? 'yes' : 'no', e.receiptId ? 'yes' : 'no', e.id].map(csvEscape)).join(','));
+        .concat([csvText(e.description), csvText(e.note), e.hasReceipt ? 'yes' : 'no', e.receiptId ? 'yes' : 'no', csvText(e.id)]).join(','));
     }
     return rows.join('\r\n');
   }
@@ -3757,14 +4290,15 @@ window.ITEMIZER_SINGLE_FILE = true;
 
   root.ItemizerStore = {
     DB_VERSION, STORES, STORE_NAMES, DATA_STORES, ROW_STORES, DEFAULT_SETTINGS,
-    sanitizeSettings, sanitizeRow, sanitizeEntry, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides,
+    sanitizeSettings, sanitizeRow, sanitizeEntry, sanitizePlace, sanitizeTrip, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides,
     openDB, allRows, getRow, putRow, putRows, deleteRow, clearStore, syncRows, countRows, counts,
     getEntries, putEntry, putEntries, deleteEntry, deleteEntries, putReceipt, getReceipt, deleteReceipt, getAllReceipts,
-    getPlaces, putPlace, deletePlace, getTrips, putTrip, deleteTrip, getSettings, saveSettings,
+    getPlaces, putPlace, deletePlace, getTrips, putTrip, deleteTrip, getSettings, saveSettings, updateSettings,
     getLearned, putLearned, deleteLearned, clearLearned, getWeights, syncWeights, clearWeights, getDismissals, putDismissal, clearDismissals,
     getLayouts, putLayout, clearLayouts, getSnapshots, syncSnapshots, clearSnapshots, getOverrides, syncOverrides, clearOverrides,
     exportJSON, exportBackup, importJSON, clearAll, toCSV, csvEscape, csvText, dataURLToBlob, uid, storageInfo, requestPersistence,
     get mode() { return mode; }, get notice() { return notice; },
+    get blockedTimeoutMs() { return blockedTimeoutMs; }, set blockedTimeoutMs(ms) { blockedTimeoutMs = ms; }, // tests wait a moment, not seconds
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
@@ -3793,6 +4327,9 @@ window.ITEMIZER_SINGLE_FILE = true;
   const EXP = globalThis.ItemizerExperiments;
 
   const VIEWS = ['capture', 'ledger', 'advisor', 'insights', 'worksheet', 'settings'];
+  const LEDGER_FILTERS = ['all', 'noreceipt', 'noack', 'dupes', 'samples'];
+  /** A filter the ledger cannot apply would leave every entry listed with no chip pressed, so anything else is "all". */
+  const normalizeLedgerFilter = (f) => (LEDGER_FILTERS.includes(f) ? f : 'all');
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
   /** Attach one delegated handler per event type to a long-lived element; a re-render replaces it instead of stacking another. */
@@ -3858,6 +4395,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     return { fromId: home ? home.id : '', toId: '', date: todayInYear(), purpose: '', roundTrip: true, miles: '', lineId: 'med.miles', method: 'manual', result: '', points: null, fromLabel: '', toLabel: '', startedAt: null, endedAt: null };
   }
 
+  /** Throw away a capture in progress, releasing the object URL of a photo that was never saved. */
+  function discardCapture() {
+    if (state.capture && state.capture.receiptURL) URL.revokeObjectURL(state.capture.receiptURL);
+    state.capture = null;
+  }
+
   function todayInYear() {
     // Default entry date: today if we're in the selected tax year, else Dec 31 of that year (or Jan 1 if the year is ahead).
     const t = P.todayISO();
@@ -3865,6 +4408,31 @@ window.ITEMIZER_SINGLE_FILE = true;
     const ty = Number(t.slice(0, 4));
     if (y === ty) return t;
     return y < ty ? `${y}-12-31` : `${y}-01-01`;
+  }
+  /** True when the stored tax year is behind the calendar and the user has not chosen it since the year turned. */
+  function shouldAdvanceTaxYear(storedYear, pickedAt, today) {
+    const now = Number(String(today).slice(0, 4));
+    if (!(Number(storedYear) < now)) return false;
+    const picked = Number(String(pickedAt || '').slice(0, 4));
+    return !(picked >= now);
+  }
+  /** On the first launch of a new year, move to it: otherwise today's receipt is filed on Dec 31 of the year before. */
+  async function maybeRollYear() {
+    if (!shouldAdvanceTaxYear(state.settings.taxYear, state.settings.taxYearPickedAt, P.todayISO())) return;
+    const was = Number(state.settings.taxYear);
+    state.settings.taxYear = Number(P.todayISO().slice(0, 4));
+    try { await DB.saveSettings(state.settings); } catch (e) { /* the year still moves for this session */ }
+    toast(`Tax year is now ${state.settings.taxYear}. Pick ${was} from the year menu to keep working on it.`, 12000, { label: `Back to ${was}`, onClick: () => setTaxYear(was) });
+  }
+  /** Switch the year the app is working on. A choice made here survives the New Year roll-over. */
+  async function setTaxYear(year) {
+    state.settings.taxYear = Number(year);
+    state.settings.taxYearPickedAt = P.todayISO();
+    await DB.saveSettings(state.settings);
+    discardCapture();
+    discardRecorder();
+    state.trip = null;
+    render();
   }
 
   function recompute() {
@@ -3874,15 +4442,18 @@ window.ITEMIZER_SINGLE_FILE = true;
     // Finished years with snapshots get their final figure, so past forecasts can be checked.
     const thisYear = Number(today.slice(0, 4));
     const finals = {};
-    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
+    // December receipts are typed in January to April, so a year is only graded once its records are in.
+    for (const y of new Set(snaps.map((x) => x.taxYear))) if (y < thisYear && today >= `${y + 1}-04-15`) finals[y] = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: y, today, paramOverrides: state.overrides })).scheduleA.total;
     state.validation = EXP.validate(snaps, finals);
     const calibration = state.settings.experimentSnapshots === false ? { factor: 1, n: 0, basis: 'snapshots are off' } : EXP.calibration(state.validation);
-    state.advice = ADV.analyze({ entries: state.entries, settings: state.settings, dismissed: state.dismissed, computed: state.computed, today, calibration });
+    // the advisor recomputes the projection itself, so it needs the same overridden parameters the live figures were built with
+    state.advice = ADV.analyze({ entries: state.entries, settings: Object.assign({}, state.settings, { paramOverrides: state.overrides }), dismissed: state.dismissed, computed: state.computed, today, calibration });
     maybeSnapshot(today);
   }
   /** Once a month, write down the live year's forecast so it can be checked when the year closes. */
   function maybeSnapshot(today) {
     if (state.settings.experimentSnapshots === false) return;
+    if (state.entries.some((e) => e.sample)) return; // a forecast built from example figures would be graded later as if it were real
     const pr = state.advice && state.advice.projection;
     if (!pr || Number(state.settings.taxYear) !== Number(today.slice(0, 4)) || !state.computed.entries.length) return;
     const s = { today, taxYear: state.computed.taxYear, actual: pr.actual, expectedMore: pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore, projectedTotal: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore), standardDeduction: pr.standardDeduction, itemize: pr.actual + (pr.expectedMoreRaw != null ? pr.expectedMoreRaw : pr.expectedMore) > pr.standardDeduction };
@@ -3912,7 +4483,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     const once = (k) => { if (state.session.nudged.has(k)) return false; state.session.nudged.add(k); return true; };
     const dayMs = 86400000;
     if (ADV.VISIT_LINES.includes(entry.lineId)) {
-      const hasDrive = state.entries.some((e) => e.lineId === 'med.miles' && Math.abs(new Date(e.date + 'T00:00:00') - new Date(entry.date + 'T00:00:00')) <= dayMs);
+      // rounded to whole days: the day daylight saving ends is 25 hours long, and a raw comparison misses the drive
+      const hasDrive = state.entries.some((e) => e.lineId === 'med.miles' && Math.abs(Math.round((new Date(e.date + 'T00:00:00') - new Date(entry.date + 'T00:00:00')) / dayMs)) <= 1);
       const history = state.entries.filter((e) => e.lineId === 'med.miles').map((e) => Number(e.amount) || 0);
       if (!hasDrive && (history.length || state.places.some((p) => p.category === 'medical')) && once('drive:' + entry.id)) {
         const typical = history.length ? median(history) : '';
@@ -3921,22 +4493,25 @@ window.ITEMIZER_SINGLE_FILE = true;
     } else if (entry.lineId === 'se.miles' && !state.entries.some((e) => e.lineId === 'se.total_miles' && Number(e.taxYear) === Number(entry.taxYear)) && once('totalmiles:' + entry.taxYear)) {
       setTimeout(() => toast("Saved. Schedule C also needs the year's total miles.", 9000, { label: 'Log total miles', onClick: () => prefillCapture({ lineId: 'se.total_miles', amount: '', description: 'Odometer, all miles this year', date: `${entry.taxYear}-12-31` }) }), 60);
     } else if (['ch.worship', 'ch.college', 'ch.org', 'ch.cfc', 'ch.other'].includes(entry.lineId) && Number(entry.amount) >= state.computed.params.acknowledgmentThreshold && !entry.hasReceipt && once('ack:' + entry.id)) {
-      setTimeout(() => toast("Saved. Gifts of $250 or more need the charity's written acknowledgment; attach it when it arrives.", 6000), 60);
+      setTimeout(() => toast(`Saved. Gifts of ${money(state.computed.params.acknowledgmentThreshold)} or more need the charity's written acknowledgment; attach it when it arrives.`, 6000), 60);
     }
   }
 
   function yearEntries() { return state.computed ? state.computed.entries : []; }
 
   // ---- toast / modal ---------------------------------------------------------
-  let toastTimer = null;
-  function hideToast() { const el = $('#toast'); if (!el) return; el.classList.remove('is-on'); el.textContent = ''; }
+  let toastTimer = null, toastFrame = null;
+  function cancelToastFrame() { if (toastFrame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(toastFrame); toastFrame = null; }
+  function hideToast() { cancelToastFrame(); const el = $('#toast'); if (!el) return; el.classList.remove('is-on'); el.textContent = ''; }
   function toast(msg, ms, action) {
     const el = $('#toast');
     el.hidden = false; // the live region is always in the accessibility tree; showing and hiding is a class
     clearTimeout(toastTimer);
+    cancelToastFrame();
     // cleared first, filled a frame later: a repeated message is a fresh change that screen readers announce
     el.textContent = ''; el.classList.remove('is-on');
     const show = () => {
+      toastFrame = null;
       el.textContent = msg;
       if (action && action.label) {
         const b = document.createElement('button');
@@ -3945,9 +4520,10 @@ window.ITEMIZER_SINGLE_FILE = true;
         el.appendChild(b);
       }
       el.classList.add('is-on');
+      // the countdown starts here: a frame in a background tab can be minutes late, and a toast must not outlive its action
+      toastTimer = setTimeout(hideToast, ms || (action ? 7000 : 2600));
     };
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(show); else show();
-    toastTimer = setTimeout(hideToast, ms || (action ? 7000 : 2600));
+    if (typeof requestAnimationFrame === 'function') toastFrame = requestAnimationFrame(show); else show();
   }
   // The modal is a real dialog: the page behind it is inert, Tab stays inside, and focus returns to the opener on close.
   let modalOpener = null, modalOnCancel = null, modalScrollY = 0;
@@ -3958,13 +4534,16 @@ window.ITEMIZER_SINGLE_FILE = true;
     const panel = $('#modalPanel');
     const items = [...panel.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null || el === document.activeElement);
     if (!items.length) { ev.preventDefault(); panel.focus(); return; }
-    const first = items[0], last = items[items.length - 1], inside = panel.contains(document.activeElement);
+    // the panel itself counts as outside: focus starts there on touch devices, and Shift+Tab from it must not leave the dialog
+    const first = items[0], last = items[items.length - 1], inside = panel.contains(document.activeElement) && document.activeElement !== panel;
     if (ev.shiftKey && (document.activeElement === first || !inside)) { ev.preventDefault(); last.focus(); }
     else if (!ev.shiftKey && (document.activeElement === last || !inside)) { ev.preventDefault(); first.focus(); }
   }
   function openModal(html, onOpen, onCancel) {
     const m = $('#modal'), panel = $('#modalPanel');
-    modalOpener = document.activeElement;
+    // a dialog opened over an open one keeps the first one's opener and scroll position: recording them again would lose both
+    const wasOpen = !m.hidden;
+    if (!wasOpen) modalOpener = document.activeElement;
     modalOnCancel = onCancel || null;
     panel.innerHTML = html;
     const heading = panel.querySelector('h2, h3');
@@ -3972,10 +4551,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (heading) { if (!heading.id) heading.id = 'modalTitle'; panel.setAttribute('aria-labelledby', heading.id); panel.removeAttribute('aria-label'); }
     else { panel.removeAttribute('aria-labelledby'); panel.setAttribute('aria-label', 'Dialog'); }
     m.hidden = false;
-    // iOS ignores overflow:hidden for touch scrolling, so the page is pinned in place and put back on close
-    modalScrollY = window.scrollY || 0;
-    document.body.style.overflow = 'hidden';
-    document.body.style.position = 'fixed'; document.body.style.top = `-${modalScrollY}px`; document.body.style.width = '100%';
+    if (!wasOpen) {
+      // iOS ignores overflow:hidden for touch scrolling, so the page is pinned in place and put back on close
+      modalScrollY = window.scrollY || 0;
+      document.body.style.overflow = 'hidden';
+      document.body.style.position = 'fixed'; document.body.style.top = `-${modalScrollY}px`; document.body.style.width = '100%';
+    }
     for (const el of behindModal()) { el.inert = true; el.setAttribute('aria-hidden', 'true'); }
     panel.addEventListener('keydown', trapTab);
     if (onOpen) onOpen(panel);
@@ -4014,6 +4595,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (!a || a === document.body) return null;
     if (a.id) return '#' + a.id;
     const d = a.dataset || {};
+    if (d.rec != null && d.recAct != null) return `[data-rec="${d.rec}"][data-rec-act="${d.recAct}"]`; // the two buttons on a card share one data-rec
     for (const k of ['filter', 'themePick', 'mode', 'param', 'sel', 'edit', 'impSel', 'impLine']) if (d[k] != null) return `[data-${k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}="${d[k]}"]`;
     return null;
   }
@@ -4041,6 +4623,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const canvas = document.createElement('canvas');
     canvas.width = cw; canvas.height = ch;
     canvas.getContext('2d').drawImage(source, 0, 0, cw, ch);
+    if (typeof source.close === 'function') source.close(); // a phone photo decodes to tens of megabytes; free it now rather than at the next collection
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
     return blob || file;
   }
@@ -4074,27 +4657,42 @@ window.ITEMIZER_SINGLE_FILE = true;
     const q = params ? '?' + new URLSearchParams(params).toString() : '';
     location.hash = view + q;
   }
+  let hashPutBack = false; // set while a hash the Back gesture changed is being restored
   function route() {
     const { view, params } = parseHash();
+    // Back with a sheet open should dismiss the sheet, not swap the view underneath it: close it and put the hash back.
+    if (!$('#modal').hidden) {
+      cancelModal();
+      if (view !== state.view) { hashPutBack = true; location.hash = state.view; }
+      return;
+    }
+    if (hashPutBack) { hashPutBack = false; return; }
     state.view = view;
-    if (view === 'ledger' && params.get('filter')) state.ledger.filter = params.get('filter');
+    const filter = params.get('filter');
+    if (view === 'ledger' && filter) state.ledger.filter = normalizeLedgerFilter(filter);
     render();
     $('#main').scrollTo && window.scrollTo({ top: 0 });
   }
 
   // ---- render ---------------------------------------------------------------
   function render() {
-    recompute();
-    for (const v of VIEWS) {
-      const el = $('#view-' + v);
-      const active = v === state.view;
-      el.hidden = !active;
-      const tab = $('#tab-' + v);
-      if (active) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+    // One bad row must not blank the whole app: on a failure the view already on screen stays, and the user can still reach Settings.
+    try {
+      recompute();
+      for (const v of VIEWS) {
+        const el = $('#view-' + v);
+        const active = v === state.view;
+        el.hidden = !active;
+        const tab = $('#tab-' + v);
+        if (active) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+      }
+      renderYearSelect();
+      ({ capture: renderCapture, ledger: renderLedger, advisor: renderAdvisor, insights: renderInsights, worksheet: renderWorksheet, settings: renderSettings })[state.view]();
+      document.title = state.view === 'capture' ? 'Itemizer' : `Itemizer · ${state.view[0].toUpperCase()}${state.view.slice(1)}`;
+    } catch (err) {
+      console.error(err);
+      toast('Something went wrong drawing this view. Your entries are safe; try another tab or reload the page.', 8000);
     }
-    renderYearSelect();
-    ({ capture: renderCapture, ledger: renderLedger, advisor: renderAdvisor, insights: renderInsights, worksheet: renderWorksheet, settings: renderSettings })[state.view]();
-    document.title = state.view === 'capture' ? 'Itemizer' : `Itemizer · ${state.view[0].toUpperCase()}${state.view.slice(1)}`;
   }
 
   function renderYearSelect() {
@@ -4117,7 +4715,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     return '<span class="row-receipt rc-none"></span>';
   }
   function entryRow(e, opts) {
-    const line = S.getLine(e.lineId);
+    // a row whose line a later schema no longer has is still listed and editable, rather than taking the view down with it
+    const line = S.getLine(e.lineId) || { label: e.lineId, sectionId: '', sectionTitle: 'Unrecognised line', unit: 'usd', treatment: 'info' };
     const dupe = opts && opts.dupes && opts.dupes.has(e.id);
     if (opts && opts.select) {
       return `<label class="row row-select">
@@ -4152,6 +4751,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   // CAPTURE
   // =====================================================================
   function renderCapture() {
+    const fk = focusKeyOf(); // the sheet returns focus to a row this render is about to replace
     if (!state.capture) { state.capture = freshCapture(); state.capture.date = todayInYear(); }
     const cap = state.capture;
     const R0 = state.computed;
@@ -4170,6 +4770,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       $('#view-capture').innerHTML = `${strip}${modeBarHTML(mode)}${mode === 'trip' ? tripModeHTML() : importModeHTML()}`;
       bindModeBar();
       if (mode === 'trip') bindTripMode(); else bindImportMode();
+      restoreFocus(fk);
       return;
     }
 
@@ -4211,7 +4812,7 @@ window.ITEMIZER_SINGLE_FILE = true;
           <div class="grid-2">
             <label class="field span-2"><span>Note</span><textarea id="fNote" rows="${cap.note && cap.note.includes('\n') ? Math.min(8, cap.note.split('\n').length) : 2}" placeholder="Who you met, what it was for, lender's name and TIN…">${esc(cap.note)}</textarea></label>
             <label class="field"><span>Repeat monthly</span><select id="fRepeat">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => `<option value="${n}" ${cap.repeat === n ? 'selected' : ''}>${n === 1 ? 'Just once' : `${n} months`}</option>`).join('')}</select></label>
-            <label class="field"><span>Business-use share (%)</span><input id="fShare" inputmode="numeric" value="${esc(cap.share || '')}" placeholder="100"></label>
+            <label class="field"><span>Business-use share (%)</span><input id="fShare" inputmode="decimal" value="${esc(cap.share || '')}" placeholder="100"></label>
             <p class="note span-2">Repeat is for premiums or a monthly pledge: one entry per month from this date. The share is for bills that are partly business, like a phone or internet: only that share is logged, and the full amount goes in the note.</p>
           </div>
         </details>
@@ -4226,6 +4827,7 @@ window.ITEMIZER_SINGLE_FILE = true;
       </section>`;
 
     bindCapture();
+    restoreFocus(fk);
   }
 
   function emptyStateHTML() {
@@ -4242,12 +4844,18 @@ window.ITEMIZER_SINGLE_FILE = true;
       return `<button class="chip" type="button" data-line="${id}" aria-pressed="${id === cap.lineId}" title="${esc(s && s.because.length ? 'Because: ' + s.because.join(', ') : '')}">${esc(l.label)} <small>· ${esc(l.sectionTitle.replace(' Expenses', '').replace(' Contributions', ''))}</small>${s && s.learned ? ' <small>★</small>' : ''}</button>`;
     }).join('');
   }
+  /** Where a line lands on the return. The medical floor is editable in Settings, so the rate in force is quoted, not a fixed figure. */
+  function treatmentLabel(treatment) {
+    const t = S.TREATMENTS[treatment];
+    if (treatment === 'A-medical' && state.computed) return `Medical (above ${R.pct(state.computed.params.medicalFloorRate)} of AGI)`;
+    return t.label;
+  }
   function lineHintHTML(lineId) {
     if (!lineId) return '';
     const l = S.getLine(lineId);
     const t = S.TREATMENTS[l.treatment];
     const s = state.capture && state.capture.suggestions.find((x) => x.lineId === lineId);
-    return `<b>${esc(l.label)}</b> → ${esc(t.schedule)}: ${esc(t.label)}.${l.hint ? ' ' + esc(l.hint) : ''}${s && s.because.length ? `<div class="because">Suggested because: ${esc(s.because.join(', '))}</div>` : ''}`;
+    return `<b>${esc(l.label)}</b> → ${esc(t.schedule)}: ${esc(treatmentLabel(l.treatment))}.${l.hint ? ' ' + esc(l.hint) : ''}${s && s.because.length ? `<div class="because">Suggested because: ${esc(s.because.join(', '))}</div>` : ''}`;
   }
 
   function bindCapture() {
@@ -4270,7 +4878,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const paper = $('#fPaper'); if (paper) paper.onchange = () => { cap.paper = paper.checked; cap.dirty = true; };
     $('#fNote').addEventListener('input', (ev) => { cap.note = ev.target.value; cap.dirty = true; });
     $('#fRepeat').addEventListener('change', (ev) => { cap.repeat = Number(ev.target.value) || 1; });
-    $('#fShare').addEventListener('input', (ev) => { cap.share = ev.target.value.replace(/[^0-9]/g, ''); cap.dirty = true; });
+    $('#fShare').addEventListener('input', (ev) => { cap.share = ev.target.value.replace(/[^0-9.]/g, ''); cap.dirty = true; updateSaveHint(); }); // a phone or internet split is often 33.3 or 62.5, so the decimal point stays
     listen(root, 'click', (ev) => {
       const b = ev.target.closest('[data-edit]'); if (b) { openEdit(b.dataset.edit); return; }
       const r = ev.target.closest('[data-rec-act]'); if (r) handleRecAction(r);
@@ -4793,12 +5401,16 @@ window.ITEMIZER_SINGLE_FILE = true;
       await DB.putDismissal(id, at); // one row per dismissed recommendation
       toast('Dismissed for 30 days.');
       render();
+      // the card that had focus is gone; move to the next recommendation rather than dropping focus to the top of the page
+      const next = $(`#view-${state.view} [data-rec-act]`);
+      if (next) next.focus({ preventScroll: true });
+      else { const h = $(`#view-${state.view} h2`); if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); } }
       return;
     }
     const a = rec.action || {};
     if (a.type === 'prefill') prefillCapture(a.entry);
     else if (a.type === 'edit') openEdit(a.entryId);
-    else if (a.type === 'ledger') { state.ledger.filter = a.filter || 'all'; go('ledger', a.filter ? { filter: a.filter } : null); }
+    else if (a.type === 'ledger') { state.ledger.filter = normalizeLedgerFilter(a.filter || 'all'); go('ledger', a.filter ? { filter: a.filter } : null); }
     else if (a.type === 'capture') { state.captureMode = 'expense'; go('capture'); if (state.view === 'capture') renderCapture(); setTimeout(() => { const q = $('#quickInput'); if (q) q.focus(); }, 50); }
     else if (a.type === 'settings') go('settings');
   }
@@ -4878,6 +5490,15 @@ window.ITEMIZER_SINGLE_FILE = true;
     refreshChips();
     updateSaveHint();
   }
+  /** The business-use share as typed. "33.3" is a real split; "125", "0" and "abc" are not a share at all. */
+  function parseShare(text) {
+    const n = Number(String(text == null ? '' : text).trim());
+    if (!(Number.isFinite(n) && n > 0 && n <= 100)) return { ok: false, share: 0 };
+    return { ok: true, share: Math.round(n * 10) / 10 };
+  }
+  /** That share of an amount, worked in whole cents: 75% of $100.46 is $75.35, not $75.34. */
+  function shareAmount(value, share) { return Math.round(Math.round(value * 100) * share / 100) / 100; }
+
   function captureProblems() {
     const cap = state.capture;
     const problems = [];
@@ -4886,6 +5507,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     const val = Number(isMiles ? cap.miles : cap.amount);
     if (!(val > 0)) problems.push(isMiles ? 'enter the miles' : 'enter an amount');
     if (!cap.date || !/^\d{4}-\d{2}-\d{2}$/.test(cap.date)) problems.push('pick a date');
+    // a share that cannot be read would otherwise file the whole bill at 100% without saying so
+    if (!isMiles && cap.share !== '' && !parseShare(cap.share).ok) problems.push('give the business-use share as a percentage between 0 and 100');
     return problems;
   }
   function updateSaveHint() {
@@ -4899,7 +5522,10 @@ window.ITEMIZER_SINGLE_FILE = true;
     else {
       const cap = state.capture;
       const y = Number(cap.date.slice(0, 4));
-      hint.textContent = y !== Number(state.settings.taxYear) ? `Dated ${y} — it will file under tax year ${y}.` : '';
+      // a date that is not today is worth saying out loud: the default is Dec 31 whenever a past year is selected
+      if (y !== Number(state.settings.taxYear)) hint.textContent = `Dated ${P.formatDate(cap.date)} — it will file under tax year ${y}.`;
+      else if (cap.date !== P.todayISO() && !cap.pinned.has('date')) hint.textContent = `Dated ${P.formatDate(cap.date)} (not today) — it will file under tax year ${y}.`;
+      else hint.textContent = '';
     }
   }
 
@@ -4914,9 +5540,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     const saveBtn = $('#saveBtn'); if (saveBtn) saveBtn.disabled = true;
     const isMiles = S.isMiles(cap.lineId);
     const value = Number(isMiles ? cap.miles : cap.amount);
-    const shareIn = Number(cap.share);
-    const share = !isMiles && cap.share !== '' && shareIn > 0 && shareIn < 100 ? Math.round(shareIn) : 100;
-    const saved = share < 100 ? Math.round(value * share) / 100 : value;
+    const typedShare = isMiles ? { ok: false, share: 0 } : parseShare(cap.share);
+    const share = typedShare.ok ? typedShare.share : 100; // 100% is the same as no share: the whole bill is logged
+    const saved = share < 100 ? shareAmount(value, share) : value;
     const noteText = ((share < 100 ? `${share}% business share of ${moneyCents(value)}. ` : '') + cap.note.trim()).trim();
     const now = new Date().toISOString();
     const line = S.getLine(cap.lineId);
@@ -4948,7 +5574,9 @@ window.ITEMIZER_SINGLE_FILE = true;
     if (cap.description.trim()) rememberLine(cap.description, cap.lineId);
     const fileYear = entries[0].taxYear;
     const label = isMiles ? fmtMiles(value) : moneyCents(saved);
-    toast(`Saved ${label} → ${line.label}${entries.length > 1 ? ` × ${entries.length} months` : ''}${fileYear !== Number(state.settings.taxYear) ? ` (tax year ${fileYear})` : ''}`);
+    // the year is named whenever the entry lands outside the selected year or outside the year we are living in
+    const noteYear = fileYear !== Number(state.settings.taxYear) || fileYear !== Number(P.todayISO().slice(0, 4));
+    toast(`Saved ${label} → ${line.label}${entries.length > 1 ? ` × ${entries.length} months` : ''}${noteYear ? ` (tax year ${fileYear})` : ''}`);
     if (cap.receiptURL) URL.revokeObjectURL(cap.receiptURL);
     state.capture = freshCapture();
     state.capture.date = todayInYear();
@@ -5014,6 +5642,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     const fk = focusKeyOf();
     const L = state.ledger;
     const F = ledgerFacts();
+    if (L.filter === 'samples' && !F.samples.length) L.filter = 'all'; // the Examples chip goes when the examples do
     const chip = (id, label, count) => `<button class="chip" type="button" data-filter="${id}" aria-pressed="${L.filter === id}">${esc(label)}${count != null ? ` <span class="count">${count}</span>` : ''}</button>`;
 
     $('#view-ledger').innerHTML = `
@@ -5189,12 +5818,17 @@ window.ITEMIZER_SINGLE_FILE = true;
   }
 
   // ---- edit sheet -----------------------------------------------------------
+  let openingEdit = false;
   async function openEdit(id) {
+    // a second tap, or a dialog already on screen: another sheet over this one would throw away the edits in it
+    if (openingEdit || !$('#modal').hidden) return;
     const e = state.entries.find((x) => x.id === id);
     if (!e) return;
     const line = S.getLine(e.lineId);
     const isMiles = S.isMiles(e.lineId);
-    const url = await receiptURL(e.receiptId);
+    openingEdit = true;
+    let url = null;
+    try { url = await receiptURL(e.receiptId); } finally { openingEdit = false; }
     openModal(`
       <div class="card-head"><h2>Edit entry</h2><span class="pill-row"><span class="pill pill-accent">${esc(line.sectionTitle)}</span>${!isMiles && !e.hasReceipt && !e.receiptId && (Number(e.amount) || 0) >= state.computed.params.receiptThreshold ? '<span class="pill pill-act">No receipt</span>' : ''}${state.computed.duplicates.some(([a, b]) => a.id === e.id || b.id === e.id) ? '<span class="pill pill-warn">Possible duplicate</span>' : ''}</span></div>
       <div class="grid-2">
@@ -5218,11 +5852,28 @@ window.ITEMIZER_SINGLE_FILE = true;
       panel.querySelector('[data-close]').onclick = closeModal;
       const lineSel = panel.querySelector('#eLine');
       lineSel.onchange = () => { const m = S.isMiles(lineSel.value); panel.querySelector('#eAmountLabel').textContent = m ? 'Miles' : 'Amount ($)'; panel.querySelector('#eReceiptRow').hidden = m; panel.querySelector('#eHint').innerHTML = lineHintHTML(lineSel.value); };
-      const thumb = panel.querySelector('#eThumb'); if (thumb) thumb.onclick = () => viewReceipt(url, e.description || line.label);
+      // the photo grows inside the sheet: opening it as its own dialog would replace this form and lose whatever is typed in it
+      const thumb = panel.querySelector('#eThumb');
+      if (thumb) thumb.onclick = () => {
+        const img = thumb.querySelector('img');
+        const big = img.className !== 'receipt-full';
+        img.className = big ? 'receipt-full' : 'receipt-thumb';
+        thumb.style.flexBasis = big ? '100%' : ''; // the row wraps, so the opened photo gets a line of its own
+        thumb.setAttribute('aria-label', big ? 'Hide the receipt' : 'View the receipt full size');
+      };
       const attach = panel.querySelector('#eAttach') || panel.querySelector('#eReplace');
       if (attach) attach.onclick = () => { state.pendingReceiptTarget = e.id; closeModal(); $('#receiptPick').click(); };
       const rm = panel.querySelector('#eRemovePhoto');
-      if (rm) rm.onclick = async () => { await DB.deleteReceipt(e.receiptId); dropReceiptURL(e.receiptId); e.receiptId = null; e.hasReceipt = false; e.updatedAt = new Date().toISOString(); await DB.putEntry(e); toast('Photo removed.'); openEdit(e.id); };
+      if (rm) rm.onclick = async () => {
+        await DB.deleteReceipt(e.receiptId); dropReceiptURL(e.receiptId);
+        e.receiptId = null; e.hasReceipt = false; e.updatedAt = new Date().toISOString();
+        await DB.putEntry(e);
+        // only the receipt row is rebuilt: reopening the sheet would discard an amount or note typed but not yet saved
+        const row = panel.querySelector('#eReceiptRow');
+        row.innerHTML = `<button class="btn" type="button" id="eAttach">${ICON.camera} Attach receipt</button><label class="check"><input type="checkbox" id="ePaper"> Paper receipt filed</label>`;
+        row.querySelector('#eAttach').onclick = () => { state.pendingReceiptTarget = e.id; closeModal(); $('#receiptPick').click(); };
+        toast('Photo removed.');
+      };
       panel.querySelector('#eDelete').onclick = async () => {
         closeModal();
         if (!(await confirmDialog('Delete this entry?', `${e.description || line.label} · ${fmtAmount(e)} on ${P.formatDate(e.date)}. This cannot be undone.`, 'Delete', true))) return;
@@ -5339,14 +5990,14 @@ window.ITEMIZER_SINGLE_FILE = true;
     const tg = $('#toggleMonthsTable'); if (tg) tg.onclick = () => { state.showMonthsTable = !state.showMonthsTable; renderInsights(); };
     listen($('#view-insights'), 'click', (ev) => {
       const go1 = ev.target.closest('[data-go]');
-      if (go1) { ev.preventDefault(); const [view, filter] = go1.dataset.go.split(':'); if (filter) state.ledger.filter = filter; go(view, filter ? { filter } : null); }
+      if (go1) { ev.preventDefault(); const [view, filter] = go1.dataset.go.split(':'); if (filter) state.ledger.filter = normalizeLedgerFilter(filter); go(view, filter ? { filter } : null); }
     });
   }
   function yoyHTML() {
     const R0 = state.computed;
     const prevYear = R0.taxYear - 1;
     if (!state.entries.some((e) => R.taxYearOf(e) === prevYear)) return '';
-    const prev = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: prevYear, today: P.todayISO() }));
+    const prev = R.compute(state.entries, Object.assign({}, state.settings, { taxYear: prevYear, today: P.todayISO(), paramOverrides: state.overrides }));
     const rows = S.SECTIONS.filter((s) => R0.sections[s.id].count || prev.sections[s.id].count).map((s) => ({ title: s.title, now: R0.sections[s.id].value, before: prev.sections[s.id].value }));
     const delta = (a, b) => { const d = Math.round((a - b) * 100) / 100; return `<span class="${d > 0 ? 'delta-up' : d < 0 ? 'delta-down' : ''}">${d > 0 ? '+' : ''}${money(d)}</span>`; };
     return `<section class="card">
@@ -5565,6 +6216,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   // ADVISOR — recommendations from your own ledger
   // =====================================================================
   function renderAdvisor() {
+    const fk = focusKeyOf(); // a dismissal or a sheet returns focus to a card this render is about to replace
     const adv = state.advice;
     const R0 = state.computed;
     const pr = adv.projection;
@@ -5631,6 +6283,7 @@ window.ITEMIZER_SINGLE_FILE = true;
     $('#downloadAggregate').onclick = () => downloadText(`itemizer-summary-${R0.taxYear}.json`, JSON.stringify(adv.aggregate, null, 2), 'application/json');
     const ud = $('#undismiss'); if (ud) ud.onclick = async () => { state.dismissed = {}; await DB.clearDismissals(); recompute(); render(); toast('All recommendations are visible again.'); };
     const ics = $('#icsBtn'); if (ics) ics.onclick = () => downloadText(`itemizer-due-dates-${R0.taxYear}.ics`, icsText(), 'text/calendar');
+    restoreFocus(fk);
   }
 
   function forecastCardHTML() {
@@ -5745,7 +6398,7 @@ window.ITEMIZER_SINGLE_FILE = true;
 
         <section class="card">
           <div class="card-head"><h2>About Itemizer</h2><span class="muted small">v1.0</span></div>
-          <p class="note">Itemizer is modelled on the “Keep track of your expenses” organizer sheet tax preparers hand out. Every line on that sheet is here, plus the arithmetic the sheet leaves to you: the 7.5%-of-AGI medical floor, the state-and-local-tax cap, gift substantiation rules, mileage rates, and the standard-deduction comparison that decides whether any of it matters.</p>
+          <p class="note">Itemizer is modelled on the “Keep track of your expenses” organizer sheet tax preparers hand out. Every line on that sheet is here, plus the arithmetic the sheet leaves to you: the medical floor as a share of AGI, the state-and-local-tax cap, gift substantiation rules, mileage rates, and the standard-deduction comparison that decides whether any of it matters.</p>
           <p class="note" style="margin-top:8px">It is a planning tool, not tax advice. Rates and thresholds change; verify against current IRS publications (Schedule A instructions, Pub. 502, 526, 529, 970) or your preparer before filing.</p>
         </section>
       </div>`;
@@ -5960,6 +6613,10 @@ window.ITEMIZER_SINGLE_FILE = true;
     state.trips = state.trips.filter((x) => !x.sample);
     discardRecorder();
     state.trip = null;
+    // a forecast an earlier version wrote down while the examples were loaded would be graded later as if it were real
+    const key = EXP.monthKey(P.todayISO()), year = Number(state.settings.taxYear);
+    const kept = state.snapshots.filter((s) => !(s.month === key && s.taxYear === year));
+    if (kept.length !== state.snapshots.length) { state.snapshots = kept; await DB.syncSnapshots(state.snapshots).catch(() => {}); }
     toast(`Removed ${ids.length} example entries.`);
     render();
   }
@@ -5997,7 +6654,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     state.entries = await DB.getEntries();
     for (const e of state.entries) { try { if (!e.taxYear && typeof e.date === 'string') e.taxYear = Number(e.date.slice(0, 4)); } catch (err) { /* a bad row never blocks start-up */ } }
     try { state.places = await DB.getPlaces(); state.trips = await DB.getTrips(); } catch (e) { state.places = []; state.trips = []; }
-    state.capture = null; state.trip = null; state.importer = null; state.captureMode = 'expense';
+    discardCapture();
+    state.trip = null; state.importer = null; state.captureMode = 'expense';
   }
   async function init() {
     try { await reloadState(); }
@@ -6007,14 +6665,8 @@ window.ITEMIZER_SINGLE_FILE = true;
       toast(`Local storage could not be opened: ${e && e.message ? e.message : 'unknown error'}. Close other Itemizer tabs and reload; nothing will be saved until then.`, 30000);
     }
     applyTheme();
-    $('#yearSelect').onchange = async (ev) => {
-      state.settings.taxYear = Number(ev.target.value);
-      await DB.saveSettings(state.settings);
-      if (state.capture && state.capture.receiptURL) URL.revokeObjectURL(state.capture.receiptURL);
-      discardRecorder();
-      state.capture = null; state.trip = null;
-      render();
-    };
+    await maybeRollYear();
+    $('#yearSelect').onchange = (ev) => setTaxYear(ev.target.value);
     $('#receiptInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
     $('#receiptPick').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
     $('#importInput').onchange = importBackup;

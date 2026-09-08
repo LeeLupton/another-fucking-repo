@@ -47,19 +47,29 @@
    * tiny wobbles are ignored, and impossible jumps (teleports) are dropped.
    */
   function trackMeters(points, opts) {
-    const o = Object.assign({ maxAccuracy: 60, maxSpeed: 70, minStep: 6, minSpeed: 0.5 }, opts || {}); // speeds in m/s
-    let total = 0, last = null, pending = null;
+    const o = Object.assign({ maxAccuracy: 60, maxSpeed: 70, minStep: 6, minSpeed: 0.5, stillWindow: 90, stillFactor: 5 }, opts || {}); // speeds in m/s, window in s
+    let total = 0, last = null, pending = null, recent = [];
     for (const p of points || []) {
-      if (p && p.gap) { last = null; pending = null; continue; } // a pause: the straight line to the resume point is not driven
+      if (p && p.gap) { last = null; pending = null; recent = []; continue; } // a pause: the straight line to the resume point is not driven
       if (!p || !isFinite(p.lat) || !isFinite(p.lon)) continue;
       if (p.acc != null && p.acc > o.maxAccuracy) continue;
+      const speed = p.speed != null && isFinite(p.speed) && p.speed >= 0 ? p.speed : null;
       // a fix that reports itself as standing still is jitter, not distance
-      if (p.speed != null && isFinite(p.speed) && p.speed >= 0 && p.speed < o.minSpeed) continue;
+      if (speed != null && speed < o.minSpeed) continue;
+      recent.push(p);
+      while (recent.length > 1 && (Number(p.t) - Number(recent[0].t)) / 1000 > o.stillWindow) recent.shift();
       if (!last) { last = p; continue; }
       const d = haversineMeters(last, p);
       // a point must move farther than its own error radius before it counts, or a parked car drifts for miles
       const step = Math.max(o.minStep, ((Number(last.acc) || 0) + (Number(p.acc) || 0)) / 2);
       if (d < step) continue;
+      // Wi-Fi and network fixes carry no speed, and drift clears the step above every few seconds, so a parked
+      // phone books miles. Ask the whole window to have gone somewhere before such a fix may extend the track.
+      if (speed == null && recent.length > 1) {
+        const first = recent[0];
+        const span = (Number(p.t) - Number(first.t)) / 1000;
+        if (span >= 30 && haversineMeters(first, p) < Math.max(o.minSpeed * span, o.stillFactor * Math.max(Number(p.acc) || 0, Number(first.acc) || 0))) continue;
+      }
       if (p.t != null && last.t != null) {
         const dt = (p.t - last.t) / 1000;
         if (dt <= 0 || d / dt > o.maxSpeed) {
@@ -169,32 +179,52 @@
   function getPosition(opts) {
     return new Promise((resolve, reject) => {
       if (!hasGeolocation()) { reject(new Error('This device does not offer location.')); return; }
-      navigator.geolocation.getCurrentPosition((pos) => resolve(toPoint(pos)), (err) => reject(new Error(geoErrorText(err))), Object.assign({ enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }, opts || {}));
+      navigator.geolocation.getCurrentPosition((pos) => resolve(toPoint(pos)), (err) => reject(new Error(geoErrorText(err, false))), Object.assign({ enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }, opts || {}));
     });
   }
 
-  function geoErrorText(err) {
+  /** `watching` is true for the recorder's watch, which keeps trying; a one-shot request that timed out is over. */
+  function geoErrorText(err, watching) {
     if (!err) return 'Location unavailable.';
     if (err.code === 1) return 'Location permission was denied. Allow it in the browser settings to record trips.';
     if (err.code === 2) return 'Location is unavailable right now.';
-    if (err.code === 3) return 'Waiting for a GPS fix…';
+    if (err.code === 3) return watching ? 'Waiting for a GPS fix…' : 'No location fix arrived in time. Move somewhere with a clearer view of the sky, or type the coordinates.';
     return err.message || 'Location unavailable.';
   }
 
+  const CHECKPOINT_FIXES = 10, CHECKPOINT_MS = 30000;
   /**
    * A user-controlled trip recorder. Nothing runs until start() is called, and stop()
    * releases the position watch and the screen wake lock.
+   * handlers.onCheckpoint is handed the track so far every few fixes: a phone that discards the
+   * page mid-drive loses only the seconds since the last one. Pass a checkpoint back as
+   * `resumeFrom` to carry the same trip on.
    */
-  function createRecorder(handlers) {
+  function createRecorder(handlers, resumeFrom) {
     handlers = handlers || {};
     const rec = { state: 'idle', points: [], miles: 0, startedAt: null, endedAt: null, pausedMs: 0, pausedAt: null, last: null, error: null, waiting: false, watchId: null, wakeLock: null };
+    let fromCheckpoint = false, sinceCheckpoint = 0, checkpointAt = 0;
+    if (resumeFrom && resumeFrom.points && resumeFrom.points.length) {
+      rec.points = resumeFrom.points.slice();
+      rec.startedAt = resumeFrom.startedAt || Date.now();
+      rec.pausedMs = Number(resumeFrom.pausedMs) || 0;
+      rec.miles = roundMiles(trackMiles(rec.points));
+      fromCheckpoint = true;
+    }
+    const checkpoint = (force) => {
+      if (!handlers.onCheckpoint) return;
+      const now = Date.now();
+      if (!force && sinceCheckpoint < CHECKPOINT_FIXES && now - checkpointAt < CHECKPOINT_MS) return;
+      sinceCheckpoint = 0; checkpointAt = now;
+      handlers.onCheckpoint({ points: rec.points.slice(), miles: rec.miles, startedAt: rec.startedAt, pausedMs: rec.pausedMs, state: rec.state });
+    };
     const update = () => { rec.miles = roundMiles(trackMiles(rec.points)); if (handlers.onUpdate) handlers.onUpdate(rec); };
     const clearWatch = () => { if (rec.watchId != null && hasGeolocation()) navigator.geolocation.clearWatch(rec.watchId); rec.watchId = null; };
-    const onPos = (pos) => { if (rec.state !== 'recording') return; const p = toPoint(pos); rec.points.push(p); rec.last = p; rec.error = null; rec.waiting = false; update(); };
+    const onPos = (pos) => { if (rec.state !== 'recording') return; const p = toPoint(pos); rec.points.push(p); rec.last = p; rec.error = null; rec.waiting = false; sinceCheckpoint++; update(); checkpoint(false); };
     const onErr = (err) => {
       if (rec.state !== 'recording') return;
       if (err && err.code === 3) { rec.waiting = true; update(); return; } // no fix yet: a quiet status, not an error
-      rec.error = geoErrorText(err);
+      rec.error = geoErrorText(err, true);
       if (err && err.code === 1) { clearWatch(); unlock(); rec.state = 'idle'; rec.endedAt = Date.now(); } // permission denied: nothing is being recorded
       if (handlers.onError) handlers.onError(rec.error, rec);
       update();
@@ -216,7 +246,12 @@
     rec.start = function () {
       if (!hasGeolocation()) { rec.error = 'This device does not offer location.'; if (handlers.onError) handlers.onError(rec.error, rec); return false; }
       if (rec.state === 'recording') return true;
-      if (rec.state === 'idle') { rec.points = []; rec.miles = 0; rec.startedAt = Date.now(); rec.endedAt = null; rec.pausedMs = 0; }
+      if (rec.state === 'idle') {
+        // a recorder built from a checkpoint carries the same trip on: the interval the app was not running
+        // was not recorded, so it is marked as a gap rather than counted as driven
+        if (fromCheckpoint) { fromCheckpoint = false; rec.endedAt = null; rec.points.push({ gap: true }); }
+        else { rec.points = []; rec.miles = 0; rec.startedAt = Date.now(); rec.endedAt = null; rec.pausedMs = 0; }
+      }
       if (rec.state === 'paused') {
         if (rec.pausedAt) rec.pausedMs += Date.now() - rec.pausedAt;
         if (rec.points.length) rec.points.push({ gap: true }); // the distance between the pause and resume points was not driven
@@ -237,6 +272,7 @@
       if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', onVis);
       unlock();
       update();
+      checkpoint(true);
     };
     rec.resume = function () { if (rec.state === 'paused') rec.start(); };
     rec.stop = function () {
@@ -249,6 +285,7 @@
       rec.endedAt = Date.now();
       rec.error = null; rec.waiting = false;
       update();
+      checkpoint(true); // the track is still only in memory until the trip is logged
       return { points: thin(rec.points, 10), miles: rec.miles, startedAt: rec.startedAt, endedAt: rec.endedAt, pausedMs: rec.pausedMs };
     };
     return rec;
@@ -261,16 +298,19 @@
   async function fetchJSON(url, opts) {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => ctl.abort(), (opts && opts.timeout) || 9000) : null;
-    let res;
+    // the timer stays armed until the body has been read, so a reply that stalls halfway also times out
     try {
-      res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctl ? ctl.signal : undefined });
-    } catch (e) {
-      throw new Error(/abort/i.test(String(e && e.name)) ? 'The lookup timed out.' : 'Online lookup is not available here. Check the connection, or enter the value by hand.');
+      let res;
+      try {
+        res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctl ? ctl.signal : undefined });
+      } catch (e) {
+        throw new Error(/abort/i.test(String(e && e.name)) ? 'The lookup timed out.' : 'Online lookup is not available here. Check the connection, or enter the value by hand.');
+      }
+      // the status says what went wrong; "check the connection" would be misleading for a refusal
+      if (res.status === 429) throw new Error('The lookup service is busy; try again in a minute.');
+      if (!res.ok) throw new Error(`The lookup service refused this request (${res.status}). Enter the value by hand.`);
+      try { return await res.json(); } catch (e) { throw new Error(/abort/i.test(String(e && e.name)) ? 'The lookup timed out.' : 'The lookup service sent an unreadable reply. Enter the value by hand.'); }
     } finally { if (timer) clearTimeout(timer); }
-    // the status says what went wrong; "check the connection" would be misleading for a refusal
-    if (res.status === 429) throw new Error('The lookup service is busy; try again in a minute.');
-    if (!res.ok) throw new Error(`The lookup service refused this request (${res.status}). Enter the value by hand.`);
-    try { return await res.json(); } catch (e) { throw new Error('The lookup service sent an unreadable reply. Enter the value by hand.'); }
   }
 
   const NOMINATIM = 'https://nominatim.openstreetmap.org';
@@ -304,23 +344,57 @@
    */
   /** "Wake (County)", "Orleans (Parish)", "Wake County" → "wake": the bare area name for exact comparison. */
   const areaName = (s) => String(s || '').toLowerCase().replace(/\s*\(.*\)\s*$/, '').replace(/\s+(county|parish|borough|census area|municipality|municipio|independent city|city and borough)$/, '').trim();
+  /** The same trim with the capitals left alone: FEMA's own filter is case-sensitive, and this is what we show. */
+  const bareArea = (s) => String(s || '').replace(/\s*\(.*\)\s*$/, '').replace(/\s+(county|parish|borough|census area|municipality|municipio|independent city|city and borough)$/i, '').trim();
   async function femaDeclarations(params) {
     const state = String(params.state || '').toUpperCase();
     if (!/^[A-Z]{2}$/.test(state)) throw new Error('Pick a state first.');
     const since = params.since || `${new Date().getFullYear()}-01-01`;
+    const until = params.until || '';
     const county = areaName(params.county);
-    // A declaration is often dated weeks after the incident, so match either date against the tax year; a county filter runs
-    // on the server too, so the row cap applies to this county's declarations rather than to the whole state's.
-    let filter = `state eq '${state}' and (declarationDate ge '${since}T00:00:00.000z' or incidentBeginDate ge '${since}T00:00:00.000z')`;
-    if (county) filter += ` and (substringof('${county.replace(/'/g, "''")}', designatedArea) or designatedArea eq 'Statewide')`;
-    const url = `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=${encodeURIComponent(filter)}&$orderby=declarationDate%20desc&$top=1000&$select=disasterNumber,declarationTitle,declarationDate,declarationType,designatedArea,incidentType,incidentBeginDate,incidentEndDate,state`;
-    const data = await fetchJSON(url, { timeout: 12000 });
-    let items = (data && data.DisasterDeclarationsSummaries) || [];
+    // A declaration is often dated weeks after the incident, so match either date against the tax year. The upper bound is
+    // on the incident, so a late declaration of an in-year event still counts while a later year's disaster does not.
+    let base = `state eq '${state}' and (declarationDate ge '${since}T00:00:00.000z' or incidentBeginDate ge '${since}T00:00:00.000z')`;
+    if (until) base += ` and incidentBeginDate lt '${until}T00:00:00.000z'`;
+    const ask = async (filter) => {
+      const url = `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=${encodeURIComponent(filter)}&$orderby=declarationDate%20desc&$top=1000&$select=disasterNumber,declarationTitle,declarationDate,declarationType,designatedArea,incidentType,incidentBeginDate,incidentEndDate,state`;
+      const data = await fetchJSON(url, { timeout: 12000 });
+      return (data && data.DisasterDeclarationsSummaries) || [];
+    };
+    // The county filter runs on the server too, so the row cap applies to this county's declarations rather than to the
+    // whole state's. It is a case-sensitive string match, so the name goes over the wire as FEMA writes it.
+    let items = await ask(county ? `${base} and (substringof('${bareArea(params.county).replace(/'/g, "''")}', designatedArea) or designatedArea eq 'Statewide')` : base);
+    // a county spelled differently from FEMA's own list must not read as "no disasters here": ask again for the
+    // whole state and narrow it below
+    if (county && !items.length) items = await ask(base);
     if (county) items = items.filter((d) => areaName(d.designatedArea) === county || /statewide/i.test(d.designatedArea || ''));
-    // one row per declaration number
-    const seen = new Set();
-    return items.filter((d) => { if (seen.has(d.disasterNumber)) return false; seen.add(d.disasterNumber); return true; })
-      .map((d) => ({ number: d.disasterNumber, title: d.declarationTitle, type: d.declarationType, declared: String(d.declarationDate || '').slice(0, 10), area: d.designatedArea, incident: d.incidentType, begin: String(d.incidentBeginDate || '').slice(0, 10), end: String(d.incidentEndDate || '').slice(0, 10) }));
+    if (until) items = items.filter((d) => { const b = String(d.incidentBeginDate || '').slice(0, 10); return !b || b < until; });
+    // FEMA lists a declaration once per designated area. Gather them all: naming whichever row came first would
+    // tell the user their own county is or is not covered on the strength of an accident of ordering.
+    const byNumber = new Map();
+    for (const d of items) {
+      let rec = byNumber.get(d.disasterNumber);
+      if (!rec) {
+        rec = { number: d.disasterNumber, title: d.declarationTitle, type: d.declarationType, declared: String(d.declarationDate || '').slice(0, 10), incident: d.incidentType, begin: String(d.incidentBeginDate || '').slice(0, 10), end: String(d.incidentEndDate || '').slice(0, 10), areas: [], areaCount: 0, statewide: false, coversCounty: county ? false : null, area: '' };
+        byNumber.set(d.disasterNumber, rec);
+      }
+      if (/statewide/i.test(d.designatedArea || '')) { rec.statewide = true; if (county) rec.coversCounty = true; }
+      else {
+        const name = bareArea(d.designatedArea);
+        if (name && rec.areas.indexOf(name) < 0) rec.areas.push(name);
+        if (county && areaName(d.designatedArea) === county) rec.coversCounty = true;
+      }
+    }
+    const out = Array.from(byNumber.values());
+    for (const rec of out) {
+      rec.areas.sort();
+      rec.areaCount = rec.areas.length;
+      rec.area = rec.statewide ? 'Statewide'
+        : rec.coversCounty ? `covers ${bareArea(params.county)}`
+        : rec.areaCount === 1 ? rec.areas[0]
+        : rec.areaCount ? `${rec.areaCount} areas designated` : 'Designated areas not listed';
+    }
+    return out;
   }
 
   const osmLink = (lat, lon) => `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=15/${lat}/${lon}`;

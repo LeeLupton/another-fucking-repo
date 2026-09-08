@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
 jobs:
@@ -19,6 +19,10 @@ jobs:
         run: npm test
       - name: Single-file build
         run: npm run build
+      # dist/ and the cache stamp in sw.js are committed. A change under js/ that was never built would
+      # otherwise ship a stale download and leave installed clients on the previous cache version.
+      - name: The committed build is current
+        run: git diff --exit-code -- dist sw.js
       - uses: actions/upload-artifact@v4
         with:
           name: itemizer-single-file

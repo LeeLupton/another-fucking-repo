@@ -26,6 +26,8 @@
 
   const DAY = 86400000;
   const DISMISS_DAYS = 30;
+  // A payee logged from a monthly bank statement can be six weeks late without having stopped.
+  const LAPSE_FLOOR_DAYS = 45;
   const CADENCES = [
     { id: 'weekly', label: 'weekly', days: 7, tol: 2, min: 3, perYear: 52 },
     { id: 'biweekly', label: 'every two weeks', days: 14, tol: 3, min: 3, perYear: 26 },
@@ -66,7 +68,12 @@
   }
   const money = Rules.money;
   const cents = Rules.cents;
-  function fmtDate(iso) { const d = toDate(iso); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  // ctxYear is the year the reader is looking at: a date outside it carries its year, so "Dec 10" is never mistaken for this year's
+  function fmtDate(iso, ctxYear) {
+    const d = toDate(iso);
+    const withYear = ctxYear && iso.slice(0, 4) !== String(ctxYear);
+    return d.toLocaleDateString('en-US', withYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
+  }
   function fmtValue(lineId, n) { return Schema.isMiles(lineId) ? `${Number(n).toLocaleString('en-US', { maximumFractionDigits: 1 })} mi` : money(n); }
   function keyOf(e) { const k = Classify.keyFor(e.description || ''); return (k || '-') + '|' + e.lineId; }
   /** The next estimated-tax deadline strictly after a date (Sep 15 rolls to Jan 15 of the next year). */
@@ -75,20 +82,27 @@
     for (const md of ESTIMATED_DEADLINES) { const d = `${y}-${md}`; if (d > iso) return d; }
     return `${y + 1}-${ESTIMATED_DEADLINES[0]}`;
   }
+  /** The estimated-tax deadline a payment on this date satisfies, or null: quarterly payments are often made early. */
+  function nearestDeadline(iso) {
+    const y = Number(iso.slice(0, 4));
+    return [y - 1, y, y + 1].flatMap((yy) => ESTIMATED_DEADLINES.map((md) => `${yy}-${md}`)).find((d) => Math.abs(daysBetween(d, iso)) <= ESTIMATED.tol) || null;
+  }
   /** The k-th occurrence after an anchor date, generated from the anchor so month-ends never drift. */
   function nth(anchorIso, cadence, k) {
-    if (cadence.id === 'estimated') { let d = anchorIso; for (let i = 0; i < k; i++) d = nextDeadline(d); return d; }
+    // snap to the deadline the anchor payment satisfied, so a payment made early does not re-expect its own deadline
+    if (cadence.id === 'estimated') { let d = nearestDeadline(anchorIso) || anchorIso; for (let i = 0; i < k; i++) d = nextDeadline(d); return d; }
     if (MONTHS_PER[cadence.id]) return addMonths(anchorIso, k * MONTHS_PER[cadence.id]);
     return addDays(anchorIso, Math.round(k * cadence.days));
   }
   function step(iso, cadence) { return nth(iso, cadence, 1); }
+  /** How far past due a payee has to be before we call it stopped. */
+  function lapseDaysFor(cadence) { return Math.max(cadence.days + 2 * cadence.tol, LAPSE_FLOOR_DAYS); }
   /** True when every occurrence sits near an estimated-tax deadline and at least three distinct deadlines are hit. */
   function looksEstimated(occ) {
     if (occ.length < ESTIMATED.min) return false;
     const hit = new Set();
     for (const o of occ) {
-      const y = Number(o.date.slice(0, 4));
-      const near = [y - 1, y, y + 1].flatMap((yy) => ESTIMATED_DEADLINES.map((md) => `${yy}-${md}`)).find((d) => Math.abs(daysBetween(d, o.date)) <= ESTIMATED.tol);
+      const near = nearestDeadline(o.date);
       if (!near) return false;
       hit.add(near);
     }
@@ -116,7 +130,7 @@
       if (!byLine.has(e.lineId)) byLine.set(e.lineId, []);
       byLine.get(e.lineId).push({ date: e.date, amount: Number(e.amount) || 0, key: k });
     }
-    const out = [];
+    const cands = [];
     for (const [key, list] of groups) {
       if (list.length < 2) continue;
       list.sort((a, b) => a.date.localeCompare(b.date));
@@ -134,7 +148,8 @@
       const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
       const line = Schema.getLine(list[0].lineId);
       let cadence = null;
-      if (line.sectionId === 'taxes' && looksEstimated(occ)) cadence = ESTIMATED;
+      // only the state income tax line follows the IRS calendar; property tax quarters that happen to land near a deadline do not
+      if (line.id === 'tax.state_income' && looksEstimated(occ)) cadence = ESTIMATED;
       for (const c of CADENCES) {
         if (cadence) break;
         if (occ.length < c.min || Math.abs(med - c.days) > c.tol) continue;
@@ -144,18 +159,27 @@
         if (misses <= (occ.length >= 5 ? 1 : 0)) { cadence = c; break; }
       }
       if (!cadence) continue;
+      cands.push({ key, occ, cadence, line });
+    }
+    // A payee with a cadence of its own never stands in for another one, or a group that stopped would be
+    // walked forward by its neighbour instead of lapsing, and both would project the same months.
+    const recurringKeys = new Set(cands.map((c) => c.key));
+    const out = [];
+    for (const { key, occ, cadence, line } of cands) {
       const last = occ[occ.length - 1];
       const typicalAmount = cents(median(occ.map((o) => o.amount)));
       // An expected date already covered by a same-line entry filed under a different spelling counts as done.
-      const others = (byLine.get(line.id) || []).filter((o) => o.key !== key);
+      const others = (byLine.get(line.id) || []).filter((o) => o.key !== key && !recurringKeys.has(o.key));
       const satisfied = (d) => others.some((o) => Math.abs(daysBetween(o.date, d)) <= cadence.tol && Math.abs(o.amount - typicalAmount) <= 0.25 * Math.max(typicalAmount, 1));
       let k = 1;
       while (k < 60 && satisfied(nth(last.date, cadence, k))) k++;
       const next = nth(last.date, cadence, k);
       const overdueBy = daysBetween(next, today);
       let status = 'upcoming';
-      // more than a full period past due: the payee probably stopped, so nothing is projected for it
-      if (overdueBy > cadence.days + 2 * cadence.tol) status = 'lapsed';
+      // More than a full period past due: the payee probably stopped, so nothing is projected for it.
+      // The 45-day floor keeps a weekly or biweekly payee alive when the user logs from a monthly statement.
+      const lapseAfter = lapseDaysFor(cadence);
+      if (overdueBy > lapseAfter) status = 'lapsed';
       else if (overdueBy > cadence.tol) status = 'overdue';
       else if (overdueBy >= -cadence.tol) status = 'due';
       // occurrences still expected inside the tax year (overdue ones included — they probably happened)
@@ -187,7 +211,7 @@
 
   // ---- habits ------------------------------------------------------------------
 
-  function computeHabits(yearEntries, allEntries, today) {
+  function computeHabits(yearEntries, allEntries, today, taxYear) {
     // createdAt is a UTC timestamp; compare calendar days in local time like `today`
     const created = allEntries.filter((e) => e.createdAt && !e.sample && !e.projected).map((e) => { const d = new Date(e.createdAt); return isNaN(d) ? null : isoOf(d); }).filter(Boolean).sort();
     const distinct = [...new Set(created)];
@@ -207,14 +231,17 @@
     for (const c of created) weekdayCounts[toDate(c).getDay()]++;
     const busiestWeekday = created.length >= 5 ? weekdayCounts.indexOf(Math.max(...weekdayCounts)) : null;
     const dates = yearEntries.map((e) => e.date).sort();
-    const weeks = dates.length ? Math.max(1, daysBetween(dates[0], today) / 7) : 1;
-    return { typicalGapDays, daysSinceLast, receiptsBySection, busiestWeekday, weekdayCounts, entriesPerWeek: Math.round((yearEntries.length / weeks) * 10) / 10, loggingDays: distinct.length };
+    // a closed year is measured to Dec 31, or the rate would shrink every week the user looks back at it
+    const yearEnd = `${taxYear}-12-31`;
+    const end = taxYear && today > yearEnd ? yearEnd : today;
+    const weeks = dates.length ? Math.max(1, daysBetween(dates[0], end) / 7) : 1;
+    return { typicalGapDays, daysSinceLast, lastLoggedDay: distinct.length ? distinct[distinct.length - 1] : null, receiptsBySection, busiestWeekday, weekdayCounts, entriesPerWeek: Math.round((yearEntries.length / weeks) * 10) / 10, loggingDays: distinct.length };
   }
 
   // ---- recommendations --------------------------------------------------------
 
   function buildRecommendations(ctx) {
-    const { computed, projected, projection, recurrences, yearEntries, entries, habits, today, taxYear } = ctx;
+    const { computed, projected, projection, recurrences, yearEntries, entries, projectedEntries, settings, habits, today, taxYear } = ctx;
     const P = computed.params;
     const recs = [];
     const yearStart = `${taxYear}-01-01`, yearEnd = `${taxYear}-12-31`;
@@ -227,7 +254,7 @@
       recs.push({
         id: `recur:${r.key}:${r.nextDate}`, kind: 'log',
         priority: r.status === 'overdue' ? 80 + Math.min(15, Math.floor(r.overdueBy / 7)) : 60,
-        title: r.status === 'overdue' ? `${r.description}: nothing logged since ${fmtDate(r.lastDate)}` : `${r.description} is due about now`,
+        title: r.status === 'overdue' ? `${r.description}: nothing logged since ${fmtDate(r.lastDate, taxYear)}` : `${r.description} is due about now`,
         body: `Logged ${r.count} times, ${r.cadenceLabel}, usually ${amountText}; expected around ${fmtDate(r.nextDate)}. If it was paid, log it. If it stopped, dismiss this.`,
         because: `${r.count} ${r.cadenceLabel} entries on the ${r.label} line`,
         action: { type: 'prefill', entry: { description: r.description, lineId: r.lineId, amount: r.typicalAmount, date: r.nextDate <= today ? r.nextDate : today } },
@@ -255,13 +282,15 @@
         .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
       for (const v of visits) {
         const known = byPayee.get(Classify.keyFor(v.description || ''));
-        const typical = known && known.length ? median(known) : overall;
+        // a tenth of a mile, like every other mileage figure in the app: a median of 12.3 and 12.6 was never logged
+        const typical = Math.round((known && known.length ? median(known) : overall) * 10) / 10;
         if (!(typical > 0)) continue;
         const what = v.description || Schema.getLine(v.lineId).label;
+        const sameEveryTime = known && known.length && known.every((n) => Math.round(n * 10) / 10 === typical);
         recs.push({
           id: `miles:${v.id}`, kind: 'log', priority: 50,
           title: `Add the drive to ${what} on ${fmtDate(v.date)}?`,
-          body: `${known && known.length ? `You logged ${typical} miles for this trip before.` : `Your medical trips average ${typical} miles.`} At ${Rules.perMile(P.mileage.medical)} each one is small, but a year of visits adds up.`,
+          body: `${sameEveryTime ? `You logged ${fmtValue('med.miles', typical)} for this trip before.` : known && known.length ? `Your drives to ${what} are usually about ${fmtValue('med.miles', typical)}.` : `Your medical trips are usually about ${fmtValue('med.miles', typical)}.`} At ${Rules.perMile(P.mileage.medical)} each one is small, but a year of visits adds up.`,
           because: 'a medical visit with no mileage entry within a day of it',
           action: { type: 'prefill', entry: { description: `Round trip — ${what}`, lineId: 'med.miles', amount: typical, date: v.date } },
         });
@@ -304,10 +333,14 @@
     // 4. Amounts far outside a payee's usual range
     const amountsByKey = new Map();
     for (const e of entries) { const k = keyOf(e); if (!amountsByKey.has(k)) amountsByKey.set(k, []); amountsByKey.get(k).push(Number(e.amount) || 0); }
+    // one median per payee, not one per entry: re-sorting the same list for every entry made this quadratic
+    const medByKey = new Map();
+    for (const [k, arr] of amountsByKey) if (arr.length >= 4) medByKey.set(k, median(arr));
     for (const e of yearEntries) {
-      const amounts = amountsByKey.get(keyOf(e));
+      const kk = keyOf(e);
+      const amounts = amountsByKey.get(kk);
       if (!amounts || amounts.length < 4) continue;
-      const med = median(amounts), amt = Number(e.amount) || 0;
+      const med = medByKey.get(kk), amt = Number(e.amount) || 0;
       // entries with no description are one pool per line, not one payee: demand a much clearer outlier and say so
       const dk = Classify.keyFor(e.description || '');
       const undescribed = !dk || dk === Classify.keyFor(Schema.getLine(e.lineId).label);
@@ -336,31 +369,55 @@
         recs.push({ id: `plan:itemize:${taxYear}`, kind: 'good', priority: 30, title: `On pace to itemize: about ${money(projection.projectedTotal)} against ${money(std)}`, body: `${money(projection.actual)} counts so far${projection.expectedMore > 0 ? `, and recurring items should add about ${money(projection.expectedMore)} by Dec 31` : ''}. Keep every Schedule A receipt this year.`, because: 'recurring entries projected to year end', action: null });
       } else {
         const gap = projection.gap;
-        const candidates = [];
+        // Telling someone to stop keeping receipts needs evidence: either most of the year is behind us, or
+        // enough recurring payees are known that the projection stands for the months still to come.
+        const monthsElapsed = today < yearStart ? 0 : Number(today.slice(5, 7));
+        const founded = monthsElapsed >= 9 || (projection.projectedEntries > 0 && recurrences.filter((r) => r.status !== 'lapsed' && !r.muted).length >= 2);
+        // What a prepayment is worth is what the engine deducts, not what it costs: the SALT cap, its
+        // phase-down and the medical floor can each swallow a payment whole.
+        const base = projected.scheduleA.total;
+        const synth = (c) => [{ id: `bunch:${c.r.key}`, date: `${taxYear}-12-31`, taxYear, lineId: c.r.lineId, amount: c.gross, description: c.r.description, hasReceipt: true, projected: true }];
+        const priceOf = (extra) => cents(Rules.compute(entries.concat(projectedEntries, extra), Object.assign({}, settings, { today })).scheduleA.total - base);
+        const raw = [];
         for (const r of recurrences) {
           if (r.unit === 'miles' || r.status === 'lapsed' || r.muted) continue;
           const prepayable = ['taxes', 'charity', 'volunteer'].includes(r.sectionId) || r.lineId === 'med.insurance';
           if (!prepayable) continue;
-          if (r.perYear >= 12) { if (r.sectionId === 'charity') candidates.push({ label: `make next year's ${r.description} gifts in December`, amount: Math.round(r.typicalAmount * r.perYear) }); continue; }
-          if (r.nextYearEarly.length) candidates.push({ label: `pay the ${fmtDate(r.nextYearEarly[0])} ${r.description} before Dec 31`, amount: Math.round(r.typicalAmount) });
+          if (r.perYear >= 12) { if (r.sectionId === 'charity') raw.push({ label: `make next year's ${r.description} gifts in December`, gross: Math.round(r.typicalAmount * r.perYear), r }); continue; }
+          if (r.nextYearEarly.length) raw.push({ label: `pay the ${fmtDate(r.nextYearEarly[0], taxYear)} ${r.description} before Dec 31`, gross: Math.round(r.typicalAmount), r });
         }
+        raw.sort((a, b) => b.gross - a.gross);
+        const candidates = [];
+        for (const c of raw.slice(0, 6)) { c.amount = priceOf(synth(c)); if (c.amount > 0) candidates.push(c); } // the cap keeps the number of engine runs small
         candidates.sort((a, b) => b.amount - a.amount);
-        const sum = candidates.reduce((a, c) => a + c.amount, 0);
-        if (candidates.length && sum >= gap) {
-          const picked = []; let acc = 0;
-          for (const c of candidates) { if (acc >= gap) break; picked.push(c); acc += c.amount; }
+        const sum = candidates.length ? priceOf(candidates.flatMap(synth)) : 0;
+        const picked = [];
+        let acc = 0;
+        // candidates interact (two SALT items share one cap), so the whole picked set is re-priced at each step
+        if (sum >= gap) for (const c of candidates) { if (acc >= gap) break; picked.push(c); acc = priceOf(picked.flatMap(synth)); }
+        const saltRoom = projected.scheduleA.taxes.deductible < projected.scheduleA.taxes.cap;
+        const medicalCounts = projected.scheduleA.medical.deductible > 0;
+        if (picked.length && acc >= gap) {
           recs.push({ id: `plan:bunch:${taxYear}`, kind: 'plan', priority: 70, title: `Bunching closes the ${money(gap)} gap this year`, body: `Projected ${money(projection.projectedTotal)} against a ${money(std)} standard deduction. To get over it: ${picked.map((c) => `${c.label} (+${money(c.amount)})`).join('; ')}. Then take the standard deduction next year. Two bunched years beat two years of just missing.`, because: 'deductible bills that usually fall early next year', action: null });
+        } else if (gap > std * 0.3 && founded) {
+          recs.push({ id: `plan:stop:${taxYear}`, kind: 'plan', priority: 40, title: 'On this pace you will not itemize, so you can stop chasing Schedule A receipts', body: `On what is logged and projected so far, ${money(projection.projectedTotal)} against ${money(std)}, ${money(gap)} short${sum > 0 ? ` even after ${money(sum)} of bunching` : ''}. Keep logging business costs and student loan interest, which count regardless, and keep medical receipts only if a large expense is coming.`, because: 'projection to year end', action: null });
         } else if (gap > std * 0.3) {
-          recs.push({ id: `plan:stop:${taxYear}`, kind: 'plan', priority: 40, title: 'You will not itemize this year, so stop chasing Schedule A receipts', body: `Projected ${money(projection.projectedTotal)} against ${money(std)}, ${money(gap)} short${candidates.length ? ` even after ${money(sum)} of bunching` : ''}. Keep logging business costs and student loan interest, which count regardless, and keep medical receipts only if a large expense is coming.`, because: 'projection to year end', action: null });
+          recs.push({ id: `plan:early:${taxYear}`, kind: 'plan', priority: 30, title: `On what is logged so far, ${money(gap)} short of itemizing`, body: `So far ${money(projection.projectedTotal)} counts against a ${money(std)} standard deduction, and too little of the year is logged to project the rest. Keep logging; the plan firms up as recurring payees appear.`, because: 'too little of the year logged to call it', action: null });
         } else {
-          recs.push({ id: `plan:close:${taxYear}`, kind: 'plan', priority: 55, title: `${money(gap)} short of itemizing, which planning can close`, body: `${candidates.length ? `Bunching covers ${money(sum)}: ${candidates.map((c) => c.label).join('; ')}. ` : ''}Elective dental or vision work, a gift you planned for next year, or a state estimated payment made by Dec 31 could cover the rest.`, because: 'projection to year end', action: null });
+          // only offer the levers this return can still use: medical under the floor and SALT at the cap buy nothing
+          const rest = [];
+          if (medicalCounts) rest.push('elective dental or vision work');
+          rest.push('a gift you planned for next year');
+          if (saltRoom) rest.push('a state estimated payment made by Dec 31');
+          const restText = rest.length > 1 ? `${rest.slice(0, -1).join(', ')} or ${rest[rest.length - 1]}` : rest[0];
+          recs.push({ id: `plan:close:${taxYear}`, kind: 'plan', priority: 55, title: `${money(gap)} short of itemizing, which planning can close`, body: `${sum > 0 ? `Bunching covers ${money(sum)}: ${candidates.map((c) => c.label).join('; ')}. ` : ''}${restText[0].toUpperCase()}${restText.slice(1)} could cover the rest.`, because: 'projection to year end', action: null });
         }
       }
     }
 
     // 6. Logging cadence
     if (habits.typicalGapDays != null && habits.daysSinceLast != null && habits.daysSinceLast > Math.max(7, 2 * habits.typicalGapDays)) {
-      recs.push({ id: `habit:cadence:${today.slice(0, 7)}`, kind: 'habit', priority: 25, title: `${habits.daysSinceLast} days since your last entry`, body: `You usually log something every ${Math.round(habits.typicalGapDays)} days. Receipts fade and memories blur; a five-minute catch-up now beats reconstructing a quarter in April.`, because: 'the gaps between your logging days', action: { type: 'capture' } });
+      recs.push({ id: `habit:cadence:${habits.lastLoggedDay || today.slice(0, 10)}`, kind: 'habit', priority: 25, title: `${habits.daysSinceLast} days since your last entry`, body: `You usually log something every ${Math.round(habits.typicalGapDays)} days. Receipts fade and memories blur; a five-minute catch-up now beats reconstructing a quarter in April.`, because: 'the gaps between your logging days', action: { type: 'capture' } });
     }
 
     // 7. Receipt habits
@@ -394,7 +451,6 @@
       sections,
       scheduleATotal: round100(computed.scheduleA.total),
       standardDeduction: computed.standardDeduction.base, // the base follows from filing status; the add-ons would reveal age or blindness
-      hasAdditionalStandardDeduction: computed.standardDeduction.additional > 0,
       itemizes: computed.verdict.itemize,
       receiptRate: Math.round(computed.substantiation.coverage * 20) / 20,
       recurringItems: recurrences.length,
@@ -418,7 +474,16 @@
     const yearEntries = computed.entries;
     const recurrences = detectRecurrences(entries, { today, taxYear });
     const dismissedAt = input.dismissed || settings.advisorDismissed || {}; // one row per dismissal in the store; the settings shape still works for older callers
-    const isDismissed = (id) => { const at = dismissedAt[id]; return !!at && daysBetween(String(at).slice(0, 10), today) < DISMISS_DAYS; };
+    // "If it stopped, dismiss this" has to outlast the payee's own period, or a yearly one comes back after
+    // thirty days and is nagged about and projected for the rest of the year. The window runs to the day the
+    // payee would lapse by itself, so a dismissal is followed by "Stopped?", never by the same nudge again.
+    const cadenceOf = (id) => CADENCES.find((c) => c.id === id) || (id === ESTIMATED.id ? ESTIMATED : null);
+    const windows = {};
+    for (const r of recurrences) {
+      const c = cadenceOf(r.cadence);
+      if (c) windows[`recur:${r.key}:${r.nextDate}`] = Math.max(DISMISS_DAYS, Math.ceil(lapseDaysFor(c) + c.tol));
+    }
+    const isDismissed = (id) => { const at = dismissedAt[id]; return !!at && daysBetween(String(at).slice(0, 10), today) < (windows[id] || DISMISS_DAYS); };
     // "If it stopped, dismiss this" also stops the projection for that payee
     for (const r of recurrences) if (isDismissed(`recur:${r.key}:${r.nextDate}`)) r.muted = true;
     const closed = today > `${taxYear}-12-31`;
@@ -445,9 +510,9 @@
       projection.gap = cents(projection.standardDeduction - projection.projectedTotal);
     }
     projection.calibration = calib || { factor: 1, n: 0, basis: 'none' };
-    const habits = computeHabits(yearEntries, entries, today);
+    const habits = computeHabits(yearEntries, entries, today, taxYear);
     projection.closed = closed;
-    const all = buildRecommendations({ computed, projected, projection, recurrences, yearEntries, entries, habits, today, taxYear });
+    const all = buildRecommendations({ computed, projected, projection, recurrences, yearEntries, entries, projectedEntries, settings, habits, today, taxYear });
     const recommendations = [], dismissed = [];
     for (const r of all) { if (isDismissed(r.id)) dismissed.push(r); else recommendations.push(r); }
     return { recommendations: recommendations.slice(0, 12), dismissed, recurrences, projection, habits, aggregate: aggregateProfile(computed, habits, recurrences, today) };

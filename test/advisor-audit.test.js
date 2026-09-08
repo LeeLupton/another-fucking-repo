@@ -100,8 +100,12 @@ test('habits never report a negative gap, and the aggregate hides age and blindn
   const r = run(entries, { age65: true, blind: true }, '2026-09-20');
   assert.equal(r.habits.daysSinceLast, 0);
   assert.equal(r.aggregate.standardDeduction, 16100);
-  assert.equal(r.aggregate.hasAdditionalStandardDeduction, true);
   assert.ok(r.aggregate.excluded.includes('age and disability flags'));
+  const withFlags = run(entries, { age65: true, blind: true, spouseAge65: true }, '2026-09-20').aggregate;
+  const without = run(entries, {}, '2026-09-20').aggregate;
+  assert.deepEqual(withFlags, without, 'the profile is identical with and without the flags');
+  assert.ok(!('hasAdditionalStandardDeduction' in withFlags));
+  assert.ok(!Object.keys(withFlags).some((k) => /additional|age65|blind/i.test(k)));
 });
 
 test('the open list is capped after dismissed items are removed', () => {
@@ -184,4 +188,182 @@ test('weekly, biweekly, quarterly and yearly payees are recognised; same-day ent
   const tolerant = run(monthly(2026, [1, 2, 3, 5, 6], 'se.utilities', 80, 'Verizon')).recurrences.find((x) => x.description === 'Verizon');
   assert.ok(tolerant, 'one skipped month after five occurrences is still monthly'); assert.equal(tolerant.cadence, 'monthly');
   assert.equal(run(monthly(2026, [1, 2, 4], 'se.utilities', 80, 'Verizon')).recurrences.length, 0, 'three occurrences with a gap are no pattern');
+});
+
+test('an estimated payment made early does not re-expect its own deadline', () => {
+  const early = ['2026-01-14', '2026-04-13', '2026-06-12', '2026-09-10'].map((d) => E(d, 'tax.state_income', 900, 'NC DOR estimated payment'));
+  const r = run(early, {}, '2026-09-20');
+  assert.equal(r.recurrences[0].cadence, 'estimated');
+  assert.equal(r.recurrences[0].nextDate, '2027-01-15');
+  assert.equal(r.recurrences[0].status, 'upcoming');
+  assert.deepEqual(r.recurrences[0].expected, []);
+  assert.equal(r.projection.expectedMore, 0);
+  assert.equal(r.recommendations.filter((x) => x.id.startsWith('recur:')).length, 0);
+  // the Q4 estimate paid by Dec 31, which the year-end checklist itself asks for, satisfies the Jan 15 deadline
+  const q4 = ['2026-04-15', '2026-06-15', '2026-09-15', '2026-12-31'].map((d) => E(d, 'tax.state_income', 900, 'NC DOR estimated payment'));
+  const r2 = run(q4, { taxYear: 2027 }, '2027-01-20');
+  assert.equal(r2.recurrences[0].nextDate, '2027-04-15');
+  assert.equal(r2.recurrences[0].status, 'upcoming');
+  assert.deepEqual(r2.recurrences[0].expected, ['2027-04-15', '2027-06-15', '2027-09-15']);
+  assert.equal(r2.recommendations.filter((x) => x.id.startsWith('recur:')).length, 0);
+});
+
+test('quarterly property tax near the IRS deadlines keeps its own calendar', () => {
+  const nyc = ['2025-07-01', '2025-10-01', '2026-01-01', '2026-04-01', '2026-07-01'].map((d) => E(d, 'tax.real_estate', 2200, 'NYC Dept of Finance property tax'));
+  const rec = run(nyc, {}, '2026-09-20').recurrences[0];
+  assert.equal(rec.cadence, 'quarterly');
+  assert.equal(rec.cadenceLabel, 'quarterly');
+  assert.equal(rec.nextDate, '2026-10-01');
+  assert.equal(rec.status, 'due');
+  assert.deepEqual(rec.nextYearEarly, ['2027-01-01', '2027-04-01']);
+});
+
+test('a payee with a cadence of its own never props up another one', () => {
+  const respelled = monthly(2026, [1, 2, 3, 4], 'ch.worship', 200, "Tithe — St. Andrew's").concat(monthly(2026, [5, 6, 7, 8], 'ch.worship', 200, 'St Andrews tithe', 6));
+  const r = run(respelled, {}, '2026-09-20');
+  assert.equal(r.recommendations.filter((x) => x.id.startsWith('recur:')).length, 1);
+  assert.equal(r.projection.expectedMore, 800);
+  assert.equal(r.recurrences.find((x) => /St\. Andrew/.test(x.description)).status, 'lapsed');
+  const masked = monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.org', 50, 'Red Cross', 1).concat(monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8, 9], 'ch.org', 50, 'Food Bank', 3));
+  const m = run(masked, {}, '2026-09-20');
+  const red = m.recurrences.find((x) => x.description === 'Red Cross');
+  assert.equal(red.status, 'overdue');
+  assert.equal(red.nextDate, '2026-09-01');
+  assert.equal(m.recommendations.filter((x) => x.id.startsWith('recur:')).length, 1);
+  assert.equal(m.projection.expectedMore, 350);
+  const keptAlive = monthly(2026, [1, 2, 3, 4], 'ch.org', 50, 'Old church').concat(monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8, 9], 'ch.org', 50, 'Food Bank', 3));
+  const k = run(keptAlive, {}, '2026-09-20');
+  assert.equal(k.recurrences.find((x) => x.description === 'Old church').status, 'lapsed');
+  assert.equal(k.projection.expectedMore, 150);
+});
+
+test('a weekly payee survives a missed statement cycle before it is called stopped', () => {
+  const sundays = [];
+  for (let i = 0; i < 35; i++) { const d = new Date(2026, 0, 4 + 7 * i); sundays.push(E(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, 'ch.worship', 50, 'Sunday offering')); }
+  const soon = run(sundays, {}, '2026-09-25');
+  assert.equal(soon.recurrences[0].status, 'overdue');
+  assert.equal(soon.projection.expectedMore, 850);
+  assert.equal(soon.recommendations.filter((x) => x.id.startsWith('recur:')).length, 1);
+  const later = run(sundays, {}, '2026-11-15');
+  assert.equal(later.recurrences[0].status, 'lapsed');
+  assert.equal(later.projection.expectedMore, 0);
+  assert.equal(later.recommendations.filter((x) => x.id.startsWith('recur:')).length, 0);
+});
+
+test('dismissing a recurrence keeps it quiet until it lapses, however long its period is', () => {
+  const pledge = ['2025-09-10', '2025-12-10', '2026-03-10'].map((d) => E(d, 'ch.worship', 300, 'Quarterly pledge'));
+  const first = run(pledge, {}, '2026-07-01');
+  assert.equal(first.recurrences[0].cadence, 'quarterly');
+  assert.equal(first.projection.expectedMore, 900);
+  const id = first.recommendations.find((x) => x.id.startsWith('recur:')).id;
+  const later = run(pledge, { advisorDismissed: { [id]: '2026-07-01' } }, '2026-09-01');
+  assert.equal(later.recurrences[0].muted, true);
+  assert.equal(later.projection.expectedMore, 0);
+  assert.equal(later.recommendations.filter((x) => x.id.startsWith('recur:')).length, 0);
+  const stopped = run(pledge, { advisorDismissed: { [id]: '2026-07-01' } }, '2026-12-01');
+  assert.equal(stopped.recurrences[0].status, 'lapsed');
+  assert.equal(stopped.projection.expectedMore, 0);
+  assert.equal(stopped.recommendations.filter((x) => x.id.startsWith('recur:')).length, 0);
+  const vehicle = ['2024-03-10', '2025-03-10'].map((d) => E(d, 'tax.personal_property', 320, 'Vehicle tax'));
+  const vid = run(vehicle, {}, '2026-05-01').recommendations.find((x) => x.id.startsWith('recur:')).id;
+  for (const day of ['2026-09-01', '2026-12-15']) {
+    const v = run(vehicle, { advisorDismissed: { [vid]: '2026-05-01' } }, day);
+    assert.equal(v.projection.expectedMore, 0, day);
+    assert.equal(v.recommendations.filter((x) => x.id.startsWith('recur:')).length, 0, day);
+  }
+});
+
+test('entries per week for a closed year is measured to Dec 31, not to today', () => {
+  const entries = [];
+  for (let m = 1; m <= 12; m++) for (const d of [3, 10, 17, 24]) entries.push(E(`2025-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, 'ch.org', 25, 'Food bank'));
+  for (const day of ['2025-12-31', '2026-09-20', '2027-09-20']) {
+    const r = run(entries, { taxYear: 2025 }, day);
+    assert.equal(r.habits.entriesPerWeek, 0.9, day);
+    assert.equal(r.aggregate.entriesPerWeek, 0.9, day);
+  }
+});
+
+test('a suggested drive is rounded to a tenth of a mile and described the way the ledger shows it', () => {
+  const visits = [E('2026-02-03', 'med.doctor', 40, 'Dr Patel'), E('2026-02-03', 'med.miles', 12.3, 'Round trip — Dr Patel'), E('2026-04-07', 'med.doctor', 40, 'Dr Patel'), E('2026-04-07', 'med.miles', 12.6, 'Round trip — Dr Patel'), E('2026-08-11', 'med.doctor', 40, 'Dr Patel')];
+  const two = run(visits, { agi: 60000 }, '2026-09-07').recommendations.find((x) => x.id.startsWith('miles:'));
+  assert.equal(two.action.entry.amount, 12.5);
+  assert.match(two.body, /12\.5 mi/);
+  assert.ok(!/You logged/.test(two.body), 'a median of two different drives was never logged');
+  const one = run(visits.filter((e) => e.amount !== 12.6), { agi: 60000 }, '2026-09-07').recommendations.find((x) => x.id === `miles:${visits[4].id}`);
+  assert.equal(one.action.entry.amount, 12.3);
+  assert.match(one.body, /You logged 12\.3 mi for this trip before/);
+});
+
+test('bunching is priced through the tax engine, so a capped or floored payment is never suggested', () => {
+  const capped = [E('2023-01-15', 'tax.real_estate', 6000, 'County property tax'), E('2023-07-15', 'tax.real_estate', 6000, 'County property tax'), E('2024-01-15', 'tax.real_estate', 6000, 'County property tax'), E('2024-07-15', 'tax.real_estate', 6000, 'County property tax'), E('2024-02-01', 'int.mortgage', 3500, 'Mortgage interest')];
+  const c = run(capped, { taxYear: 2024, agi: 120000 }, '2024-09-20');
+  assert.ok(!c.recommendations.some((x) => x.id === 'plan:bunch:2024'), 'the SALT cap already swallows the next payment');
+  const cPlan = c.recommendations.find((x) => x.id.startsWith('plan:'));
+  assert.equal(cPlan.id, 'plan:close:2024');
+  assert.ok(!/\+\$6,000/.test(cPlan.body));
+  assert.ok(!/state estimated payment/.test(cPlan.body), 'SALT is at the cap, so a state payment buys nothing');
+  const floored = [];
+  for (const m of [1, 4, 7, 10]) floored.push(E(`2025-${String(m).padStart(2, '0')}-05`, 'med.insurance', 900, 'Blue Cross premium'));
+  for (const m of [1, 4, 7]) floored.push(E(`2026-${String(m).padStart(2, '0')}-05`, 'med.insurance', 900, 'Blue Cross premium'));
+  floored.push(E('2026-02-01', 'int.mortgage', 15400, 'Mortgage interest'));
+  const f = run(floored, { agi: 100000 }, '2026-11-20');
+  assert.ok(!f.recommendations.some((x) => x.id === 'plan:bunch:2026'), 'the premium stays under the medical floor');
+  assert.ok(!/[Ee]lective dental or vision work/.test(f.recommendations.find((x) => x.id.startsWith('plan:')).body));
+  const under = [E('2023-01-15', 'tax.real_estate', 3000, 'County property tax'), E('2023-07-15', 'tax.real_estate', 3000, 'County property tax'), E('2025-01-15', 'tax.real_estate', 3000, 'County property tax'), E('2025-07-15', 'tax.real_estate', 3000, 'County property tax'), E('2026-01-15', 'tax.real_estate', 3000, 'County property tax'), E('2026-07-15', 'tax.real_estate', 3000, 'County property tax'), E('2026-02-01', 'int.mortgage', 9000, 'Mortgage interest')];
+  const u = run(under, { agi: 90000 }, '2026-09-20').recommendations.find((x) => x.id === 'plan:bunch:2026');
+  assert.ok(u, 'under the cap the payment is worth its face value');
+  assert.match(u.body, /\+\$3,000/);
+});
+
+test('the cadence nudge is keyed to the last logging day, so dismissing it lasts thirty days', () => {
+  const entries = [];
+  for (let i = 0; i < 8; i++) entries.push(E('2026-05-01', 'se.supplies', 20 + i, 'Supplies', { createdAt: `2026-0${5 + Math.floor(i / 4)}-${String(1 + (i % 4) * 3).padStart(2, '0')}T10:00:00.000Z` }));
+  const id = run(entries, {}, '2026-09-29').recommendations.find((x) => x.id.startsWith('habit:cadence')).id;
+  assert.equal(id, 'habit:cadence:2026-06-10');
+  const nextDay = run(entries, { advisorDismissed: { [id]: '2026-09-29' } }, '2026-10-01');
+  assert.equal(nextDay.recommendations.filter((x) => x.id.startsWith('habit:cadence')).length, 0);
+  const afterThirty = run(entries, { advisorDismissed: { [id]: '2026-09-29' } }, '2026-10-29');
+  assert.equal(afterThirty.recommendations.filter((x) => x.id.startsWith('habit:cadence')).length, 1);
+});
+
+test('an overdue payee whose last entry was last year shows the year', () => {
+  const grace = ['2024-09-10', '2024-10-10', '2024-11-10', '2024-12-10'].map((d) => E(d, 'ch.worship', 200, 'Grace Church tithe'));
+  const title = run(grace, { taxYear: 2025 }, '2025-01-25').recommendations.find((x) => x.id.startsWith('recur:')).title;
+  assert.equal(title, 'Grace Church tithe: nothing logged since Dec 10, 2024');
+  const inYear = run(monthly(2026, [1, 2, 3, 4, 5, 6, 7, 8], 'ch.worship', 200, 'Tithe'), {}, '2026-09-20').recommendations.find((x) => x.id.startsWith('recur:')).title;
+  assert.equal(inYear, 'Tithe: nothing logged since Aug 5', 'a date inside the year being viewed needs no year');
+});
+
+test('the anomaly rule sees the same outlier in a large ledger', () => {
+  const entries = [];
+  for (const [description, lineId] of [['Dr Patel', 'med.doctor'], ['Grace Church', 'ch.worship'], ['Uline', 'se.supplies'], ['Vision plan', 'med.insurance'], ['County tax', 'tax.real_estate']]) {
+    for (let i = 0; i < 120; i++) { const d = new Date(2026, 0, 1 + i * 3); entries.push(E(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, lineId, 100, description)); }
+  }
+  const outlier = E('2026-06-15', 'med.doctor', 4200, 'Dr Patel');
+  entries.push(outlier);
+  const r = run(entries, { agi: 90000 }, '2026-09-20');
+  const a = r.recommendations.find((x) => x.id === `anomaly:${outlier.id}`);
+  assert.ok(a);
+  assert.equal(a.title, 'Dr Patel for $4,200 is far above its usual $100');
+  assert.equal(a.because, '121 entries for the same payee');
+  assert.deepEqual(r.recommendations.map((x) => x.id).sort(), [`anomaly:${outlier.id}`, 'plan:itemize:2026']);
+});
+
+test('the stop-chasing-receipts plan waits until the year is far enough along', () => {
+  const two = [E('2026-01-05', 'ch.worship', 100, 'Tithe'), E('2026-01-08', 'med.doctor', 60, 'Copay')];
+  const early = run(two, { agi: 60000 }, '2026-01-20');
+  assert.ok(!early.recommendations.some((x) => x.id === 'plan:stop:2026'));
+  const e = early.recommendations.find((x) => x.id === 'plan:early:2026');
+  assert.ok(e);
+  assert.ok(!/You will not itemize/.test(e.title));
+  assert.equal(e.title, 'On what is logged so far, $16,200 short of itemizing');
+  const late = run(two, { agi: 60000 }, '2026-10-20');
+  assert.ok(late.recommendations.some((x) => x.id === 'plan:stop:2026'));
+  assert.ok(!late.recommendations.some((x) => x.id === 'plan:early:2026'));
+  // two live recurrences are evidence enough to project the rest of the year, even in May
+  const recurring = monthly(2026, [1, 2, 3, 4], 'ch.worship', 200, 'Tithe').concat(monthly(2026, [1, 2, 3, 4], 'ch.org', 90, 'Food bank', 12));
+  const evidence = run(recurring, {}, '2026-05-02');
+  assert.equal(evidence.recurrences.length, 2);
+  assert.ok(evidence.recommendations.some((x) => x.id === 'plan:stop:2026'));
+  assert.ok(!evidence.recommendations.some((x) => x.id === 'plan:early:2026'));
 });

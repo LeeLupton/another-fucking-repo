@@ -29,13 +29,32 @@ jobs:
         run: npm test
       - name: Build the single-file download
         run: npm run build
-      - name: Stamp the service worker cache with this commit
-        run: sed -i "s/const STAMP = '[^']*';/const STAMP = '${GITHUB_SHA::12}';/" sw.js && grep -n "const STAMP" sw.js
+      # Only the app itself. The README, the tests, the build script and the single-file copy of the whole
+      # app have no business inside the service worker's scope, where each of them is a page a visitor can
+      # land on. deploy-sha.txt is not committed, so it can only come from this workflow.
+      - name: Stage the site
+        run: |
+          mkdir -p site
+          cp -r index.html styles.css manifest.webmanifest sw.js js icons .nojekyll site/
+          echo "$GITHUB_SHA" > site/deploy-sha.txt
       - uses: actions/configure-pages@v5
         with:
           enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: site
       - id: deployment
         uses: actions/deploy-pages@v4
+      # Pages can also be set to publish the branch directly. That build runs alongside this one, lands
+      # last, and quietly replaces what this job deployed — tests and all. The marker says which won.
+      - name: The live site is the one this run deployed
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          for i in 1 2 3 4 5; do
+            if curl -fsS "${PAGE_URL}deploy-sha.txt" | grep -q "$GITHUB_SHA"; then exit 0; fi
+            sleep 15
+          done
+          echo "The live site is not the build this run deployed."
+          echo "Check Settings -> Pages -> Build and deployment -> Source, which must be GitHub Actions."
+          exit 1
