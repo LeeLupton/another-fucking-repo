@@ -178,7 +178,10 @@
         return out;
       }
       case 'overrides': {
-        const taxYear = yearOf(r.taxYear), path = str(r.path, 80), value = finite(r.value);
+        // A yes/no parameter has to stay a boolean: stored as 0 it would read as "not false" and the
+        // engine would go on offering a treatment the user turned off.
+        const taxYear = yearOf(r.taxYear), path = str(r.path, 80);
+        const value = typeof r.value === 'boolean' ? r.value : finite(r.value);
         if (taxYear == null || !PARAM_PATH.test(path) || value == null) return null;
         return { id: `${taxYear}:${path}`, taxYear, path, value, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }

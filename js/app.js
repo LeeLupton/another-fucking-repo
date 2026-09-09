@@ -2595,8 +2595,12 @@
     const marriedJoint = s.filingStatus === 'mfj'; // a qualifying surviving spouse files alone: no spouse add-on
     const overrides = state.overrides[R0.taxYear] || {};
     const defaults = R.getParams(R0.taxYear, {});
-    const fmtParam = (kind, v) => (kind === 'usd' ? money(v) : kind === 'rate' ? R.pct(v) : R.perMile(v));
-    const toInput = (kind, v) => (kind === 'usd' ? String(Math.round(v)) : String(Math.round(v * 1000) / 10));
+    const fmtParam = (kind, v) => (kind === 'usd' ? money(v) : kind === 'rate' ? R.pct(v) : kind === 'bool' ? (v ? 'Yes' : 'No') : R.perMile(v));
+    const toInput = (kind, v) => (kind === 'usd' ? String(Math.round(v)) : kind === 'bool' ? (v ? 'yes' : 'no') : String(Math.round(v * 1000) / 10));
+    // A yes/no figure needs a yes/no control: in a text box the default reads as "0¢/mile" and any answer has to be typed as a number.
+    const paramControl = (f, def, ov) => (f.kind === 'bool'
+      ? `<select data-param="${f.path}" data-kind="bool" class="input ${ov != null ? 'is-over' : ''}" aria-label="${esc(f.label)}"><option value="">Default (${def ? 'yes' : 'no'})</option><option value="yes" ${ov === true ? 'selected' : ''}>Yes</option><option value="no" ${ov === false ? 'selected' : ''}>No</option></select>`
+      : `<input data-param="${f.path}" data-kind="${f.kind}" class="${ov != null ? 'is-over' : ''}" inputmode="decimal" value="${ov != null ? esc(toInput(f.kind, ov)) : ''}" placeholder="${esc(toInput(f.kind, def))}" aria-label="${esc(f.label)}">`);
     const learnedKeys = Object.keys(state.learned).sort();
     const dismissedCount = Object.keys(state.dismissed).length;
 
@@ -2612,7 +2616,10 @@
               <select id="sLtcBracket" class="input" aria-label="Your age band for the long-term-care premium limit"><option value="">Age band not set</option>${R.LTC_BRACKETS.map((b) => `<option value="${b.id}" ${s.ltcAgeBracket === b.id ? 'selected' : ''}>Age ${esc(b.label)} at the end of the year</option>`).join('')}</select>
               <small class="muted">Sets the limit on long-term-care insurance premiums. Leave it unset if you have no such policy.</small>
             </div>
-            <div class="field" ${marriedJoint ? '' : 'hidden'}><span>Spouse</span><div class="chips"><label class="check"><input type="checkbox" id="sSpouseAge65" ${s.spouseAge65 ? 'checked' : ''}> Spouse is 65 or older</label><label class="check"><input type="checkbox" id="sSpouseBlind" ${s.spouseBlind ? 'checked' : ''}> Spouse is blind</label></div></div>
+            <div class="field" ${marriedJoint ? '' : 'hidden'}><span>Spouse</span><div class="chips"><label class="check"><input type="checkbox" id="sSpouseAge65" ${s.spouseAge65 ? 'checked' : ''}> Spouse is 65 or older</label><label class="check"><input type="checkbox" id="sSpouseBlind" ${s.spouseBlind ? 'checked' : ''}> Spouse is blind</label></div>
+              <select id="sSpouseLtcBracket" class="input" aria-label="Your spouse's age band for the long-term-care premium limit"><option value="">Spouse age band not set</option>${R.LTC_BRACKETS.map((b) => `<option value="${b.id}" ${s.spouseLtcAgeBracket === b.id ? 'selected' : ''}>Age ${esc(b.label)} at the end of the year</option>`).join('')}</select>
+              <small class="muted">Set this only if a second policy insures your spouse: each insured person has their own limit.</small>
+            </div>
             <label class="field"><span>Gambling winnings reported ($)</span><input id="sWinnings" inputmode="numeric" value="${esc(s.gamblingWinnings)}" placeholder="0"></label>
             <label class="field"><span>Net investment income ($)</span><input id="sInvestmentIncome" inputmode="numeric" value="${esc(s.investmentIncome || '')}" placeholder="0"><small class="muted">Interest, dividends, and other investment income, less investment expenses. Margin interest counts only up to this figure.</small></label>
             <label class="field"><span>State &amp; local income tax withheld ($)</span><input id="sWithheld" inputmode="numeric" value="${esc(s.stateWithholding || '')}" placeholder="W-2 boxes 17 and 19"><small class="muted">Tax withheld for another state counts here too.</small></label>
@@ -2632,7 +2639,7 @@
           <div class="card-head"><h2>Rates &amp; thresholds for ${R0.taxYear}</h2>${P0.isFallback ? `<span class="pill pill-act">using ${P0.baseYear} figures</span>` : `<span class="pill pill-info">built in</span>`}</div>
           <p class="note">Built-in figures come from IRS inflation-adjustment notices and the 2025 tax law. Override any value the IRS updates; blank restores the default. Percentages are entered as percent (7.5), mileage as cents per mile (72.5).</p>
           <div class="params-wrap"><table class="params"><caption class="sr-only">Rates and thresholds for ${R0.taxYear}: the built-in default and your override for each figure.</caption><thead><tr><th>Figure</th><th class="num">Default</th><th class="num">Your value</th></tr></thead><tbody>
-            ${R.paramFields(R0.taxYear, state.overrides).map((f) => { const def = R.getPath(defaults, f.path); const ov = R.getPath(overrides, f.path); return `<tr><td>${esc(f.label)}</td><td class="num">${esc(fmtParam(f.kind, def))}</td><td class="num"><input data-param="${f.path}" data-kind="${f.kind}" class="${ov != null ? 'is-over' : ''}" inputmode="decimal" value="${ov != null ? esc(toInput(f.kind, ov)) : ''}" placeholder="${esc(toInput(f.kind, def))}" aria-label="${esc(f.label)}"></td></tr>`; }).join('')}
+            ${R.paramFields(R0.taxYear, state.overrides).map((f) => { const def = R.getPath(defaults, f.path); const ov = R.getPath(overrides, f.path); return `<tr><td>${esc(f.label)}</td><td class="num">${esc(fmtParam(f.kind, def))}</td><td class="num">${paramControl(f, def, ov)}</td></tr>`; }).join('')}
           </tbody></table></div>
           <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="resetParams" ${Object.keys(overrides).length ? '' : 'disabled'}>Reset ${R0.taxYear} to defaults</button></div>
         </section>
@@ -2731,6 +2738,8 @@
     moneyField('sInvestmentIncome', 'investmentIncome', 'Enter the investment income as a plain number, for example 3000.');
     moneyField('sWithheld', 'stateWithholding', 'Enter the tax withheld as a plain number, for example 4200.');
     $('#sLtcBracket').onchange = async (ev) => { s.ltcAgeBracket = ev.target.value; await save({ ltcAgeBracket: s.ltcAgeBracket }); };
+    const spouseLtc = $('#sSpouseLtcBracket'); // only on a joint return, like the other spouse controls
+    if (spouseLtc) spouseLtc.onchange = async (ev) => { s.spouseLtcAgeBracket = ev.target.value; await save({ spouseLtcAgeBracket: s.spouseLtcAgeBracket }); };
     $('#sState').onchange = async (ev) => { s.state = ev.target.value; await save({ state: s.state }); renderSettings(); };
     $('#sCounty').addEventListener('change', async (ev) => { s.county = ev.target.value.trim(); await save({ county: s.county }); });
     $('#sDisasterNumber').addEventListener('change', async (ev) => { s.disasterNumber = ev.target.value.trim(); await save({ disasterNumber: s.disasterNumber }); });
@@ -2758,20 +2767,26 @@
     };
     $$('[data-param]').forEach((inp) => inp.addEventListener('change', async () => {
       const path = inp.dataset.param, kind = inp.dataset.kind;
-      const raw = inp.value.trim().replace(/[$,%¢]/g, '');
-      const n = Number(raw);
-      // the boxes take cents and percent, not dollars and shares: "0.70" in a mileage box would value a drive at less than a cent a mile
-      const problem = raw === '' ? null
-        : !Number.isFinite(n) || n < 0 ? 'Enter a number, or leave the box empty to use the default.'
-        : kind === 'permile' && (n < 1 || n > 200) ? 'Enter the mileage rate in cents per mile, for example 72.5.'
-        : kind === 'rate' && n > 100 ? 'Enter the percentage as a percent, for example 7.5.'
-        : null;
-      if (problem) { const was = R.getPath(state.overrides[R0.taxYear] || {}, path); inp.value = was != null ? toInput(kind, was) : ''; toast(problem, 6000); return; }
+      let value; // null means "no override": the built-in figure for the year comes back
+      if (kind === 'bool') {
+        value = inp.value === 'yes' ? true : inp.value === 'no' ? false : null;
+      } else {
+        const raw = inp.value.trim().replace(/[$,%¢]/g, '');
+        const n = Number(raw);
+        // the boxes take cents and percent, not dollars and shares: "0.70" in a mileage box would value a drive at less than a cent a mile
+        const problem = raw === '' ? null
+          : !Number.isFinite(n) || n < 0 ? 'Enter a number, or leave the box empty to use the default.'
+          : kind === 'permile' && (n < 1 || n > 200) ? 'Enter the mileage rate in cents per mile, for example 72.5.'
+          : kind === 'rate' && n > 100 ? 'Enter the percentage as a percent, for example 7.5.'
+          : null;
+        if (problem) { const was = R.getPath(state.overrides[R0.taxYear] || {}, path); inp.value = was != null ? toInput(kind, was) : ''; toast(problem, 6000); return; }
+        value = raw === '' ? null : kind === 'usd' ? n : n / 100;
+      }
       const before = state.overrides[R0.taxYear] ? JSON.parse(JSON.stringify(state.overrides[R0.taxYear])) : null;
       if (!state.overrides[R0.taxYear]) state.overrides[R0.taxYear] = {};
       const ov = state.overrides[R0.taxYear];
-      if (raw === '') unsetPath(ov, path);
-      else R.setPath(ov, path, kind === 'usd' ? n : n / 100);
+      if (value === null) unsetPath(ov, path);
+      else R.setPath(ov, path, value);
       if (!Object.keys(ov).length) delete state.overrides[R0.taxYear];
       try { await DB.syncOverrides(R0.taxYear, ov); } // one row per overridden parameter
       catch (e) {

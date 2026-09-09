@@ -435,7 +435,7 @@ body:not(.tips-off) [data-tip]:hover::before { content: ""; position: absolute; 
 .params th { font-weight: 600; color: var(--ink-2); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .params td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .params input { width: 120px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); text-align: right; font-variant-numeric: tabular-nums; }
-.params input.is-over { border-color: var(--accent); background: var(--accent-tint); }
+.params input.is-over, .params select.is-over { border-color: var(--accent); background: var(--accent-tint); }
 .params-wrap { overflow-x: auto; }
 .learned-list { display: grid; gap: 6px; }
 .learned-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; background: var(--surface-2); border-radius: var(--radius-sm); font-size: 0.9rem; }

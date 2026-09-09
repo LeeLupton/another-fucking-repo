@@ -586,3 +586,118 @@ test('prefilling asks before it replaces a capture with a photo in it, and relea
   assert.equal(await empty.prefillCapture(donation), true);
   assert.equal(empty.state.capture.description, 'Donated goods');
 });
+
+test('the worksheet names the W-2 withholding it counted, on paper and in the text copy', () => {
+  const Rules = require(path.join(__dirname, '../js/rules.js'));
+  const computed = (withheld) => ({
+    taxYear: 2026, filingStatus: 'single', agi: 95000, params: {}, lines: {}, sections: {},
+    scheduleA: { taxes: { withheld }, grossEntered: 12000, total: 11000 },
+    standardDeduction: { total: 15750 },
+    verdict: { itemize: false, difference: -4750 },
+    scheduleC: { hasActivity: false },
+    adjustments: { studentLoanInterest: { paid: 0, deductible: 0 } },
+  });
+  const textOf = (withheld) => load([fn('worksheetText')], {
+    state: { computed: computed(withheld), settings: { taxpayerName: 'Dana Reyes' } },
+    R: Rules, S: { SECTIONS: [], linesForSection: () => [] },
+    P: { formatDate: (d) => d, todayISO: () => '2026-09-08' },
+    money: Rules.money, moneyCents: Rules.moneyCents,
+    stdAddedClause: () => '', preparerNotes: () => [],
+  }).worksheetText();
+
+  const counted = textOf(3000);
+  assert.match(counted, /^State and local income tax withheld per W-2 \.+ \$3,000\.00$/m);
+  assert.match(counted, /^Schedule A entered, including that withholding \.+ \$12,000\.00$/m);
+  const none = textOf(0);
+  assert.equal(/withheld/.test(none), false, 'nothing was withheld, so the line is not printed as $0.00');
+  assert.match(none, /^Schedule A entered \.+ \$12,000\.00$/m);
+
+  // the sheet itself carries the same pair of rows
+  const rows = line(/^ {10}\$\{R0\.scheduleA\.taxes\.withheld \? `<span>State and local income tax withheld per W-2 \(from Settings\)[\s\S]*?grossEntered\)\)\}<\/span>$/m);
+  const sheet = load(['const totals = (R0) => `' + rows + '`;'], {
+    esc: (v) => String(v), moneyCents: Rules.moneyCents, WITH: computed(3000), WITHOUT: computed(0),
+  });
+  const paper = run(sheet, 'totals(WITH)');
+  assert.match(paper, /<span>State and local income tax withheld per W-2 \(from Settings\)<\/span><span class="num">\$3,000\.00<\/span>/);
+  assert.match(paper, /<span>Schedule A items entered, including that withholding<\/span><span class="num">\$12,000\.00<\/span>/);
+  const bare = run(sheet, 'totals(WITHOUT)');
+  assert.equal(/withheld/.test(bare), false);
+  assert.match(bare, /<span>Schedule A items entered<\/span><span class="num">\$12,000\.00<\/span>/);
+});
+
+test('printing from another view draws the worksheet first, so the page is not blank', () => {
+  const sources = [
+    line(/^ {4}let printedOffView = .*$/m),
+    line(/^ {4}window\.addEventListener\('beforeprint'[\s\S]*?^ {4}\}\);$/m),
+    line(/^ {4}window\.addEventListener\('afterprint'[\s\S]*?^ {4}\}\);$/m),
+    line(/^ {4}\$\('#printBtn'\)\.onclick = .*$/m),
+  ];
+  const setUp = (view, drawn) => {
+    const seen = [];
+    const renders = [];
+    const root = { innerHTML: drawn ? '<article class="sheet">already on screen</article>' : '', hidden: !drawn };
+    const printBtn = {};
+    const handlers = { beforeprint: [], afterprint: [] };
+    const ctx = load(sources, {
+      state: { view },
+      $: (sel) => ({ '#view-worksheet': root, '#printBtn': printBtn }[sel] || null),
+      renderWorksheet: () => { renders.push(1); root.innerHTML = '<article class="sheet">drawn for the printer</article>'; },
+      window: {
+        addEventListener: (name, f) => handlers[name].push(f),
+        // the browser fires beforeprint, paints, then fires afterprint; what the printer sees is what stands in between
+        print: () => { handlers.beforeprint.forEach((f) => f()); seen.push({ html: root.innerHTML, hidden: root.hidden }); handlers.afterprint.forEach((f) => f()); },
+      },
+    });
+    return { ctx, root, printBtn, seen, renders };
+  };
+
+  const offView = setUp('ledger', false);
+  offView.printBtn.onclick();
+  assert.equal(offView.renders.length, 1);
+  assert.match(offView.seen[0].html, /drawn for the printer/, 'the worksheet is filled in before the print starts');
+  assert.equal(offView.seen[0].hidden, false, 'and is showing, because the print stylesheet keeps only this view');
+  assert.equal(offView.root.hidden, true, 'it goes back to hidden once the print is over');
+
+  const onView = setUp('worksheet', true);
+  onView.printBtn.onclick();
+  assert.equal(onView.renders.length, 0, 'the view on screen is already drawn; drawing it again would lose the scroll position');
+  assert.match(onView.seen[0].html, /already on screen/);
+  assert.equal(onView.root.hidden, false, 'the view the user is looking at is not hidden afterwards');
+});
+
+test('a yes/no figure in the Settings table gets a yes/no control, not a mileage box', () => {
+  const Rules = require(path.join(__dirname, '../js/rules.js'));
+  const ctx = load([
+    line(/^  const money = R\.money.*$/m),
+    line(/^  const esc = .*$/m),
+    line(/^ {4}const fmtParam = .*$/m),
+    line(/^ {4}const toInput = .*$/m),
+    line(/^ {4}const paramControl = [\s\S]*?`\);$/m),
+  ], {
+    R: Rules,
+    FIELDS: {
+      bool: { path: 'qualifiedDisasterLoss', label: 'Qualified disaster loss treatment is available', kind: 'bool' },
+      permile: { path: 'mileage.business', label: 'Business mileage rate (¢/mile)', kind: 'permile' },
+    },
+  });
+
+  assert.equal(run(ctx, 'fmtParam("bool", true)'), 'Yes');
+  assert.equal(run(ctx, 'fmtParam("bool", false)'), 'No');
+  assert.equal(run(ctx, 'fmtParam("usd", 15750)'), '$15,750');
+  assert.equal(run(ctx, 'toInput("bool", true)'), 'yes');
+  assert.equal(run(ctx, 'toInput("bool", false)'), 'no');
+  assert.equal(run(ctx, 'toInput("permile", 0.725)'), '72.5');
+
+  const untouched = run(ctx, 'paramControl(FIELDS.bool, false, undefined)');
+  assert.match(untouched, /^<select data-param="qualifiedDisasterLoss" data-kind="bool"/);
+  assert.match(untouched, /<option value="">Default \(no\)<\/option>/);
+  assert.equal(/selected/.test(untouched), false, 'nothing is overridden, so the built-in answer stands');
+  assert.match(run(ctx, 'paramControl(FIELDS.bool, true, undefined)'), /<option value="">Default \(yes\)<\/option>/);
+  assert.match(run(ctx, 'paramControl(FIELDS.bool, false, true)'), /<option value="yes" selected>Yes<\/option>/);
+  assert.match(run(ctx, 'paramControl(FIELDS.bool, false, false)'), /<option value="no" selected>No<\/option>/);
+  assert.equal(/selected/.test(run(ctx, 'paramControl(FIELDS.bool, false, false)').replace('<option value="no" selected>', '')), false);
+
+  const rate = run(ctx, 'paramControl(FIELDS.permile, 0.725, undefined)');
+  assert.match(rate, /^<input data-param="mileage\.business" data-kind="permile"/);
+  assert.match(rate, /placeholder="72\.5"/);
+});

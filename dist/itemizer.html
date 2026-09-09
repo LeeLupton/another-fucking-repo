@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- Everything the app needs comes from this origin, so an escaping slip in a description or a receipt name cannot run as script. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-cFnnnWwUEY600idQNp6bf3/Q+EIsopoyIcz0Z2J8rAI='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-iuXj03n7W4hVqVZYcKYT+HGQLnErgfQLNSq+qu+RoM0='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Itemizer</title>
 <meta name="description" content="Keep track of deductible expenses through the year, know the moment itemizing beats the standard deduction, and hand your preparer a filled-in worksheet.">
@@ -452,7 +452,7 @@ body:not(.tips-off) [data-tip]:hover::before { content: ""; position: absolute; 
 .params th { font-weight: 600; color: var(--ink-2); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .params td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .params input { width: 120px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); text-align: right; font-variant-numeric: tabular-nums; }
-.params input.is-over { border-color: var(--accent); background: var(--accent-tint); }
+.params input.is-over, .params select.is-over { border-color: var(--accent); background: var(--accent-tint); }
 .params-wrap { overflow-x: auto; }
 .learned-list { display: grid; gap: 6px; }
 .learned-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; background: var(--surface-2); border-radius: var(--radius-sm); font-size: 0.9rem; }
@@ -3849,7 +3849,10 @@ window.ITEMIZER_SINGLE_FILE = true;
         return out;
       }
       case 'overrides': {
-        const taxYear = yearOf(r.taxYear), path = str(r.path, 80), value = finite(r.value);
+        // A yes/no parameter has to stay a boolean: stored as 0 it would read as "not false" and the
+        // engine would go on offering a treatment the user turned off.
+        const taxYear = yearOf(r.taxYear), path = str(r.path, 80);
+        const value = typeof r.value === 'boolean' ? r.value : finite(r.value);
         if (taxYear == null || !PARAM_PATH.test(path) || value == null) return null;
         return { id: `${taxYear}:${path}`, taxYear, path, value, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }
@@ -7165,8 +7168,12 @@ window.ITEMIZER_SINGLE_FILE = true;
     const marriedJoint = s.filingStatus === 'mfj'; // a qualifying surviving spouse files alone: no spouse add-on
     const overrides = state.overrides[R0.taxYear] || {};
     const defaults = R.getParams(R0.taxYear, {});
-    const fmtParam = (kind, v) => (kind === 'usd' ? money(v) : kind === 'rate' ? R.pct(v) : R.perMile(v));
-    const toInput = (kind, v) => (kind === 'usd' ? String(Math.round(v)) : String(Math.round(v * 1000) / 10));
+    const fmtParam = (kind, v) => (kind === 'usd' ? money(v) : kind === 'rate' ? R.pct(v) : kind === 'bool' ? (v ? 'Yes' : 'No') : R.perMile(v));
+    const toInput = (kind, v) => (kind === 'usd' ? String(Math.round(v)) : kind === 'bool' ? (v ? 'yes' : 'no') : String(Math.round(v * 1000) / 10));
+    // A yes/no figure needs a yes/no control: in a text box the default reads as "0¢/mile" and any answer has to be typed as a number.
+    const paramControl = (f, def, ov) => (f.kind === 'bool'
+      ? `<select data-param="${f.path}" data-kind="bool" class="input ${ov != null ? 'is-over' : ''}" aria-label="${esc(f.label)}"><option value="">Default (${def ? 'yes' : 'no'})</option><option value="yes" ${ov === true ? 'selected' : ''}>Yes</option><option value="no" ${ov === false ? 'selected' : ''}>No</option></select>`
+      : `<input data-param="${f.path}" data-kind="${f.kind}" class="${ov != null ? 'is-over' : ''}" inputmode="decimal" value="${ov != null ? esc(toInput(f.kind, ov)) : ''}" placeholder="${esc(toInput(f.kind, def))}" aria-label="${esc(f.label)}">`);
     const learnedKeys = Object.keys(state.learned).sort();
     const dismissedCount = Object.keys(state.dismissed).length;
 
@@ -7182,7 +7189,10 @@ window.ITEMIZER_SINGLE_FILE = true;
               <select id="sLtcBracket" class="input" aria-label="Your age band for the long-term-care premium limit"><option value="">Age band not set</option>${R.LTC_BRACKETS.map((b) => `<option value="${b.id}" ${s.ltcAgeBracket === b.id ? 'selected' : ''}>Age ${esc(b.label)} at the end of the year</option>`).join('')}</select>
               <small class="muted">Sets the limit on long-term-care insurance premiums. Leave it unset if you have no such policy.</small>
             </div>
-            <div class="field" ${marriedJoint ? '' : 'hidden'}><span>Spouse</span><div class="chips"><label class="check"><input type="checkbox" id="sSpouseAge65" ${s.spouseAge65 ? 'checked' : ''}> Spouse is 65 or older</label><label class="check"><input type="checkbox" id="sSpouseBlind" ${s.spouseBlind ? 'checked' : ''}> Spouse is blind</label></div></div>
+            <div class="field" ${marriedJoint ? '' : 'hidden'}><span>Spouse</span><div class="chips"><label class="check"><input type="checkbox" id="sSpouseAge65" ${s.spouseAge65 ? 'checked' : ''}> Spouse is 65 or older</label><label class="check"><input type="checkbox" id="sSpouseBlind" ${s.spouseBlind ? 'checked' : ''}> Spouse is blind</label></div>
+              <select id="sSpouseLtcBracket" class="input" aria-label="Your spouse's age band for the long-term-care premium limit"><option value="">Spouse age band not set</option>${R.LTC_BRACKETS.map((b) => `<option value="${b.id}" ${s.spouseLtcAgeBracket === b.id ? 'selected' : ''}>Age ${esc(b.label)} at the end of the year</option>`).join('')}</select>
+              <small class="muted">Set this only if a second policy insures your spouse: each insured person has their own limit.</small>
+            </div>
             <label class="field"><span>Gambling winnings reported ($)</span><input id="sWinnings" inputmode="numeric" value="${esc(s.gamblingWinnings)}" placeholder="0"></label>
             <label class="field"><span>Net investment income ($)</span><input id="sInvestmentIncome" inputmode="numeric" value="${esc(s.investmentIncome || '')}" placeholder="0"><small class="muted">Interest, dividends, and other investment income, less investment expenses. Margin interest counts only up to this figure.</small></label>
             <label class="field"><span>State &amp; local income tax withheld ($)</span><input id="sWithheld" inputmode="numeric" value="${esc(s.stateWithholding || '')}" placeholder="W-2 boxes 17 and 19"><small class="muted">Tax withheld for another state counts here too.</small></label>
@@ -7202,7 +7212,7 @@ window.ITEMIZER_SINGLE_FILE = true;
           <div class="card-head"><h2>Rates &amp; thresholds for ${R0.taxYear}</h2>${P0.isFallback ? `<span class="pill pill-act">using ${P0.baseYear} figures</span>` : `<span class="pill pill-info">built in</span>`}</div>
           <p class="note">Built-in figures come from IRS inflation-adjustment notices and the 2025 tax law. Override any value the IRS updates; blank restores the default. Percentages are entered as percent (7.5), mileage as cents per mile (72.5).</p>
           <div class="params-wrap"><table class="params"><caption class="sr-only">Rates and thresholds for ${R0.taxYear}: the built-in default and your override for each figure.</caption><thead><tr><th>Figure</th><th class="num">Default</th><th class="num">Your value</th></tr></thead><tbody>
-            ${R.paramFields(R0.taxYear, state.overrides).map((f) => { const def = R.getPath(defaults, f.path); const ov = R.getPath(overrides, f.path); return `<tr><td>${esc(f.label)}</td><td class="num">${esc(fmtParam(f.kind, def))}</td><td class="num"><input data-param="${f.path}" data-kind="${f.kind}" class="${ov != null ? 'is-over' : ''}" inputmode="decimal" value="${ov != null ? esc(toInput(f.kind, ov)) : ''}" placeholder="${esc(toInput(f.kind, def))}" aria-label="${esc(f.label)}"></td></tr>`; }).join('')}
+            ${R.paramFields(R0.taxYear, state.overrides).map((f) => { const def = R.getPath(defaults, f.path); const ov = R.getPath(overrides, f.path); return `<tr><td>${esc(f.label)}</td><td class="num">${esc(fmtParam(f.kind, def))}</td><td class="num">${paramControl(f, def, ov)}</td></tr>`; }).join('')}
           </tbody></table></div>
           <div class="btn-row" style="margin-top:12px"><button class="btn btn-sm" type="button" id="resetParams" ${Object.keys(overrides).length ? '' : 'disabled'}>Reset ${R0.taxYear} to defaults</button></div>
         </section>
@@ -7301,6 +7311,8 @@ window.ITEMIZER_SINGLE_FILE = true;
     moneyField('sInvestmentIncome', 'investmentIncome', 'Enter the investment income as a plain number, for example 3000.');
     moneyField('sWithheld', 'stateWithholding', 'Enter the tax withheld as a plain number, for example 4200.');
     $('#sLtcBracket').onchange = async (ev) => { s.ltcAgeBracket = ev.target.value; await save({ ltcAgeBracket: s.ltcAgeBracket }); };
+    const spouseLtc = $('#sSpouseLtcBracket'); // only on a joint return, like the other spouse controls
+    if (spouseLtc) spouseLtc.onchange = async (ev) => { s.spouseLtcAgeBracket = ev.target.value; await save({ spouseLtcAgeBracket: s.spouseLtcAgeBracket }); };
     $('#sState').onchange = async (ev) => { s.state = ev.target.value; await save({ state: s.state }); renderSettings(); };
     $('#sCounty').addEventListener('change', async (ev) => { s.county = ev.target.value.trim(); await save({ county: s.county }); });
     $('#sDisasterNumber').addEventListener('change', async (ev) => { s.disasterNumber = ev.target.value.trim(); await save({ disasterNumber: s.disasterNumber }); });
@@ -7328,20 +7340,26 @@ window.ITEMIZER_SINGLE_FILE = true;
     };
     $$('[data-param]').forEach((inp) => inp.addEventListener('change', async () => {
       const path = inp.dataset.param, kind = inp.dataset.kind;
-      const raw = inp.value.trim().replace(/[$,%¢]/g, '');
-      const n = Number(raw);
-      // the boxes take cents and percent, not dollars and shares: "0.70" in a mileage box would value a drive at less than a cent a mile
-      const problem = raw === '' ? null
-        : !Number.isFinite(n) || n < 0 ? 'Enter a number, or leave the box empty to use the default.'
-        : kind === 'permile' && (n < 1 || n > 200) ? 'Enter the mileage rate in cents per mile, for example 72.5.'
-        : kind === 'rate' && n > 100 ? 'Enter the percentage as a percent, for example 7.5.'
-        : null;
-      if (problem) { const was = R.getPath(state.overrides[R0.taxYear] || {}, path); inp.value = was != null ? toInput(kind, was) : ''; toast(problem, 6000); return; }
+      let value; // null means "no override": the built-in figure for the year comes back
+      if (kind === 'bool') {
+        value = inp.value === 'yes' ? true : inp.value === 'no' ? false : null;
+      } else {
+        const raw = inp.value.trim().replace(/[$,%¢]/g, '');
+        const n = Number(raw);
+        // the boxes take cents and percent, not dollars and shares: "0.70" in a mileage box would value a drive at less than a cent a mile
+        const problem = raw === '' ? null
+          : !Number.isFinite(n) || n < 0 ? 'Enter a number, or leave the box empty to use the default.'
+          : kind === 'permile' && (n < 1 || n > 200) ? 'Enter the mileage rate in cents per mile, for example 72.5.'
+          : kind === 'rate' && n > 100 ? 'Enter the percentage as a percent, for example 7.5.'
+          : null;
+        if (problem) { const was = R.getPath(state.overrides[R0.taxYear] || {}, path); inp.value = was != null ? toInput(kind, was) : ''; toast(problem, 6000); return; }
+        value = raw === '' ? null : kind === 'usd' ? n : n / 100;
+      }
       const before = state.overrides[R0.taxYear] ? JSON.parse(JSON.stringify(state.overrides[R0.taxYear])) : null;
       if (!state.overrides[R0.taxYear]) state.overrides[R0.taxYear] = {};
       const ov = state.overrides[R0.taxYear];
-      if (raw === '') unsetPath(ov, path);
-      else R.setPath(ov, path, kind === 'usd' ? n : n / 100);
+      if (value === null) unsetPath(ov, path);
+      else R.setPath(ov, path, value);
       if (!Object.keys(ov).length) delete state.overrides[R0.taxYear];
       try { await DB.syncOverrides(R0.taxYear, ov); } // one row per overridden parameter
       catch (e) {

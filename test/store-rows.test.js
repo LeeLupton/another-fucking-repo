@@ -391,3 +391,16 @@ test('a wipe that cannot clear a store says which ones are left instead of repor
   assert.match(out.error, /entries/);
   assert.deepEqual(out.entries, ['e1'], 'the row is still here, so the wipe must not report that everything went');
 });
+
+test('a yes/no override keeps its boolean, so turning a treatment off survives a reload', () => {
+  const off = DB.sanitizeRow('overrides', { taxYear: 2026, path: 'qualifiedDisasterLoss', value: false });
+  assert.equal(off.value, false, 'stored as 0 the engine would read it as still available');
+  assert.equal(typeof off.value, 'boolean');
+  const on = DB.sanitizeRow('overrides', { taxYear: 2026, path: 'qualifiedDisasterLoss', value: true });
+  assert.equal(on.value, true);
+  // the engine tests the parameter with !== false, so only a real boolean turns it off
+  const nested = DB.nestOverrides([off]);
+  assert.equal(nested[2026].qualifiedDisasterLoss, false);
+  // numbers are untouched
+  assert.equal(DB.sanitizeRow('overrides', { taxYear: 2026, path: 'medicalFloorRate', value: 0.075 }).value, 0.075);
+});
