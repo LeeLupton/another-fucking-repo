@@ -89,6 +89,7 @@
     return best;
   }
   const money = Rules.money;
+  const moneyNear = Rules.moneyNear; // a margin under a dollar is exactly where the itemize/standard call is decided
   const cents = Rules.cents;
   // ctxYear is the year the reader is looking at: a date outside it carries its year, so "Dec 10" is never mistaken for this year's
   function fmtDate(iso, ctxYear) {
@@ -386,8 +387,8 @@
     if (yearEntries.length && closed) {
       // the year is over: report what happened instead of planning for a Dec 31 that has passed
       recs.push(projection.itemize
-        ? { id: `plan:closed:${taxYear}`, kind: 'good', priority: 30, title: `${taxYear}: itemizing won by ${money(projection.projectedTotal - projection.standardDeduction)}`, body: `${money(projection.projectedTotal)} of Schedule A deductions against a ${money(projection.standardDeduction)} standard deduction. Give the preparer the worksheet and the receipts sheet.`, because: 'the year is closed', action: null }
-        : { id: `plan:closed:${taxYear}`, kind: 'plan', priority: 30, title: `${taxYear} fell ${money(projection.gap)} short of itemizing`, body: `${money(projection.projectedTotal)} counted against a ${money(projection.standardDeduction)} standard deduction. Business costs, student loan interest, and any non-itemizer gift deduction still count.`, because: 'the year is closed', action: null });
+        ? { id: `plan:closed:${taxYear}`, kind: 'good', priority: 30, title: `${taxYear}: itemizing won by ${moneyNear(projection.projectedTotal - projection.standardDeduction)}`, body: `${money(projection.projectedTotal)} of Schedule A deductions against a ${money(projection.standardDeduction)} standard deduction. Give the preparer the worksheet and the receipts sheet.`, because: 'the year is closed', action: null }
+        : { id: `plan:closed:${taxYear}`, kind: 'plan', priority: 30, title: `${taxYear} fell ${moneyNear(projection.gap)} short of itemizing`, body: `${money(projection.projectedTotal)} counted against a ${money(projection.standardDeduction)} standard deduction. Business costs, student loan interest, and any non-itemizer gift deduction still count.`, because: 'the year is closed', action: null });
     } else if (yearEntries.length && projection.medicalPending && projected.scheduleA.medical.gross > 0) {
       // never issue a definitive plan on a projection that leaves medical costs out
       recs.push({ id: `plan:agi:${taxYear}`, kind: 'check', priority: 55, title: 'Enter your AGI to finish the year-end projection', body: `${money(projected.scheduleA.medical.gross)} of medical costs is not counted until an estimated AGI is set, so the comparison with the ${money(projection.standardDeduction)} standard deduction is incomplete.`, because: 'medical expenses waiting on AGI', action: { type: 'settings' } });

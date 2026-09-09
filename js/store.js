@@ -68,6 +68,7 @@
     spouseAge65: false,
     spouseBlind: false,
     ltcAgeBracket: '', // age at the end of the year, which sets the long-term-care premium limit; blank means not stated
+    spouseLtcAgeBracket: '', // the spouse's age band on a joint return; each insured person has their own limit
     gamblingWinnings: '',
     investmentIncome: '',
     stateWithholding: '',
@@ -125,6 +126,7 @@
     if (!(out.taxYear >= 2000 && out.taxYear <= 2100)) out.taxYear = DEFAULT_SETTINGS.taxYear;
     if (!FILING_STATUSES.includes(out.filingStatus)) out.filingStatus = 'single';
     if (!LTC_AGE_BRACKETS.includes(out.ltcAgeBracket)) out.ltcAgeBracket = '';
+    if (!LTC_AGE_BRACKETS.includes(out.spouseLtcAgeBracket)) out.spouseLtcAgeBracket = '';
     if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
     return out;
   }
