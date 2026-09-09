@@ -98,6 +98,19 @@ test('a closed year gets a past-tense summary and no projection', () => {
   assert.match(plan.title, /2025/);
 });
 
+test('a closed year decided by cents says so in the title, where whole dollars would read as $0', () => {
+  const mortgage = (amount) => [E('2025-03-01', 'int.mortgage', amount, 'Mortgage interest')];
+  const short = run(mortgage(15749.6), { taxYear: 2025 }, '2026-09-20'); // $15,750 standard deduction, 40c under it
+  const shortPlan = mustFind(short.recommendations, (x) => x.id.startsWith('plan:closed'), 'the closed-year plan');
+  assert.equal(short.projection.gap, 0.4);
+  assert.equal(shortPlan.title, '2025 fell $0.40 short of itemizing');
+  assert.match(shortPlan.body, /\$15,750 counted against a \$15,750 standard deduction/, 'the body prints totals, so it stays on whole dollars');
+  const won = run(mortgage(15750.25), { taxYear: 2025 }, '2026-09-20');
+  const wonPlan = mustFind(won.recommendations, (x) => x.id.startsWith('plan:closed'), 'the closed-year plan');
+  assert.equal(wonPlan.kind, 'good');
+  assert.equal(wonPlan.title, '2025: itemizing won by $0.25');
+});
+
 test('habits never report a negative gap, and the aggregate hides age and blindness', () => {
   const entries = [E('2026-09-19', 'ch.org', 50, 'Food bank', { createdAt: '2026-09-21T01:00:00.000Z' })];
   const r = run(entries, { age65: true, blind: true }, '2026-09-20');

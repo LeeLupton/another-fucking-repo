@@ -127,6 +127,19 @@ test('the two figures the tax engine cannot see — the age band and the investm
   assert.equal(saved.ltcAgeBracket, back.ltcAgeBracket);
 });
 
+test('a spouse insured under a second long-term-care policy has an age band of their own', async () => {
+  await DB.clearAll();
+  assert.ok('spouseLtcAgeBracket' in DB.DEFAULT_SETTINGS, 'sanitizeSettings copies known keys only, so an unknown one could never be saved');
+  assert.equal(DB.sanitizeSettings({}).spouseLtcAgeBracket, '', 'unset until the taxpayer says: one policy is entitled to one limit');
+  assert.equal(DB.sanitizeSettings({ spouseLtcAgeBracket: '71+' }).spouseLtcAgeBracket, '71+');
+  assert.equal(DB.sanitizeSettings({ spouseLtcAgeBracket: '65' }).spouseLtcAgeBracket, '', 'a band the engine does not know is dropped, not stored');
+  assert.equal(DB.sanitizeSettings({ ltcAgeBracket: '41-50', spouseLtcAgeBracket: '61-70' }).ltcAgeBracket, '41-50', 'the two bands are independent');
+  await DB.saveSettings({ filingStatus: 'mfj', ltcAgeBracket: '41-50', spouseLtcAgeBracket: '61-70' });
+  const back = await DB.getSettings();
+  assert.equal(back.spouseLtcAgeBracket, '61-70');
+  assert.equal(back.ltcAgeBracket, '41-50');
+});
+
 test('a version-2 backup imports into rows; a version-3 backup is rows already; the export is version 3', async () => {
   await DB.clearAll();
   const entry = { id: 'e1', date: '2026-01-05', taxYear: 2026, lineId: 'med.prescriptions', amount: 42.13, description: 'CVS', note: '', hasReceipt: false, receiptId: null };
