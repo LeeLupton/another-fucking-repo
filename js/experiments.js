@@ -26,7 +26,9 @@
   'use strict';
 
   const KEEP_MONTHS = 24;
-  const WEIGHT_FLOOR = 0.2, WEIGHT_CAP = 2.5;
+  // Keeping the top suggestion is weak evidence, so acceptance saturates well below the cap an
+  // explicit correction can reach: a common single word must not ratchet past a longer phrase.
+  const WEIGHT_FLOOR = 0.2, WEIGHT_CAP = 2.5, ACCEPT_CAP = 1.2;
   const r2 = (n) => Math.round(n * 100) / 100;
   const r3 = (n) => Math.round(n * 1000) / 1000;
   const r4 = (n) => Math.round(n * 10000) / 10000;
@@ -44,16 +46,24 @@
 
   // ---- forecast snapshots ---------------------------------------------------------
 
+  // The settings a forecast was made under. They ride along on the snapshot so a finished year is graded the way it
+  // was projected: a filing status or an AGI entered later must not change what a past forecast is compared with.
+  const CARRIED_SETTINGS = ['agi', 'filingStatus', 'age65', 'blind', 'spouseAge65', 'spouseBlind'];
+
   /**
    * Add or refresh this month's snapshot for a tax year and drop stale ones.
    * @param {Array} list  existing snapshots
    * @param {{today, taxYear, actual, expectedMore, projectedTotal, standardDeduction, itemize}} s
+   *   may also carry the settings of CARRIED_SETTINGS; the ones it does not carry are left off the row
    * @returns {Array} a new list
    */
   function snapshot(list, s) {
     const key = monthKey(s.today);
     const rest = (list || []).filter((x) => !(x.month === key && x.taxYear === s.taxYear));
-    rest.push({ month: key, taxYear: Number(s.taxYear), takenOn: s.today, actual: r2(s.actual), expectedMore: r2(s.expectedMore), projectedTotal: r2(s.projectedTotal), standardDeduction: r2(s.standardDeduction), itemize: !!s.itemize });
+    const row = { month: key, taxYear: Number(s.taxYear), takenOn: s.today, actual: r2(s.actual), expectedMore: r2(s.expectedMore), projectedTotal: r2(s.projectedTotal), standardDeduction: r2(s.standardDeduction), itemize: !!s.itemize };
+    // a setting that is not there says nothing, so it is left off: an old row and a new one then look the same
+    for (const k of CARRIED_SETTINGS) if (s[k] !== undefined && s[k] !== null && s[k] !== '') row[k] = s[k];
+    rest.push(row);
     rest.sort((a, b) => a.month.localeCompare(b.month) || a.taxYear - b.taxYear);
     return rest.filter((x) => monthsBetween(x.month, key) <= KEEP_MONTHS);
   }
@@ -121,7 +131,7 @@
     const w = Object.assign({}, weights || {});
     const get = (k) => (w[k] == null ? 1 : w[k]);
     if (!chosenLineId || suggestedLineId === chosenLineId) {
-      for (const k of because || []) w[k] = r3(Math.min(WEIGHT_CAP, get(k) * 1.05));
+      for (const k of because || []) w[k] = r3(Math.min(ACCEPT_CAP, get(k) * 1.05));
     } else {
       for (const k of because || []) w[k] = r3(Math.max(WEIGHT_FLOOR, get(k) * 0.7));
       for (const k of chosenBecause || []) w[k] = r3(Math.min(WEIGHT_CAP, get(k) * 1.25));
@@ -133,5 +143,5 @@
   /** Keywords the classifier reports as reasons; pseudo reasons are not weights. */
   const isKeyword = (k) => typeof k === 'string' && !/here before|section context|^miles|odometer/.test(k);
 
-  return { KEEP_MONTHS, WEIGHT_FLOOR, WEIGHT_CAP, monthKey, snapshot, changed, validate, calibration, summary, applyCorrection, isKeyword };
+  return { KEEP_MONTHS, WEIGHT_FLOOR, WEIGHT_CAP, ACCEPT_CAP, CARRIED_SETTINGS, monthKey, snapshot, changed, validate, calibration, summary, applyCorrection, isKeyword };
 });

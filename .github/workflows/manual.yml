@@ -28,5 +28,9 @@ jobs:
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
     # Runs a single command using the runners shell
+    # The input reaches the shell as an environment variable. Interpolating ${{ }} straight into a
+    # run: script would let a crafted name run commands on the runner instead of being greeted.
     - name: Send greeting
-      run: echo "Hello ${{ inputs.name }}"
+      env:
+        NAME: ${{ inputs.name }}
+      run: echo "Hello $NAME"

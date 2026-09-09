@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Rules = require('../js/rules.js');
+const Classify = require('../js/classify.js');
 
 const E = (date, lineId, amount, extra) => Object.assign({ id: `${lineId}-${date}-${amount}`, date, lineId, amount, hasReceipt: true }, extra || {});
 const base = { taxYear: 2026, filingStatus: 'single', agi: 80000, today: '2026-09-02' };
@@ -26,12 +27,12 @@ test('standard deduction by filing status with age/blind add-ons', () => {
 test('medical: 7.5% AGI floor, miles at the medical rate, pending without AGI', () => {
   const entries = [E('2026-02-01', 'med.doctor', 5000), E('2026-02-02', 'med.miles', 1000)];
   const r = Rules.compute(entries, base);
-  assert.equal(r.scheduleA.medical.gross, 5210); // 5000 + 1000 × 0.21
+  assert.equal(r.scheduleA.medical.gross, 5205); // 5000 + 1000 × 0.205, the rate before July 1, 2026
   assert.equal(r.scheduleA.medical.floor, 6000);
   assert.equal(r.scheduleA.medical.deductible, 0);
-  assert.equal(r.scheduleA.medical.shortfall, 790);
+  assert.equal(r.scheduleA.medical.shortfall, 795);
   const r2 = Rules.compute(entries, { ...base, agi: 40000 });
-  assert.equal(r2.scheduleA.medical.deductible, 2210);
+  assert.equal(r2.scheduleA.medical.deductible, 2205);
   const r3 = Rules.compute(entries, { ...base, agi: '' });
   assert.equal(r3.scheduleA.medical.deductible, null);
   assert.equal(r3.verdict.medicalPending, true);
@@ -104,15 +105,20 @@ test('verdict: itemize when Schedule A beats the standard deduction', () => {
   const r = Rules.compute(entries, base);
   assert.equal(r.scheduleA.total, 9000 + 12000 + (3000 - 400));
   assert.equal(r.verdict.itemize, true);
-  assert.equal(r.verdict.difference, 23600 - 16100);
+  // the standard-deduction side carries the $1,000 of cash gifts a non-itemizer may deduct from 2026
+  assert.equal(r.standardDeduction.charity, 1000);
+  assert.equal(r.verdict.difference, 23600 - 17100);
   const win = r.insights.find((i) => /Itemizing wins/.test(i.title));
-  assert.ok(win, 'the verdict is an insight'); assert.equal(win.level, 'good'); assert.match(win.title, /\$7,500/);
+  assert.ok(win, 'the verdict is an insight'); assert.equal(win.level, 'good'); assert.match(win.title, /\$6,500/);
   // insights sort by urgency: an unacknowledged $300 gift outranks the good news
   const flagged = Rules.compute(entries.concat([E('2026-02-01', 'ch.org', 300, { hasReceipt: false })]), base);
   assert.equal(flagged.insights[0].level, 'act');
   const mfj = Rules.compute(entries, { ...base, filingStatus: 'mfj' });
   assert.equal(mfj.verdict.itemize, false);
-  assert.ok(mfj.insights.some((i) => /bunching/.test(i.title)), 'close-to-the-line bunching advice');
+  assert.equal(mfj.standardDeduction.total, 32200 + 2000);
+  // $24,600 against a $34,200 standard deduction: inside the bunching band
+  const nearly = Rules.compute(entries.concat([E('2026-01-08', 'int.mortgage', 1000)]), { ...base, filingStatus: 'mfj' });
+  assert.ok(nearly.insights.some((i) => /bunching/.test(i.title)), 'close-to-the-line bunching advice');
 });
 
 test('student loan interest: cap and phase-out', () => {
@@ -137,6 +143,17 @@ test('Schedule C: meals at 50%, vehicle method conflict, business-use share', ()
   assert.ok(r.insights.some((i) => /Pick one vehicle method/.test(i.title)));
   // total miles is information only — never a dollar value
   assert.equal(r.sections.selfemp.value, 100 + 400 + 500 + 725);
+});
+
+test('a miscellaneous business expense is not a car expense: miles alone raise no method conflict', () => {
+  // through the classifier, because the line the parking receipt lands on is what decides the conflict
+  const parking = Classify.classify('12 parking for work').suggestions[0].lineId;
+  assert.equal(parking, 'se.other');
+  const r = Rules.compute([E('2025-03-10', 'se.miles', 1000), E('2025-03-10', parking, 12)], { ...base, taxYear: 2025, agi: 50000 });
+  assert.equal(r.scheduleC.total, 712);
+  assert.equal(r.scheduleC.vehicle.actual, 0);
+  assert.equal(r.scheduleC.vehicle.methodConflict, false);
+  assert.ok(r.insights.every((i) => !/Pick one vehicle method/.test(i.title)), 'no vehicle-method warning');
 });
 
 test('entries from other years are ignored; duplicates are detected', () => {
@@ -166,11 +183,11 @@ test('state awareness: no-income-tax states get the sales-tax note instead of th
   const e = [E('2026-04-15', 'tax.state_income', 640)];
   const tx = Rules.compute(e, { ...base, state: 'tx' });
   assert.equal(tx.state, 'TX');
-  assert.ok(tx.insights.some((i) => /sales tax instead/.test(i.title)));
+  assert.ok(tx.insights.some((i) => /sales tax may be the better claim/.test(i.title)));
   assert.ok(!tx.insights.some((i) => /timing matters/.test(i.title)));
   const nc = Rules.compute(e, { ...base, state: 'NC' });
   assert.ok(nc.insights.some((i) => /timing matters/.test(i.title)));
-  assert.ok(!nc.insights.some((i) => /sales tax instead/.test(i.title)));
+  assert.ok(!nc.insights.some((i) => /sales tax/.test(i.title)));
   assert.equal(Rules.compute(e, base).state, null);
 });
 

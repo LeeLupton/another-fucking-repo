@@ -6,21 +6,23 @@
  * to be rewritten whole; JSON is used only for the backup file.
  *
  *   store        key         row
- *   entries      id          { id, date, taxYear, lineId, amount, description, note, hasReceipt, receiptId, createdAt, updatedAt, sample, source?, items?, tripId?, fullAmount?, share? }
+ *   entries      id          { id, date, taxYear, lineId, amount, description, note, hasReceipt, receiptId, createdAt, updatedAt, sample, source?, items?, fullAmount?, share? }
  *   receipts     id          { id, entryId, type, createdAt, blob }
  *   places       id          { id, name, category, address, lat, lon, note, sample, updatedAt }
- *   trips        id          { id, date, taxYear, fromId, toId, fromLabel, toLabel, purpose, miles, roundTrip, method, lineId, entryId, points, startedAt, endedAt, createdAt }
+ *   trips        id          { id, date, taxYear, fromId, toId, fromLabel, toLabel, purpose, miles, roundTrip, method, lineId, entryId, sample, points, startedAt, endedAt, createdAt }
  *   settings     key         { key: 'main', value: { scalar configuration only, see DEFAULT_SETTINGS } }
  *   learned      key         { key, lineId, updatedAt }                       a payee key and the worksheet line it was filed on
  *   weights      keyword     { keyword, weight, updatedAt }                   a classifier keyword and its learned multiplier
  *   dismissals   id          { id, dismissedAt }                              an advisor recommendation the user dismissed
  *   layouts      signature   { signature, map, spendIsNegative, updatedAt }   a statement header and the column layout chosen for it
- *   snapshots    id          { id: 'taxYear:month', taxYear, month, takenOn, actual, expectedMore, projectedTotal, standardDeduction, itemize }
+ *   snapshots    id          { id: 'taxYear:month', taxYear, month, takenOn, actual, expectedMore, projectedTotal, standardDeduction, itemize,
+ *                              filingStatus?, agi?, age65?, blind?, spouseAge65?, spouseBlind? }   the settings the forecast was made under
  *   overrides    id          { id: 'taxYear:path', taxYear, path, value, updatedAt }   one overridden tax parameter
  *
  * Records reference other records by id (lineId, entryId, receiptId, fromId, toId); display labels are looked up
  * from the schema or the referenced row when shown. The two labels a trip keeps (fromLabel, toLabel) are the
- * mileage log's own record of where it went, kept so the log survives a deleted place.
+ * mileage log's own record of where it went, kept so the log survives a deleted place. An entry's `source` is
+ * where the row came from; only rows read from a statement carry one ('import').
  *
  * Version 3 of the database split the settings document of versions 1 and 2, which carried six of these
  * collections inside one JSON value, into the six stores above; the upgrade does that in place and loses nothing.
@@ -57,6 +59,7 @@
   /** The settings row: scalar configuration only. Collections have their own stores. */
   const DEFAULT_SETTINGS = {
     taxYear: new Date().getFullYear(),
+    taxYearPickedAt: '', // the day the user last chose a tax year by hand; the New Year roll-over leaves that choice alone
     taxpayerName: '', // the name on the return, printed on the worksheet so the preparer knows whose sheet it is
     filingStatus: 'single',
     agi: '',
@@ -64,7 +67,10 @@
     blind: false,
     spouseAge65: false,
     spouseBlind: false,
+    ltcAgeBracket: '', // age at the end of the year, which sets the long-term-care premium limit; blank means not stated
+    spouseLtcAgeBracket: '', // the spouse's age band on a joint return; each insured person has their own limit
     gamblingWinnings: '',
+    investmentIncome: '',
     stateWithholding: '',
     casualtyFederalDisaster: false,
     casualtyQualifiedDisaster: false,
@@ -79,14 +85,25 @@
   const LEGACY_EXPERIMENT_FLAGS = { snapshots: 'experimentSnapshots', corrections: 'experimentCorrections', nudges: 'experimentNudges' };
 
   let dbPromise = null;
-  let mode = 'idb'; // 'idb' | 'local' (localStorage, one key per store) | 'memory' (nothing survives the session)
+  let mode = 'idb'; // 'idb' | 'local' (localStorage, one key per store) | 'memory' (nothing survives the session) | 'unavailable' (the open failed)
   let notice = null; // a storage condition the UI should mention ("close other tabs")
+  let blockedTimeoutMs = 3000; // how long an upgrade blocked by another tab may hold the app before openDB gives up
+  const BLOCKED_NOTICE = 'Close other Itemizer tabs to finish updating storage.';
 
   const nowISO = () => new Date().toISOString();
   const str = (v, max) => (v == null ? '' : String(v).slice(0, max));
   const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
   const MONTH = /^\d{4}-\d{2}$/;
   const PARAM_PATH = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
+  const ID = /^[A-Za-z0-9_.:-]{1,64}$/; // ids the app makes: crypto.randomUUID() or the 'id-…' fallback in uid()
+  const RESERVED_KEY = /^(?:__proto__|constructor|prototype)$/; // a row keyed like this would be lost in the maps the app builds
+  const okId = (v) => typeof v === 'string' && ID.test(v) && !RESERVED_KEY.test(v);
+  const okKey = (v) => !!v && !RESERVED_KEY.test(v);
+  const TRIP_METHODS = ['road', 'estimate', 'gps', 'manual']; // METHOD_LABEL in app.js
+  const FILING_STATUSES = ['single', 'mfj', 'mfs', 'hoh', 'qss'];
+  const LTC_AGE_BRACKETS = ['', '40-', '41-50', '51-60', '61-70', '71+']; // LTC_BRACKETS in rules.js
+  const PLACE_CATEGORIES = ['home', 'medical', 'business', 'charity', 'school', 'other']; // PLACE_CATEGORIES in geo.js
+  const MAX_POINTS = 5000; // a recorded track is thinned to about one point per ten metres, so this is a very long drive
   const yearOf = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 2000 && n <= 2100 ? n : null; };
   const finite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
   const schemaOf = (opts) => (opts && opts.schema) || root.ItemizerSchema || null;
@@ -107,7 +124,9 @@
       for (const [old, flat] of Object.entries(LEGACY_EXPERIMENT_FLAGS)) if (!(flat in raw) && old in raw.experiments) out[flat] = raw.experiments[old] !== false;
     }
     if (!(out.taxYear >= 2000 && out.taxYear <= 2100)) out.taxYear = DEFAULT_SETTINGS.taxYear;
-    if (!['single', 'mfj', 'mfs', 'hoh', 'qss'].includes(out.filingStatus)) out.filingStatus = 'single';
+    if (!FILING_STATUSES.includes(out.filingStatus)) out.filingStatus = 'single';
+    if (!LTC_AGE_BRACKETS.includes(out.ltcAgeBracket)) out.ltcAgeBracket = '';
+    if (!LTC_AGE_BRACKETS.includes(out.spouseLtcAgeBracket)) out.spouseLtcAgeBracket = '';
     if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
     return out;
   }
@@ -118,23 +137,23 @@
     switch (store) {
       case 'learned': {
         const key = str(r.key, 120).trim();
-        if (!key || typeof r.lineId !== 'string' || !r.lineId || r.lineId.length > 40) return null;
+        if (!okKey(key) || typeof r.lineId !== 'string' || !r.lineId || r.lineId.length > 40) return null;
         if (schema && schema.getLine && !schema.getLine(r.lineId)) return null;
         return { key, lineId: r.lineId, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }
       case 'weights': {
         const keyword = str(r.keyword, 120).trim(), weight = finite(r.weight);
-        if (!keyword || weight == null || weight <= 0 || weight > 10) return null;
+        if (!okKey(keyword) || weight == null || weight <= 0 || weight > 10) return null;
         return { keyword, weight: Math.round(weight * 1000) / 1000, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }
       case 'dismissals': {
         const id = str(r.id, 200).trim(), dismissedAt = str(r.dismissedAt, 10);
-        if (!id || !ISO_DAY.test(dismissedAt)) return null;
+        if (!okKey(id) || !ISO_DAY.test(dismissedAt)) return null;
         return { id, dismissedAt };
       }
       case 'layouts': {
         const signature = str(r.signature, 400).trim();
-        if (!signature || !r.map || typeof r.map !== 'object') return null;
+        if (!okKey(signature) || !r.map || typeof r.map !== 'object') return null;
         const map = {};
         for (const c of ['date', 'description', 'amount', 'debit', 'credit', 'type', 'memo']) { const n = Number(r.map[c]); map[c] = Number.isInteger(n) && n >= -1 && n < 200 ? n : -1; }
         map.headerRow = r.map.headerRow !== false;
@@ -149,19 +168,31 @@
         const nums = ['actual', 'expectedMore', 'projectedTotal', 'standardDeduction'].map((k) => finite(r[k]));
         if (taxYear == null || !MONTH.test(month) || nums.some((n) => n == null)) return null;
         const [actual, expectedMore, projectedTotal, standardDeduction] = nums.map((n) => Math.round(n * 100) / 100);
-        return { id: `${taxYear}:${month}`, taxYear, month, takenOn: ISO_DAY.test(str(r.takenOn, 10)) ? str(r.takenOn, 10) : `${month}-01`, actual, expectedMore, projectedTotal, standardDeduction, itemize: !!r.itemize };
+        const out = { id: `${taxYear}:${month}`, taxYear, month, takenOn: ISO_DAY.test(str(r.takenOn, 10)) ? str(r.takenOn, 10) : `${month}-01`, actual, expectedMore, projectedTotal, standardDeduction, itemize: !!r.itemize };
+        // the settings the forecast was made under, when the snapshot carries them: a finished year has to be graded the
+        // way it was projected, not the way the settings read today. Snapshots taken before this are still good rows.
+        if (FILING_STATUSES.includes(r.filingStatus)) out.filingStatus = r.filingStatus;
+        const agi = r.agi === '' || r.agi == null ? null : finite(r.agi); // an empty AGI is not an AGI of zero
+        if (agi != null) out.agi = agi;
+        for (const flag of ['age65', 'blind', 'spouseAge65', 'spouseBlind']) if (flag in r) out[flag] = !!r[flag];
+        return out;
       }
       case 'overrides': {
-        const taxYear = yearOf(r.taxYear), path = str(r.path, 80), value = finite(r.value);
+        // A yes/no parameter has to stay a boolean: stored as 0 it would read as "not false" and the
+        // engine would go on offering a treatment the user turned off.
+        const taxYear = yearOf(r.taxYear), path = str(r.path, 80);
+        const value = typeof r.value === 'boolean' ? r.value : finite(r.value);
         if (taxYear == null || !PARAM_PATH.test(path) || value == null) return null;
         return { id: `${taxYear}:${path}`, taxYear, path, value, updatedAt: str(r.updatedAt, 40) || nowISO() };
       }
-      case 'places': return r && typeof r.id === 'string' && r.id && typeof r.name === 'string' ? r : null;
-      case 'trips': return r && typeof r.id === 'string' && r.id && typeof r.date === 'string' && ISO_DAY.test(r.date) ? r : null;
+      case 'places': return sanitizePlace(r);
+      case 'trips': return sanitizeTrip(r, schema);
       case 'settings': return r && typeof r.key === 'string' ? { key: r.key, value: sanitizeSettings(r.value) } : null;
       default: return r && r[STORES[store].key] != null ? r : null;
     }
   }
+  /** Every row of `list` that `store` can trust, in order; the rest are dropped. */
+  const cleanRows = (store, list, schema) => (Array.isArray(list) ? list : []).map((r) => sanitizeRow(store, r, schema)).filter(Boolean);
 
   // ---- overrides: the tax engine reads them nested by year, the store keeps one row per parameter ----
   function setPath(obj, path, value) {
@@ -238,16 +269,28 @@
         }
         if (ev.oldVersion > 0 && ev.oldVersion < 3) migrateSettingsDocument(t);
       };
+      let settled = false, blockedTimer = null;
       req.onsuccess = () => {
         const db = req.result;
+        if (blockedTimer) clearTimeout(blockedTimer);
+        // the open finished after we gave up waiting: close it, or it would itself block the next one
+        if (settled) { try { db.close(); } catch (e) { /* already closed */ } return; }
+        settled = true;
+        mode = 'idb';
         notice = null;
         // another tab wants to upgrade, or the browser closed the connection: let go and reopen on the next call
         db.onversionchange = () => { db.close(); dbPromise = null; notice = 'Storage was updated in another tab; reload to continue.'; };
         db.onclose = () => { dbPromise = null; };
         migrateFallback(db).then(() => resolve(db), () => resolve(db));
       };
-      req.onerror = () => { dbPromise = null; reject(req.error || new Error('The browser refused to open local storage.')); };
-      req.onblocked = () => { notice = 'Close other Itemizer tabs to finish updating storage.'; /* onsuccess still fires once they close */ };
+      req.onerror = () => { if (blockedTimer) clearTimeout(blockedTimer); if (settled) return; settled = true; mode = 'unavailable'; dbPromise = null; reject(req.error || new Error('The browser refused to open local storage.')); };
+      // an older tab holds the database open. It usually lets go in a moment, but a frozen tab never does, so give up
+      // rather than leave the app waiting on a promise that would never settle; the next call tries again.
+      req.onblocked = () => {
+        notice = BLOCKED_NOTICE;
+        if (blockedTimer) return;
+        blockedTimer = setTimeout(() => { if (settled) return; settled = true; mode = 'unavailable'; dbPromise = null; reject(new Error(BLOCKED_NOTICE)); }, blockedTimeoutMs);
+      };
     });
     return dbPromise;
   }
@@ -260,9 +303,12 @@
         if (!retried && e && e.name === 'InvalidStateError') { dbPromise = null; openDB().then((db2) => tx(db2, store, modeName, fn, true)).then(resolve, reject); return; }
         reject(e); return;
       }
-      const os = t.objectStore(store);
+      // one name gives the object store, a list gives them by name: writes that belong together share a transaction
+      const os = Array.isArray(store) ? Object.fromEntries(store.map((n) => [n, t.objectStore(n)])) : t.objectStore(store);
       let result;
-      try { result = fn(os); } catch (e) { reject(e); return; }
+      // a request that throws leaves the ones already queued in the transaction; abort so the caller's "nothing was
+      // changed" is true, whichever row of a batch was the bad one
+      try { result = fn(os); } catch (e) { try { t.abort(); } catch (e2) { /* already inactive */ } reject(e); return; }
       t.oncomplete = () => resolve(result && 'result' in result ? result.result : result);
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error || new Error('transaction aborted'));
@@ -276,15 +322,17 @@
     return memoryArea;
   }
   const LS = {
-    read(store) { try { const o = JSON.parse(storageArea().getItem(LS_PREFIX + store) || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } },
-    write(store, obj) { try { storageArea().setItem(LS_PREFIX + store, JSON.stringify(obj)); } catch (e) { throw new Error('Storage is full or unavailable; nothing was saved. Download a backup and free some space.'); } },
+    // rows are keyed by ids that came out of a backup, so the container has no prototype: a row keyed '__proto__' is
+    // then an ordinary property instead of a write that disappears
+    read(store) { try { const o = JSON.parse(storageArea().getItem(LS_PREFIX + store) || '{}'); return Object.assign(Object.create(null), o && typeof o === 'object' && !Array.isArray(o) ? o : null); } catch (e) { return Object.create(null); } },
+    write(store, obj) { try { storageArea().setItem(LS_PREFIX + store, JSON.stringify(obj)); } catch (e) { throw new Error('Storage is full or unavailable; that change was not saved. Download a backup and free some space.'); } },
     all(store) { return Object.values(this.read(store)); },
     get(store, key) { const o = this.read(store); return o[key] === undefined ? null : o[key]; },
     put(store, row) { const o = this.read(store); o[row[STORES[store].key]] = row; this.write(store, o); },
     putMany(store, rows) { const o = this.read(store); for (const r of rows) o[r[STORES[store].key]] = r; this.write(store, o); },
     del(store, key) { const o = this.read(store); if (key in o) { delete o[key]; this.write(store, o); } },
     delMany(store, keys) { const o = this.read(store); let hit = false; for (const k of keys) if (k in o) { delete o[k]; hit = true; } if (hit) this.write(store, o); },
-    clear(store) { try { storageArea().removeItem(LS_PREFIX + store); } catch (e) { /* nothing to clear */ } },
+    clear(store) { try { storageArea().removeItem(LS_PREFIX + store); } catch (e) { throw new Error('Storage is unavailable; that store could not be cleared.'); } },
     count(store) { return Object.keys(this.read(store)).length; },
   };
   /** The fallback's pre-v3 single document becomes one key per store. */
@@ -294,7 +342,8 @@
     try { legacy = JSON.parse(area.getItem(LS_LEGACY_KEY) || 'null'); } catch (e) { legacy = null; }
     if (!legacy || typeof legacy !== 'object') return;
     try {
-      for (const s of ['entries', 'places', 'trips']) LS.putMany(s, (Array.isArray(legacy[s]) ? legacy[s] : []).filter((r) => r && typeof r.id === 'string' && LS.get(s, r.id) == null));
+      LS.putMany('entries', (Array.isArray(legacy.entries) ? legacy.entries : []).filter((r) => r && typeof r.id === 'string' && LS.get('entries', r.id) == null));
+      for (const s of ['places', 'trips']) LS.putMany(s, cleanRows(s, legacy[s]).filter((r) => LS.get(s, r.id) == null));
       if (legacy.settings) {
         const split = splitLegacySettings(legacy.settings, root.ItemizerSchema || null);
         if (!LS.get('settings', SETTINGS_KEY)) LS.put('settings', { key: SETTINGS_KEY, value: split.settings });
@@ -312,7 +361,8 @@
     let legacy = null;
     try { legacy = JSON.parse(area.getItem(LS_LEGACY_KEY) || 'null'); } catch (e) { legacy = null; }
     if (legacy && typeof legacy === 'object') {
-      for (const s of ['entries', 'places', 'trips']) add(s, (Array.isArray(legacy[s]) ? legacy[s] : []).filter((r) => r && typeof r.id === 'string'));
+      add('entries', (Array.isArray(legacy.entries) ? legacy.entries : []).filter((r) => r && typeof r.id === 'string'));
+      for (const s of ['places', 'trips']) add(s, cleanRows(s, legacy[s]));
       if (legacy.settings) { const split = splitLegacySettings(legacy.settings, root.ItemizerSchema || null); add('settings', [{ key: SETTINGS_KEY, value: split.settings }]); for (const s of ROW_STORES) add(s, split[s]); }
     }
     for (const s of STORE_NAMES) add(s, LS.all(s));
@@ -356,17 +406,29 @@
   }
   async function deleteRow(store, key) {
     const db = await openDB();
-    if (!db) { LS.del(store, key); return; }
+    if (!db) { if (store === 'receipts') memoryReceipts.delete(key); LS.del(store, key); return; }
     await tx(db, store, 'readwrite', (os) => os.delete(key));
+  }
+  async function deleteRows(store, keys) {
+    if (!keys.length) return;
+    const db = await openDB();
+    if (!db) { if (store === 'receipts') keys.forEach((k) => memoryReceipts.delete(k)); LS.delMany(store, keys); return; }
+    await tx(db, store, 'readwrite', (os) => { keys.forEach((k) => os.delete(k)); });
+  }
+  /** Just the keys of a store: a restore compares them without loading the rows (receipts are photos). */
+  async function allKeys(store) {
+    const db = await openDB();
+    if (!db) return store === 'receipts' && receiptsInMemory() ? Array.from(memoryReceipts.keys()) : Object.keys(LS.read(store));
+    return (await tx(db, store, 'readonly', (os) => os.getAllKeys())) || [];
   }
   async function clearStore(store) {
     const db = await openDB();
-    if (!db) { LS.clear(store); return; }
+    if (!db) { if (store === 'receipts') memoryReceipts.clear(); LS.clear(store); return; }
     await tx(db, store, 'readwrite', (os) => os.clear());
   }
   async function countRows(store) {
     const db = await openDB();
-    if (!db) return LS.count(store);
+    if (!db) return store === 'receipts' && receiptsInMemory() ? memoryReceipts.size : LS.count(store);
     return (await tx(db, store, 'readonly', (os) => os.count())) || 0;
   }
   const withoutStamp = (r) => { const c = Object.assign({}, r); delete c.updatedAt; return JSON.stringify(c, Object.keys(c).sort()); };
@@ -395,22 +457,69 @@
   const getEntries = () => allRows('entries');
   const putEntry = (entry) => putRow('entries', entry);
   const putEntries = (entries) => putRows('entries', entries);
-  async function deleteEntry(id) {
-    const entry = await getRow('entries', id);
-    await deleteRow('entries', id);
-    if (entry && entry.receiptId) await deleteReceipt(entry.receiptId);
+  /**
+   * Delete entries with what belongs to them: each receipt photo, and any trip logged for the entry, so the mileage log
+   * never lists a drive the ledger no longer has. Returns the trips that went, so a caller can offer to undo them too.
+   */
+  async function deleteEntries(ids) {
+    const wanted = new Set(ids);
+    for (const id of ids) {
+      const entry = await getRow('entries', id);
+      await deleteRow('entries', id);
+      if (entry && entry.receiptId) await deleteReceipt(entry.receiptId);
+    }
+    const trips = (await allRows('trips')).filter((t) => t && wanted.has(t.entryId));
+    await deleteRows('trips', trips.map((t) => t.id));
+    return trips;
   }
-  async function deleteEntries(ids) { for (const id of ids) await deleteEntry(id); }
+  const deleteEntry = (id) => deleteEntries([id]);
 
+  // With no IndexedDB and no localStorage (tests) receipts are held in memory for the session; localStorage itself must
+  // not carry photos, so there the app still says so and keeps the ledger without them.
+  const memoryReceipts = new Map();
+  const receiptsInMemory = () => mode === 'memory';
   async function putReceipt(receipt) {
     const db = await openDB();
-    if (!db) throw new Error('Receipt photos need IndexedDB, which this browser does not provide.');
+    if (!db) {
+      if (!receiptsInMemory()) throw new Error('Receipt photos need IndexedDB, which this browser does not provide.');
+      memoryReceipts.set(receipt.id, receipt);
+      return receipt;
+    }
     await tx(db, 'receipts', 'readwrite', (os) => os.put(receipt));
     return receipt;
   }
-  async function getReceipt(id) { if (!id) return null; const db = await openDB(); if (!db) return null; return (await tx(db, 'receipts', 'readonly', (os) => os.get(id))) || null; }
-  async function deleteReceipt(id) { if (!id) return; const db = await openDB(); if (!db) return; await tx(db, 'receipts', 'readwrite', (os) => os.delete(id)); }
-  async function getAllReceipts() { const db = await openDB(); if (!db) return []; return (await tx(db, 'receipts', 'readonly', (os) => os.getAll())) || []; }
+  async function getReceipt(id) { if (!id) return null; const db = await openDB(); if (!db) return (receiptsInMemory() && memoryReceipts.get(id)) || null; return (await tx(db, 'receipts', 'readonly', (os) => os.get(id))) || null; }
+  async function deleteReceipt(id) { if (!id) return; const db = await openDB(); if (!db) { memoryReceipts.delete(id); return; } await tx(db, 'receipts', 'readwrite', (os) => os.delete(id)); }
+  async function getAllReceipts() { const db = await openDB(); if (!db) return receiptsInMemory() ? Array.from(memoryReceipts.values()) : []; return (await tx(db, 'receipts', 'readonly', (os) => os.getAll())) || []; }
+
+  /**
+   * Entries and the receipt photo one of them names, written together. With IndexedDB both go in one transaction, so a
+   * failure leaves neither and no compensating delete is needed. The fallback has no transactions, so it writes the
+   * photo first and takes it back by hand if the entries do not land.
+   */
+  async function putEntriesWithReceipt(entries, receipt) {
+    const rows = Array.isArray(entries) ? entries : [entries];
+    if (!receipt) return putEntries(rows);
+    const db = await openDB();
+    if (!db) {
+      await putReceipt(receipt);
+      try { await putEntries(rows); } catch (e) { await deleteReceipt(receipt.id).catch(() => {}); throw e; }
+      return rows;
+    }
+    await tx(db, ['entries', 'receipts'], 'readwrite', (os) => { rows.forEach((r) => os.entries.put(r)); os.receipts.put(receipt); });
+    return rows;
+  }
+  /** An entry and the trip logged for it, written together: the mileage log must never name an entry that is not there. */
+  async function putTripWithEntry(entry, trip) {
+    const db = await openDB();
+    if (!db) {
+      await putEntry(entry);
+      try { await putTrip(trip); } catch (e) { await deleteRow('entries', entry.id).catch(() => {}); throw e; }
+      return { entry, trip };
+    }
+    await tx(db, ['entries', 'trips'], 'readwrite', (os) => { os.entries.put(entry); os.trips.put(trip); });
+    return { entry, trip };
+  }
 
   const getPlaces = () => allRows('places');
   const putPlace = (place) => putRow('places', place);
@@ -430,10 +539,21 @@
     await putRow('settings', { key: SETTINGS_KEY, value });
     return value;
   }
+  /**
+   * Change only the keys in `patch`, on top of what is stored right now. A tab that has been open for an hour holds a
+   * stale copy of every other key, so writing the whole row from it would undo what another tab saved. Returns the
+   * settings as they now stand.
+   */
+  async function updateSettings(patch) {
+    const value = sanitizeSettings(Object.assign({}, await getSettings(), patch));
+    await putRow('settings', { key: SETTINGS_KEY, value });
+    return value;
+  }
 
   // ---- the six stores the app reads as maps and lists ----------------------------------
 
-  const mapOf = (rows, k, v) => { const o = {}; for (const r of rows) o[r[k]] = v ? r[v] : r; return o; };
+  // defineProperty, not assignment: a key like '__proto__' has to become an ordinary entry of the map, not a write that vanishes
+  const mapOf = (rows, k, v) => { const o = {}; for (const r of rows) Object.defineProperty(o, r[k], { value: v ? r[v] : r, writable: true, enumerable: true, configurable: true }); return o; };
 
   /** { payeeKey: lineId } */
   const getLearned = async () => mapOf(await allRows('learned'), 'key', 'lineId');
@@ -443,7 +563,13 @@
 
   /** { keyword: weight } */
   const getWeights = async () => mapOf(await allRows('weights'), 'keyword', 'weight');
-  const syncWeights = (map) => syncRows('weights', Object.entries(map || {}).map(([keyword, weight]) => sanitizeRow('weights', { keyword, weight })).filter(Boolean));
+  /** `known` is the map the caller started from: only keywords it knew about may be deleted, so one open tab does not drop what another just learned. */
+  const syncWeights = (map, known) => {
+    const rows = Object.entries(map || {}).map(([keyword, weight]) => sanitizeRow('weights', { keyword, weight })).filter(Boolean);
+    if (!known) return syncRows('weights', rows);
+    const keys = new Set(Object.keys(known));
+    return syncRows('weights', rows, (r) => keys.has(r.keyword));
+  };
   const clearWeights = () => clearStore('weights');
 
   /** { recommendationId: 'YYYY-MM-DD' } */
@@ -458,7 +584,13 @@
 
   /** snapshots, oldest month first */
   const getSnapshots = async () => (await allRows('snapshots')).sort((a, b) => a.month.localeCompare(b.month) || a.taxYear - b.taxYear);
-  const syncSnapshots = (list) => syncRows('snapshots', (list || []).map((s) => sanitizeRow('snapshots', s)).filter(Boolean));
+  /** `known` is the list the caller started from: only months it knew about may be deleted (see syncWeights). */
+  const syncSnapshots = (list, known) => {
+    const rows = cleanRows('snapshots', list);
+    if (!known) return syncRows('snapshots', rows);
+    const ids = new Set(cleanRows('snapshots', known).map((r) => r.id));
+    return syncRows('snapshots', rows, (r) => ids.has(r.id));
+  };
   const clearSnapshots = () => clearStore('snapshots');
 
   /** { taxYear: nested overrides } as rules.getParams reads them */
@@ -469,8 +601,12 @@
 
   // ---- backup / restore -------------------------------------------------------
 
-  function blobToDataURL(blob) {
-    return new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(r.error); r.readAsDataURL(blob); });
+  /** A stored photo as a data URL. Done from the bytes rather than with FileReader, so it works wherever the app and its tests run. */
+  async function blobToDataURL(blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return `data:${blob.type || 'image/jpeg'};base64,${btoa(bin)}`;
   }
   const IMAGE_DATA_URL = /^data:(image\/(?:jpeg|jpg|png|webp|gif|heic|heif));base64,([A-Za-z0-9+/=\s]+)$/i;
   const MAX_RECEIPT_BYTES = 25 * 1024 * 1024;
@@ -486,13 +622,22 @@
     return new Blob([bytes], { type: m[1].toLowerCase().replace('jpg', 'jpeg') });
   }
 
+  /** Ids of receipts that name an entry the ledger no longer has: nothing will ever show them, so a backup leaves them behind. */
+  function orphanReceiptIds(receipts, entries) {
+    const ids = new Set((entries || []).map((e) => e && e.id));
+    return (receipts || []).filter((r) => r && r.entryId && !ids.has(r.entryId)).map((r) => r.id);
+  }
+
   /** The backup without receipts: the settings row, then every other store as an array of rows. Receipts are appended by exportBackup. */
   async function exportJSON(opts) {
     opts = opts || {};
     const [settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips] = await Promise.all([getSettings(), ...ROW_STORES.map(allRows), getEntries(), getPlaces(), getTrips()]);
     const out = { app: 'itemizer', version: 3, exportedAt: nowISO(), settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips, receipts: [] };
     if (opts.includeReceipts !== false) {
-      for (const r of await getAllReceipts()) {
+      const all = await getAllReceipts();
+      const orphans = new Set(orphanReceiptIds(all, entries));
+      for (const r of all) {
+        if (orphans.has(r.id)) continue;
         try { out.receipts.push({ id: r.id, entryId: r.entryId, type: r.type, createdAt: r.createdAt, dataURL: await blobToDataURL(r.blob) }); } catch (e) { /* skip unreadable */ }
       }
     }
@@ -509,7 +654,10 @@
     const parts = [json.slice(0, json.lastIndexOf('"receipts":[]') + '"receipts":['.length)];
     let count = 0, failed = 0;
     if (opts.includeReceipts !== false) {
-      for (const r of await getAllReceipts()) {
+      const all = await getAllReceipts();
+      const orphans = new Set(orphanReceiptIds(all, head.entries));
+      for (const r of all) {
+        if (orphans.has(r.id)) continue;
         try {
           const dataURL = await blobToDataURL(r.blob);
           parts.push((count ? ',' : '') + JSON.stringify({ id: r.id, entryId: r.entryId, type: r.type, createdAt: r.createdAt }).slice(0, -1) + ',"dataURL":"', dataURL, '"}');
@@ -523,62 +671,166 @@
 
   /** An entry from a backup, or null when it cannot be trusted. `schema` (ItemizerSchema) validates the line id when given. */
   function sanitizeEntry(e, schema) {
-    if (!e || typeof e !== 'object' || typeof e.id !== 'string' || !e.id || typeof e.lineId !== 'string' || typeof e.date !== 'string' || !ISO_DAY.test(e.date)) return null;
+    if (!e || typeof e !== 'object' || !okId(e.id) || typeof e.lineId !== 'string' || typeof e.date !== 'string' || !ISO_DAY.test(e.date)) return null;
     if (schema && schema.getLine && !schema.getLine(e.lineId)) return null;
     const amount = Number(e.amount);
     if (!Number.isFinite(amount) || amount < 0) return null;
     const out = {
-      id: e.id.slice(0, 64), date: e.date, taxYear: Number(e.taxYear) || Number(e.date.slice(0, 4)), lineId: e.lineId, amount: Math.round(amount * 100) / 100,
+      id: e.id, date: e.date, taxYear: Number(e.taxYear) || Number(e.date.slice(0, 4)), lineId: e.lineId, amount: Math.round(amount * 100) / 100,
       description: str(e.description, 300), note: str(e.note, 4000), hasReceipt: !!e.hasReceipt, receiptId: typeof e.receiptId === 'string' ? e.receiptId.slice(0, 64) : null,
       createdAt: str(e.createdAt, 40) || nowISO(), updatedAt: str(e.updatedAt, 40) || nowISO(), sample: !!e.sample,
     };
     if (typeof e.source === 'string') out.source = e.source.slice(0, 40);
     if (Array.isArray(e.items)) out.items = e.items.filter((x) => x && typeof x === 'object').slice(0, 200);
-    if (typeof e.tripId === 'string') out.tripId = e.tripId.slice(0, 64);
     if (e.fullAmount != null && Number.isFinite(Number(e.fullAmount))) out.fullAmount = Number(e.fullAmount);
     if (e.share != null && Number.isFinite(Number(e.share))) out.share = Number(e.share);
     return out;
   }
 
+  /** A place from a backup, or null when it cannot be trusted: only the fields the app writes survive. */
+  function sanitizePlace(p) {
+    if (!p || typeof p !== 'object' || !okId(p.id)) return null;
+    const name = str(p.name, 120).trim();
+    if (!name) return null;
+    const lat = finite(p.lat), lon = finite(p.lon);
+    // a place is only useful with both coordinates, and half a pair would measure trips as NaN
+    const located = lat != null && lon != null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+    return {
+      id: p.id, name, category: PLACE_CATEGORIES.includes(p.category) ? p.category : 'other', address: str(p.address, 300),
+      lat: located ? lat : null, lon: located ? lon : null, note: str(p.note, 1000), sample: !!p.sample, updatedAt: str(p.updatedAt, 40) || nowISO(),
+    };
+  }
+
+  /** A recorded track from a backup: points with real coordinates, the pause markers kept, and a limit on how many. */
+  function sanitizePoints(points) {
+    if (!Array.isArray(points)) return null;
+    const out = [];
+    for (const p of points.slice(0, MAX_POINTS)) {
+      if (!p || typeof p !== 'object') continue;
+      if (p.gap) { out.push({ gap: true }); continue; }
+      const lat = finite(p.lat), lon = finite(p.lon);
+      if (lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+      const point = { lat, lon };
+      const t = finite(p.t); if (t != null) point.t = t;
+      const acc = finite(p.acc); if (acc != null) point.acc = acc;
+      out.push(point);
+    }
+    return out.length ? out : null;
+  }
+
+  /**
+   * A trip from a backup, or null when it cannot be trusted. The mileage log is a tax record, so a trip needs a date and
+   * a number of miles; `schema` (ItemizerSchema) checks the worksheet line when given. Trips from before the app kept a
+   * line have none, which is why a missing line is allowed and only a wrong one is rejected.
+   */
+  function sanitizeTrip(t, schema) {
+    if (!t || typeof t !== 'object' || !okId(t.id) || typeof t.date !== 'string' || !ISO_DAY.test(t.date)) return null;
+    const miles = finite(t.miles);
+    if (miles == null || miles < 0) return null;
+    const lineId = typeof t.lineId === 'string' && t.lineId.length <= 40 ? t.lineId : '';
+    if (lineId && schema && schema.getLine && !(schema.getLine(lineId) && (!schema.isMiles || schema.isMiles(lineId)))) return null;
+    const ref = (v) => (okId(v) ? v : null);
+    const time = (v) => (finite(v) != null ? Number(v) : str(v, 40) || null); // a recorded trip keeps milliseconds, an older one an ISO string
+    return {
+      id: t.id, date: t.date, taxYear: yearOf(t.taxYear) != null ? yearOf(t.taxYear) : Number(t.date.slice(0, 4)),
+      fromId: ref(t.fromId), toId: ref(t.toId), fromLabel: str(t.fromLabel, 120), toLabel: str(t.toLabel, 120),
+      // miles keep the grain the ledger entry for the same drive keeps: rounding to a tenth here would quietly change a tax record on the way in
+      purpose: str(t.purpose, 300), miles: Math.round(miles * 100) / 100, roundTrip: !!t.roundTrip,
+      method: TRIP_METHODS.includes(t.method) ? t.method : 'manual', lineId: lineId || null, entryId: ref(t.entryId), sample: !!t.sample,
+      points: sanitizePoints(t.points), startedAt: time(t.startedAt), endedAt: time(t.endedAt), createdAt: str(t.createdAt, 40) || nowISO(),
+    };
+  }
+
+  /** True when a write failed because there is no room, rather than because the row was bad. */
+  const isStorageFull = (e) => !!e && (e.name === 'QuotaExceededError' || /Storage is full/.test(e.message || ''));
+
   /**
    * Merge a backup in. Existing rows with the same key are replaced; version-2 backups (collections inside `settings`)
-   * are split into rows on the way in. Returns counts, including rows that were rejected.
+   * are split into rows on the way in. Every row is checked before the first one is written, and a restore that replaces
+   * the ledger takes the old rows away only once the new ones are in, so a file that cannot be read and a disk that runs
+   * out of room both leave the device with something. Returns counts, including rows that were rejected.
    */
   async function importJSON(data, opts) {
     opts = opts || {};
     if (!data || typeof data !== 'object' || Array.isArray(data) || data.app !== 'itemizer' || !Array.isArray(data.entries)) throw new Error('That file is not an Itemizer backup.');
     const schema = schemaOf(opts);
-    if (opts.replace) await clearAll({ keepSettings: true });
     const entries = data.entries.map((e) => sanitizeEntry(e, schema)).filter(Boolean);
     const skipped = data.entries.length - entries.length;
-    await putEntries(entries);
-    let receipts = 0, badReceipts = 0;
-    for (const r of data.receipts || []) {
-      if (!r || typeof r.id !== 'string' || !r.dataURL) { badReceipts++; continue; }
-      try { await putReceipt({ id: r.id.slice(0, 64), entryId: typeof r.entryId === 'string' ? r.entryId : null, type: /^image\//.test(r.type) ? r.type : 'image/jpeg', createdAt: typeof r.createdAt === 'string' ? r.createdAt : nowISO(), blob: await dataURLToBlob(r.dataURL) }); receipts++; } catch (e) { badReceipts++; }
-    }
-    await putRows('places', (Array.isArray(data.places) ? data.places : []).map((p) => sanitizeRow('places', p)).filter(Boolean));
-    await putRows('trips', (Array.isArray(data.trips) ? data.trips : []).map((t) => sanitizeRow('trips', t)).filter(Boolean));
+    const places = cleanRows('places', data.places, schema);
+    const trips = cleanRows('trips', data.trips, schema);
     // the six memory stores: rows in a version-3 file, or split out of the settings document of an older one
     const rows = {};
     const legacy = isLegacySettings(data.settings) ? splitLegacySettings(data.settings, schema) : null;
     for (const store of ROW_STORES) {
-      const incoming = Array.isArray(data[store]) ? data[store].map((r) => sanitizeRow(store, r, schema)).filter(Boolean) : [];
+      const incoming = cleanRows(store, data[store], schema);
       rows[store] = legacy ? legacy[store].concat(incoming) : incoming;
-      await putRows(store, rows[store]);
     }
-    if (data.settings && typeof data.settings === 'object' && opts.settings !== false) {
-      const cur = await getSettings();
-      await saveSettings(Object.assign({}, cur, sanitizeSettings(data.settings)));
+    // a replace takes the old ledger away only once the new one is written, so a storage failure part-way leaves what
+    // was here rather than nothing
+    const replaced = opts.replace ? await Promise.all(DATA_STORES.map(allKeys)) : null;
+    // photos first: an entry may only keep its receipt mark once the photo it names is really here. One at a time, so a
+    // year of them is never all in memory at once.
+    const known = new Set(entries.map((e) => e.id));
+    if (!replaced) for (const k of await allKeys('entries')) known.add(k);
+    let receipts = 0, badReceipts = 0, orphanReceipts = 0;
+    const stored = new Set();
+    // what has actually been committed, so a restore that fails part-way can say what landed instead of leaving the user guessing
+    const written = { entries: 0, receipts: 0, places: 0, trips: 0, rows: {} };
+    try {
+      for (const r of data.receipts || []) {
+        if (!r || typeof r.id !== 'string' || !r.dataURL) { badReceipts++; continue; }
+        const id = r.id.slice(0, 64), entryId = typeof r.entryId === 'string' ? r.entryId : null;
+        if (entryId && !known.has(entryId)) { orphanReceipts++; continue; }
+        try {
+          await putReceipt({ id, entryId, type: /^image\//.test(r.type) ? r.type : 'image/jpeg', createdAt: typeof r.createdAt === 'string' ? r.createdAt : nowISO(), blob: await dataURLToBlob(r.dataURL) });
+          receipts++; written.receipts++; stored.add(id);
+        } catch (e) { if (isStorageFull(e)) throw e; badReceipts++; }
+      }
+      if (!replaced) for (const k of await allKeys('receipts')) stored.add(k);
+      let dangling = 0;
+      // hasReceipt is left alone: it can mean a paper receipt. Only the claim to a photo has to be true.
+      for (const e of entries) if (e.receiptId && !stored.has(e.receiptId)) { e.receiptId = null; dangling++; }
+      await putEntries(entries); written.entries = entries.length;
+      await putRows('places', places); written.places = places.length;
+      await putRows('trips', trips); written.trips = trips.length;
+      for (const store of ROW_STORES) { await putRows(store, rows[store]); written.rows[store] = rows[store].length; }
+      if (replaced) {
+        const fresh = { entries: entries.map((e) => e.id), receipts: Array.from(stored), places: places.map((p) => p.id), trips: trips.map((t) => t.id) };
+        for (let i = 0; i < DATA_STORES.length; i++) {
+          const store = DATA_STORES[i], kept = new Set(fresh[store]);
+          await deleteRows(store, replaced[i].filter((k) => !kept.has(k)));
+        }
+      }
+      if (data.settings && typeof data.settings === 'object' && opts.settings !== false) {
+        // only the settings the file actually carries: an older backup has fewer keys, and the rest must survive it
+        const incoming = {};
+        for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in data.settings) incoming[k] = data.settings[k];
+        if (data.settings.experiments && typeof data.settings.experiments === 'object') {
+          for (const [old, flat] of Object.entries(LEGACY_EXPERIMENT_FLAGS)) if (!(flat in incoming) && old in data.settings.experiments) incoming[flat] = data.settings.experiments[old] !== false;
+        }
+        await updateSettings(incoming);
+      }
+      const counts = {}; for (const store of ROW_STORES) counts[store] = rows[store].length;
+      return { entries: entries.length, skipped, receipts, badReceipts, dangling, orphanReceipts, rows: counts };
+    } catch (err) {
+      // the rows already written stay: the caller re-reads the store and shows whatever landed, and `written` says what that was
+      const n = written.entries;
+      const detail = String((err && err.message) || 'storage error').replace(/\.$/, ''); // it is quoted mid-sentence, so it does not keep its full stop
+      const e = new Error(`Only part of the backup could be saved: ${n} ${n === 1 ? 'entry was' : 'entries were'} written before storage failed (${detail}). Nothing after that was saved.`);
+      e.written = written;
+      throw e;
     }
-    const counts = {}; for (const store of ROW_STORES) counts[store] = rows[store].length;
-    return { entries: entries.length, skipped, receipts, badReceipts, rows: counts };
   }
 
   /** Remove everything; with keepSettings, only the ledger (entries, receipts, places, trips) goes and what the app has learned stays. */
   async function clearAll(opts) {
     opts = opts || {};
-    for (const store of opts.keepSettings ? DATA_STORES : STORE_NAMES) await clearStore(store);
+    // one store at a time: a store that will not clear must not stop the others, and the user has to be told what is left
+    const failed = [];
+    for (const store of opts.keepSettings ? DATA_STORES : STORE_NAMES) {
+      try { await clearStore(store); } catch (e) { failed.push(store); }
+    }
+    if (failed.length) throw new Error(`These were not cleared: ${failed.join(', ')}.`);
   }
 
   function csvEscape(v) {
@@ -602,7 +854,7 @@
     for (const e of sorted) {
       const line = Schema.getLine(e.lineId);
       rows.push([e.date, e.taxYear || String(e.date).slice(0, 4), line ? line.sectionTitle : '', line ? line.label : e.lineId, Number(e.amount) || 0, line ? line.unit : ''].map(csvEscape)
-        .concat([csvText(e.description), csvText(e.note)], [e.hasReceipt ? 'yes' : 'no', e.receiptId ? 'yes' : 'no', e.id].map(csvEscape)).join(','));
+        .concat([csvText(e.description), csvText(e.note), e.hasReceipt ? 'yes' : 'no', e.receiptId ? 'yes' : 'no', csvText(e.id)]).join(','));
     }
     return rows.join('\r\n');
   }
@@ -634,13 +886,14 @@
 
   root.ItemizerStore = {
     DB_VERSION, STORES, STORE_NAMES, DATA_STORES, ROW_STORES, DEFAULT_SETTINGS,
-    sanitizeSettings, sanitizeRow, sanitizeEntry, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides,
+    sanitizeSettings, sanitizeRow, sanitizeEntry, sanitizePlace, sanitizeTrip, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides, orphanReceiptIds,
     openDB, allRows, getRow, putRow, putRows, deleteRow, clearStore, syncRows, countRows, counts,
-    getEntries, putEntry, putEntries, deleteEntry, deleteEntries, putReceipt, getReceipt, deleteReceipt, getAllReceipts,
-    getPlaces, putPlace, deletePlace, getTrips, putTrip, deleteTrip, getSettings, saveSettings,
+    getEntries, putEntry, putEntries, deleteEntry, deleteEntries, putReceipt, getReceipt, deleteReceipt, getAllReceipts, putEntriesWithReceipt, putTripWithEntry,
+    getPlaces, putPlace, deletePlace, getTrips, putTrip, deleteTrip, getSettings, saveSettings, updateSettings,
     getLearned, putLearned, deleteLearned, clearLearned, getWeights, syncWeights, clearWeights, getDismissals, putDismissal, clearDismissals,
     getLayouts, putLayout, clearLayouts, getSnapshots, syncSnapshots, clearSnapshots, getOverrides, syncOverrides, clearOverrides,
     exportJSON, exportBackup, importJSON, clearAll, toCSV, csvEscape, csvText, dataURLToBlob, uid, storageInfo, requestPersistence,
     get mode() { return mode; }, get notice() { return notice; },
+    get blockedTimeoutMs() { return blockedTimeoutMs; }, set blockedTimeoutMs(ms) { blockedTimeoutMs = ms; }, // tests wait a moment, not seconds
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const os = require('node:os');
+const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 
 /** Load sw.js into a fake service-worker global with an in-memory Cache Storage and a scripted fetch. */
 function loadSW(fetchImpl) {
@@ -32,12 +35,16 @@ function loadSW(fetchImpl) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../sw.js'), 'utf8'), ctx);
   return { handlers, self, caches, store };
 }
+const repo = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+const SW_SOURCE = repo('sw.js');
+// The worker caches under its own stamp, so the tests have to seed the same cache the code will read.
+const CACHE = 'itemizer-' + SW_SOURCE.match(/const STAMP = '([^']*)'/)[1];
 const ok = (body, type) => new Response(body, { status: 200, headers: { 'Content-Type': type || 'text/plain' } });
 // Node cannot construct a Request in navigate mode, so events carry a plain request-like object.
 const fetchEvent = (url, init) => {
   const req = Object.assign({ url, method: 'GET', mode: 'cors', cache: 'default' }, init || {});
   let response = null; const waits = [];
-  return { req, event: { request: req, respondWith: (p) => { response = Promise.resolve(p); }, waitUntil: (p) => { waits.push(Promise.resolve(p).catch(() => {})); } }, response: () => response, settled: () => Promise.all(waits) };
+  return { req, event: { request: req, respondWith: (p) => { response = Promise.resolve(p); }, waitUntil: (p) => { waits.push(Promise.resolve(p).catch(() => {})); } }, response: () => response, settled: async () => { for (let i = 0; i < 5; i++) { const n = waits.length; await Promise.all(waits); if (waits.length === n) return; } } }; // a waitUntil can register another one
 };
 
 test('install precaches the shell bypassing the HTTP cache, and the cache name carries a version', async () => {
@@ -57,7 +64,7 @@ test('install precaches the shell bypassing the HTTP cache, and the cache name c
 
 test('offline navigation to any same-origin URL falls back to the cached shell; nothing ever resolves to undefined', async () => {
   const { handlers, caches } = loadSW(async () => { throw new TypeError('offline'); });
-  const c = await caches.open('itemizer-test');
+  const c = await caches.open(CACHE);
   await c.put(new Request('https://example.test/app/index.html'), ok('<html>shell</html>', 'text/html'));
   const nav = fetchEvent('https://example.test/app/?source=pwa', { mode: 'navigate' });
   handlers.fetch(nav.event);
@@ -74,7 +81,7 @@ test('offline navigation to any same-origin URL falls back to the cached shell; 
 test('same-origin assets are served from cache ignoring the query string, and refreshed under waitUntil', async () => {
   let calls = 0;
   const { handlers, caches } = loadSW(async () => { calls++; return ok('fresh'); });
-  const c = await caches.open('itemizer-test');
+  const c = await caches.open(CACHE);
   await c.put(new Request('https://example.test/app/js/app.js'), ok('stale'));
   const ev = fetchEvent('https://example.test/app/js/app.js?v=2');
   handlers.fetch(ev.event);
@@ -94,7 +101,7 @@ test('Google Fonts CSS and font files are cached and served cache-first', async 
   const cached = await caches.match(new Request('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono'));
   assert.ok(cached, 'the stylesheet was cached');
   const { handlers: offline, caches: c2 } = loadSW(async () => { throw new TypeError('offline'); });
-  await (await c2.open('itemizer-test')).put(new Request('https://fonts.gstatic.com/s/x.woff2'), ok('woff', 'font/woff2'));
+  await (await c2.open(CACHE)).put(new Request('https://fonts.gstatic.com/s/x.woff2'), ok('woff', 'font/woff2'));
   const ev = fetchEvent('https://fonts.gstatic.com/s/x.woff2');
   offline.fetch(ev.event);
   assert.equal(await (await ev.response()).text(), 'woff');
@@ -103,11 +110,181 @@ test('Google Fonts CSS and font files are cached and served cache-first', async 
 test('a SKIP_WAITING message activates the waiting worker, and activation drops old caches', async () => {
   const { handlers, self, caches } = loadSW(async () => ok('x'));
   await (await caches.open('itemizer-old')).put(new Request('https://example.test/app/index.html'), ok('old'));
+  // Cache Storage belongs to the origin, which on a github.io account is shared with every other project site.
+  await (await caches.open('someone-else-v1')).put(new Request('https://example.test/other/index.html'), ok('other shell'));
   handlers.message({ data: { type: 'SKIP_WAITING' } });
   assert.equal(self.skipped, true);
   const waits = [];
   await handlers.activate({ waitUntil: (p) => waits.push(p) });
   await Promise.all(waits);
-  assert.ok(!(await caches.keys()).includes('itemizer-old'));
+  assert.deepEqual(await caches.keys(), ['someone-else-v1'], 'only this app\'s old caches are dropped');
   assert.equal(self.claimed, true);
+});
+
+test('a navigation to another document on this origin is passed through and never becomes the offline shell', async () => {
+  const { handlers, caches } = loadSW(async () => ok('# Itemizer\n\nA deductible-expense tracker.', 'text/markdown'));
+  const c = await caches.open(CACHE);
+  await c.put(new Request('https://example.test/app/index.html'), ok('<html>shell</html>', 'text/html'));
+  const doc = fetchEvent('https://example.test/app/README.md', { mode: 'navigate' });
+  handlers.fetch(doc.event);
+  assert.match(await (await doc.response()).text(), /^# Itemizer/, 'the other document is served, not the app');
+  await doc.settled();
+  assert.equal(await (await caches.match(new Request('https://example.test/app/index.html'))).text(), '<html>shell</html>');
+});
+
+test('a navigation to the app refreshes the cached shell in the background, and only with a page', async () => {
+  const { handlers, caches } = loadSW(async () => ok('<html>fresh shell</html>', 'text/html'));
+  const c = await caches.open(CACHE);
+  await c.put(new Request('https://example.test/app/index.html'), ok('<html>shell</html>', 'text/html'));
+  const nav = fetchEvent('https://example.test/app/?source=pwa', { mode: 'navigate' });
+  handlers.fetch(nav.event);
+  assert.equal(await (await nav.response()).text(), '<html>shell</html>', 'the running version answers the launch');
+  await nav.settled();
+  assert.equal(await (await caches.match(new Request('https://example.test/app/index.html'))).text(), '<html>fresh shell</html>');
+});
+
+test('a navigation whose request never settles is answered from the cache instead of waiting', async () => {
+  const { handlers, caches } = loadSW(() => new Promise(() => {}));
+  const c = await caches.open(CACHE);
+  await c.put(new Request('https://example.test/app/index.html'), ok('<html>shell</html>', 'text/html'));
+  const nav = fetchEvent('https://example.test/app/', { mode: 'navigate' });
+  handlers.fetch(nav.event);
+  const stalled = Symbol('stalled');
+  const res = await Promise.race([nav.response(), new Promise((r) => setTimeout(() => r(stalled), 200))]);
+  assert.notEqual(res, stalled, 'the launch did not wait on the network');
+  assert.equal(await res.text(), '<html>shell</html>');
+});
+
+test('a first visit with nothing cached and no network still resolves with a Response', async () => {
+  const { handlers } = loadSW(async () => { throw new TypeError('offline'); });
+  const nav = fetchEvent('https://example.test/app/', { mode: 'navigate' });
+  handlers.fetch(nav.event);
+  const res = await nav.response();
+  assert.ok(res instanceof Response);
+  assert.equal(res.type, 'error');
+});
+
+test('the page and its scripts are served from this version, not from whichever cache is oldest', async () => {
+  const { handlers, caches } = loadSW(async () => ok('NEW app.js'));
+  const old = await caches.open('itemizer-OLDDEPLOY'); // created first, so a cross-cache lookup finds it first
+  await old.put(new Request('https://example.test/app/js/app.js'), ok('OLD app.js'));
+  await old.put(new Request('https://example.test/app/index.html'), ok('<html>OLD shell</html>', 'text/html'));
+  const waits = [];
+  await handlers.install({ waitUntil: (p) => waits.push(p) });
+  await Promise.all(waits);
+  const script = fetchEvent('https://example.test/app/js/app.js');
+  handlers.fetch(script.event);
+  assert.equal(await (await script.response()).text(), 'NEW app.js');
+});
+
+test('the precache list covers everything the page loads', async () => {
+  const shell = [...SW_SOURCE.match(/const SHELL = \[([\s\S]*?)\];/)[1].matchAll(/'\.\/([^']*)'/g)].map((m) => m[1]);
+  const html = repo('index.html');
+  for (const ref of [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1])) {
+    if (/^(https?:|data:|mailto:|#)/.test(ref)) continue;
+    assert.ok(shell.includes(ref), ref + ' is loaded by index.html but is not precached');
+  }
+  for (const f of fs.readdirSync(path.join(__dirname, '../js'))) {
+    assert.ok(shell.includes('js/' + f), 'js/' + f + ' is not precached');
+  }
+  for (const icon of JSON.parse(repo('manifest.webmanifest')).icons) {
+    assert.ok(shell.includes(icon.src), icon.src + ' is in the manifest but is not precached');
+  }
+  const scripts = [...repo('build.js').match(/const SCRIPTS = \[([\s\S]*?)\];/)[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  assert.deepEqual(scripts, shell.filter((p) => p.startsWith('js/')), 'the single-file build and the shell list the same scripts');
+});
+
+test('the cache name is the stamp build.js wrote, with no fallback branch left over', async () => {
+  const { handlers, caches } = loadSW(async () => ok('x'));
+  const waits = [];
+  await handlers.install({ waitUntil: (p) => waits.push(p) });
+  await Promise.all(waits);
+  assert.deepEqual(await caches.keys(), [CACHE]);
+  assert.doesNotMatch(SW_SOURCE, /startsWith\('__'\)/, 'the placeholder scheme is gone from the code as well as the comment');
+});
+
+test('the committed worker and single-file build are the ones build.js makes from these sources', () => {
+  // Only build.js writes the stamp, so a change to the app that skipped `npm run build` would ship a worker whose
+  // cache version never moved and returning browsers would keep the old shell. Building a copy proves both are current.
+  const build = repo('build.js');
+  const listed = (name) => [...build.match(new RegExp('const ' + name + ' = \\[([\\s\\S]*?)\\];'))[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  const sources = ['index.html', 'styles.css', 'manifest.webmanifest', 'sw.js', 'build.js', ...listed('SCRIPTS'), ...listed('ICONS')];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'itemizer-build-'));
+  try {
+    for (const p of sources) {
+      fs.mkdirSync(path.join(dir, path.dirname(p)), { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '..', p), path.join(dir, p));
+    }
+    execFileSync(process.execPath, [path.join(dir, 'build.js')], { stdio: 'ignore' });
+    const stampOf = (src) => src.match(/const STAMP = '([^']*)'/)[1];
+    // files are compared by hash so a failure reads as two short strings instead of a diff of the whole app
+    const digest = (text) => crypto.createHash('sha256').update(text).digest('hex').slice(0, 12);
+    assert.equal(stampOf(fs.readFileSync(path.join(dir, 'sw.js'), 'utf8')), stampOf(SW_SOURCE), 'the cache version is stale: run npm run build and commit sw.js');
+    for (const out of ['dist/itemizer.html', 'dist/itemizer.fragment.html']) {
+      assert.equal(digest(repo(out)), digest(fs.readFileSync(path.join(dir, out), 'utf8')), out + ' is stale: run npm run build and commit it');
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the manifest describes an installable app that is not locked to one orientation', () => {
+  const m = JSON.parse(repo('manifest.webmanifest'));
+  assert.equal(m.orientation, undefined, 'WCAG 1.3.4: nothing here needs a fixed orientation');
+  assert.equal(m.display, 'standalone');
+  assert.equal(m.start_url, './');
+});
+
+test('the page shell asks for a policy that allows only what the app uses', () => {
+  const html = repo('index.html');
+  const csp = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/)[1];
+  assert.match(csp, /default-src 'none'/);
+  assert.match(csp, /script-src 'self'/);
+  assert.doesNotMatch(csp, /script-src [^;]*'unsafe-inline'/, 'an injected <script> must never run');
+  assert.match(csp, /style-src [^;]*'unsafe-inline'/, 'the generated style attributes need this');
+  for (const host of ['https://nominatim.openstreetmap.org', 'https://router.project-osrm.org', 'https://www.fema.gov']) {
+    assert.match(csp, new RegExp('connect-src [^;]*' + host.replace(/[.]/g, '\\.')), host + ' is looked up by js/geo.js');
+  }
+  assert.equal(html.indexOf('Content-Security-Policy') < html.indexOf('<link'), true, 'the policy is declared before anything loads');
+});
+
+test('the shell markup declares a standalone app and asks Google for nothing it can avoid', () => {
+  const html = repo('index.html');
+  assert.match(html, /<meta name="mobile-web-app-capable" content="yes">/);
+  assert.match(html, /<meta name="apple-mobile-web-app-capable" content="yes">/, 'older Safari still reads the prefixed one');
+  for (const link of html.match(/<link rel="preconnect"[^>]*>/g)) {
+    assert.match(link, /crossorigin/, 'a preconnect without crossorigin opens a socket the font fetch cannot reuse');
+  }
+  assert.match(html.match(/<link rel="stylesheet"[^>]*fonts\.googleapis\.com[^>]*>/)[0], /referrerpolicy="no-referrer"/);
+});
+
+test('the workflows never interpolate a value into a shell command', () => {
+  const dir = path.join(__dirname, '../.github/workflows');
+  const files = fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+  assert.ok(files.length, 'the workflows directory should not be empty');
+  for (const f of files) {
+    const lines = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^(\s*)-?\s*run:\s*(.*)$/);
+      if (!m) continue;
+      const script = [m[2]];
+      if (/^[|>]/.test(m[2])) {
+        for (let j = i + 1; j < lines.length && (lines[j].trim() === '' || lines[j].search(/\S/) > m[1].length); j++) script.push(lines[j]);
+      }
+      assert.doesNotMatch(script.join('\n'), /\$\{\{/, f + ' line ' + (i + 1) + ': pass the value through env instead, so it stays data');
+    }
+  }
+});
+
+test('the deploy stages the files the worker precaches, and nothing else', () => {
+  const cp = repo('.github/workflows/pages.yml').match(/cp -r ([^\n]*) site\//);
+  assert.ok(cp, 'the deploy stages a site directory instead of publishing the whole repository');
+  const staged = cp[1].trim().split(/\s+/);
+  const shell = [...SW_SOURCE.match(/const SHELL = \[([\s\S]*?)\];/)[1].matchAll(/'\.\/([^']*)'/g)].map((m) => m[1]);
+  for (const entry of shell) {
+    if (entry === '') continue; // the root is index.html under another name
+    assert.ok(staged.includes(entry.split('/')[0]), entry + ' is precached but is not staged for the deploy');
+  }
+  assert.ok(staged.includes('sw.js'), 'without the worker there is no offline app');
+  for (const stray of ['dist', 'test', 'README.md', 'build.js', 'package.json']) {
+    assert.ok(!staged.includes(stray), stray + ' has no business inside the service worker scope');
+  }
 });

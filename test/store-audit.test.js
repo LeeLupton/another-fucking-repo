@@ -71,3 +71,82 @@ test('toCSV: header, date order, section and line names, units, and escaping', (
   assert.equal(rows[2], '2026-03-02,2026,Medical Expenses,Doctor,45,usd,"Dr ""Lee"", copay",,yes,yes,b');
   assert.equal(DB.toCSV([], Schema).split('\r\n').length, 1, 'header only when there is nothing to export');
 });
+
+test('backup places and trips are validated too, and keep every field the app writes', () => {
+  assert.equal(DB.sanitizeRow('trips', { id: 't1', date: '2026-03-01', miles: 'eighteen', lineId: 'med.miles' }, Schema), null, 'a mileage log needs a number of miles');
+  assert.equal(DB.sanitizeRow('trips', { id: 't1', date: '2026-03-01', miles: 18, lineId: 'no.such.line' }, Schema), null, 'unknown line');
+  assert.equal(DB.sanitizeRow('trips', { id: 't1', date: '2026-03-01', miles: 18, lineId: 'med.doctor' }, Schema), null, 'a line that is not measured in miles');
+  const cleaned = DB.sanitizeRow('trips', { id: 't2', date: '2026-03-01', miles: '12.34', taxYear: 'twenty26', lineId: 'med.miles', entryId: 5, roundTrip: 'maybe', method: '=cmd|calc', evil: 'x' }, Schema);
+  assert.match(cleaned.createdAt, /^\d{4}-\d{2}-\d{2}T/, 'a trip with no createdAt is stamped as it comes in');
+  assert.deepEqual(Object.assign({}, cleaned, { createdAt: 'stamped' }), {
+    id: 't2', date: '2026-03-01', taxYear: 2026, fromId: null, toId: null, fromLabel: '', toLabel: '', purpose: '', miles: 12.34,
+    roundTrip: true, method: 'manual', lineId: 'med.miles', entryId: null, sample: false, points: null, startedAt: null, endedAt: null, createdAt: 'stamped',
+  });
+  const place = DB.sanitizeRow('places', { id: 'p1', name: 'Clinic', lat: 'north', lon: {}, category: 999, evil: '<script>' }, Schema);
+  assert.equal(place.lat, null); assert.equal(place.lon, null, 'half a pair of coordinates would measure trips as NaN');
+  assert.equal(place.category, 'other');
+  assert.equal(place.evil, undefined, 'unknown keys are dropped');
+  assert.equal(DB.sanitizeRow('places', { id: 'p2' }, Schema), null, 'a place needs a name');
+  // the round trip that matters: what the app saves must survive a backup unchanged
+  const saved = { id: 'p3', name: 'Clinic', category: 'medical', address: '1 Main St', lat: 35.77, lon: -78.63, note: '', sample: false, updatedAt: '2026-03-01T00:00:00.000Z' };
+  assert.deepEqual(DB.sanitizeRow('places', saved, Schema), saved);
+  const trip = {
+    id: 't3', date: '2026-03-01', taxYear: 2026, fromId: 'p3', toId: 'p4', fromLabel: 'Home', toLabel: 'Clinic', purpose: 'Check-up', miles: 12.3,
+    roundTrip: true, method: 'gps', lineId: 'med.miles', entryId: 'e1', sample: false, points: [{ lat: 35.77, lon: -78.63, t: 1772000000000, acc: 5 }, { gap: true }, { lat: 35.78, lon: -78.64, t: 1772000060000, acc: 4 }],
+    startedAt: 1772000000000, endedAt: 1772000600000, createdAt: '2026-03-01T00:00:00.000Z',
+  };
+  assert.deepEqual(DB.sanitizeRow('trips', trip, Schema), trip);
+  assert.equal(DB.sanitizeRow('trips', Object.assign({}, trip, { sample: true }), Schema).sample, true, 'an example trip is still known to be one after a restore');
+});
+
+test('a restored trip keeps the miles its ledger entry keeps, so the mileage log and the entry still agree', () => {
+  // the ledger stores mileage to a hundredth, so rounding the trip to a tenth on the way in would change a tax record
+  const entry = DB.sanitizeEntry({ id: 'e1', date: '2026-03-01', taxYear: 2026, lineId: 'med.miles', amount: 12.34 }, Schema);
+  const trip = DB.sanitizeRow('trips', { id: 't1', date: '2026-03-01', taxYear: 2026, miles: 12.34, lineId: 'med.miles', entryId: 'e1' }, Schema);
+  assert.equal(entry.amount, 12.34);
+  assert.equal(trip.miles, 12.34);
+  assert.equal(DB.sanitizeRow('trips', { id: 't2', date: '2026-03-01', miles: 12.3456789, lineId: 'med.miles' }, Schema).miles, 12.35, 'more precision than the ledger can hold is still rounded away');
+});
+
+test('a snapshot keeps the settings its forecast was made under, and only ones the worksheet knows', async () => {
+  const base = { taxYear: 2026, month: '2026-03', takenOn: '2026-03-15', actual: 5000, expectedMore: 3000, projectedTotal: 8000, standardDeduction: 16100, itemize: false };
+  const plain = DB.sanitizeRow('snapshots', base);
+  assert.equal(plain.filingStatus, undefined, 'a snapshot taken before the app stamped them is still a good row');
+  assert.equal('age65' in plain, false);
+  const stamped = DB.sanitizeRow('snapshots', Object.assign({}, base, { filingStatus: 'mfj', agi: '95000', age65: 'yes', blind: false, spouseAge65: true, spouseBlind: 0 }));
+  assert.equal(stamped.filingStatus, 'mfj');
+  assert.equal(stamped.agi, 95000, 'the AGI is a number however it was stamped');
+  assert.deepEqual([stamped.age65, stamped.blind, stamped.spouseAge65, stamped.spouseBlind], [true, false, true, false]);
+  const odd = DB.sanitizeRow('snapshots', Object.assign({}, base, { filingStatus: 'married-ish', agi: '' }));
+  assert.equal(odd.filingStatus, undefined, 'a status the worksheet does not have is not carried');
+  assert.equal(odd.agi, undefined, 'an empty AGI is not an AGI of zero, which would make every medical bill count');
+  // and the stamp survives the store, so a finished year is graded the way it was projected
+  await DB.clearAll();
+  await DB.syncSnapshots([Object.assign({}, base, { filingStatus: 'mfj', agi: 95000, age65: true })]);
+  const back = (await DB.getSnapshots())[0];
+  assert.equal(back.filingStatus, 'mfj'); assert.equal(back.agi, 95000); assert.equal(back.age65, true);
+});
+
+test('the id column of the ledger CSV cannot start a spreadsheet formula either', () => {
+  const csv = DB.toCSV([{ id: '=2+2', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 1, description: 'x', note: '' }], Schema).split('\r\n')[1];
+  assert.equal(csv, "2026-01-05,2026,Medical Expenses,Doctor,1,usd,x,,no,no,'=2+2");
+  assert.equal(DB.sanitizeEntry({ id: "=cmd|' /C calc'!A0", date: '2026-01-05', lineId: 'med.doctor', amount: 1 }, Schema), null, 'an id that is not one of ours is not stored at all');
+  assert.equal(DB.sanitizeEntry({ id: '3f2a1b0c-0000-4000-8000-000000000001', date: '2026-01-05', lineId: 'med.doctor', amount: 1 }, Schema).id, '3f2a1b0c-0000-4000-8000-000000000001');
+  assert.equal(DB.sanitizeRow('trips', { id: 't1', date: '2026-01-05', miles: 3, method: "=cmd|' /C calc'!A0" }).method, 'manual', 'the mileage log only prints methods the app knows');
+});
+
+test('a restored entry only claims a receipt photo that came with the file', async () => {
+  await DB.clearAll();
+  const entry = { id: 'e1', date: '2026-01-05', taxYear: 2026, lineId: 'med.doctor', amount: 100, hasReceipt: true, receiptId: 'r-missing' };
+  const res = await DB.importJSON({ app: 'itemizer', version: 3, entries: [entry], receipts: [] }, { schema: Schema });
+  assert.equal(res.dangling, 1);
+  const stored = (await DB.getEntries())[0];
+  assert.equal(stored.receiptId, null);
+  assert.equal(stored.hasReceipt, true, 'the mark can still mean a paper receipt; only the claim to a photo is cleared');
+  assert.equal(DB.toCSV(await DB.getEntries(), Schema).split('\r\n')[1], '2026-01-05,2026,Medical Expenses,Doctor,100,usd,,,yes,no,e1');
+  await DB.clearAll();
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const kept = await DB.importJSON({ app: 'itemizer', version: 3, entries: [Object.assign({}, entry, { receiptId: 'r1' })], receipts: [{ id: 'r1', entryId: 'e1', type: 'image/png', createdAt: '2026-01-05T00:00:00.000Z', dataURL: png }, { id: 'r2', entryId: 'gone', type: 'image/png', createdAt: '2026-01-05T00:00:00.000Z', dataURL: png }] }, { schema: Schema });
+  assert.deepEqual([kept.receipts, kept.dangling, kept.orphanReceipts], [1, 0, 1], 'a photo whose entry is not in the file is not kept either');
+  assert.equal((await DB.getEntries())[0].receiptId, 'r1');
+});

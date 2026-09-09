@@ -25,6 +25,8 @@
   }
   /** a variant with hyphens and slashes turned to spaces, so "co-pay" also matches "co pay" */
   function loosen(norm) { return norm.replace(/[-\/]/g, ' ').replace(/\s+/g, ' '); }
+  /** a variant with a plural ending dropped from each longer word, so "dentists" also matches "dentist" */
+  function singularize(hay) { return hay.replace(/(\w{3,})(?:es|s)(?= )/g, '$1'); }
 
   // Pre-normalize keyword index once.
   const INDEX = Schema.LINES.map((line) => ({
@@ -43,9 +45,22 @@
     return hayNorm.includes(needle.norm) || hayLoose.includes(needle.loose);
   }
 
-  /** Key under which a description is remembered: lower-case, store numbers and standalone amounts removed (tokens like 1098e stay). */
+  // "Dr" on its own was the weakest keyword in the schema, so any surname that happened to be a
+  // keyword elsewhere ("Dr Ward", "Dr Cox") beat it. A title followed by a name is scored here
+  // instead — except for the brands that begin with it, and for a street address ending in Dr.
+  const HONORIFIC = /(^| )(dr|drs|doctor) ([a-z]{2,})/;
+  const DR_BRANDS = new Set(['pepper', 'martens', 'marten', 'seuss', 'scholl', 'scholls', 'squatch', 'bronner', 'bronners', 'teals', 'horton', 'oz']);
+  // A street name can be several words long ("4500 North Market Dr"), but the little words that
+  // join an amount to a name ("250 to Dr Patel") never appear in one, so they rule an address out.
+  const STREET_DR = /\d+ ((?:[a-z]+ ){1,4})dr\b/;
+  function isStreetAddress(norm) {
+    const m = STREET_DR.exec(norm);
+    return !!m && m[1].trim().split(' ').every((w) => !STOP.has(w));
+  }
+
+  /** Key under which a description is remembered: lower-case, store numbers, statement dates and standalone amounts removed (tokens like 1098e stay). */
   function keyFor(description) {
-    let k = normalize(description).replace(/#\d[\d,.\-]*/g, ' ').replace(/(^| )[$#]?\d[\d,.\-]*(?= |$)/g, ' ').replace(/\s+/g, ' ').trim();
+    let k = normalize(description).replace(/#\d[\d,.\-]*/g, ' ').replace(/(^| )\d{1,2}\/\d{1,2}(\/\d{2,4})?(?= |$)/g, ' ').replace(/(^| )[$#]?\d[\d,.\-]*(?= |$)/g, ' ').replace(/\s+/g, ' ').trim();
     if (k.length > 48) k = k.slice(0, 48).trim();
     return k;
   }
@@ -61,12 +76,14 @@
     const limit = opts.limit || 4;
     const norm = normalize(text);
     const loose = loosen(norm);
-    const scores = new Map(); // lineId -> { score, because:Set, learned }
-    const bump = (lineId, amount, why, learned) => {
-      const cur = scores.get(lineId) || { score: 0, because: new Set(), learned: false };
+    const stem = singularize(norm), stemLoose = singularize(loose);
+    const scores = new Map(); // lineId -> { score, because:Set, learned, best }
+    const bump = (lineId, amount, why, learned, matchLength) => {
+      const cur = scores.get(lineId) || { score: 0, because: new Set(), learned: false, best: 0 };
       cur.score += amount;
       if (why) cur.because.add(why);
       if (learned) cur.learned = true;
+      cur.best = Math.max(cur.best, matchLength || 0);
       scores.set(lineId, cur);
     };
 
@@ -74,8 +91,14 @@
       // 1. keyword matches
       for (const { line, keywords } of INDEX) {
         for (const kw of keywords) {
-          if (containsPhrase(norm, loose, kw)) bump(line.id, kw.weight * ((opts.weights && opts.weights[kw.raw] > 0) ? opts.weights[kw.raw] : 1), kw.raw);
+          if (containsPhrase(norm, loose, kw) || containsPhrase(stem, stemLoose, kw)) bump(line.id, kw.weight * ((opts.weights && opts.weights[kw.raw] > 0) ? opts.weights[kw.raw] : 1), kw.raw, false, kw.norm.trim().length);
         }
+      }
+      const title = HONORIFIC.exec(norm);
+      // Weighted like a keyword, so corrections can hold it down when it keeps picking the wrong line.
+      if (title && !DR_BRANDS.has(title[3]) && !isStreetAddress(norm)) {
+        const w = (opts.weights && opts.weights['title and name'] > 0) ? opts.weights['title and name'] : 1;
+        bump('med.doctor', 1.3 * w, 'title and name', false, title[0].trim().length);
       }
       // 2. section context
       const activeSections = new Set();
@@ -102,7 +125,7 @@
       if (opts.description) keys.add(keyFor(opts.description));
       for (const lk of Object.keys(learned)) {
         if (!lk || !Schema.getLine(learned[lk])) continue;
-        const lkn = lk.replace(/['’`]/g, ''); // keys learned before apostrophes were stripped still match
+        const lkn = keyFor(lk); // keys learned under an older rule (apostrophes kept, statement date left in) still match
         if (keys.has(lkn)) bump(learned[lk], 8, 'you filed this here before', true);
         // a partial match only counts for distinctive keys: a short generic word ("gas", "amazon") must not hijack every later entry
         else if ((lkn.includes(' ') || lkn.length >= 6) && norm.includes(' ' + lkn + ' ')) bump(learned[lk], 5, `"${lk}" filed here before`, true);
@@ -110,7 +133,7 @@
     }
 
     // 4. miles vs dollars
-    let list = [...scores.entries()].map(([lineId, rec]) => ({ lineId, score: rec.score, because: [...rec.because], learned: rec.learned }));
+    let list = [...scores.entries()].map(([lineId, rec]) => ({ lineId, score: rec.score, because: [...rec.because], learned: rec.learned, best: rec.best }));
     if (opts.miles) {
       const milesLines = Schema.LINES.filter((l) => l.unit === 'miles');
       const scoredMiles = list.filter((s) => Schema.isMiles(s.lineId));
@@ -123,16 +146,16 @@
           const related = { 'med.miles': 'medical', 'se.miles': 'selfemp', 'vol.miles': ['charity', 'volunteer'] }[l.id];
           const rel = Array.isArray(related) ? related : [related];
           const sc = rel.reduce((a, sid) => a + (sectionHits.get(sid) || 0), 0);
-          return { lineId: l.id, score: 0.5 + sc, because: sc ? ['miles + ' + Schema.getSection(rel[0]).title.toLowerCase()] : ['miles'], learned: false };
+          return { lineId: l.id, score: 0.5 + sc, because: sc ? ['miles + ' + Schema.getSection(rel[0]).title.toLowerCase()] : ['miles'], learned: false, best: 0 };
         });
-        if (/\b(odometer|total miles|all miles|annual miles)\b/.test(norm)) list.unshift({ lineId: 'se.total_miles', score: 9, because: ['odometer / total miles'], learned: false });
+        if (/\b(odometer|total miles|all miles|annual miles)\b/.test(norm)) list.unshift({ lineId: 'se.total_miles', score: 9, because: ['odometer / total miles'], learned: false, best: 0 });
       }
     } else {
       // dollars typed: mileage lines only make sense if the words say "miles"
       list = list.filter((s) => !Schema.isMiles(s.lineId) || /\bmile|\bmi\b|mileage/.test(norm));
     }
 
-    list.sort((a, b) => b.score - a.score || a.lineId.localeCompare(b.lineId));
+    list.sort((a, b) => b.score - a.score || (b.best || 0) - (a.best || 0) || b.because.length - a.because.length || a.lineId.localeCompare(b.lineId));
 
     const nonDeductible = [];
     const suppressed = new Set();

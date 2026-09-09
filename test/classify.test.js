@@ -68,3 +68,11 @@ test('empty and unknown input', () => {
   assert.equal(C.classify('random thing').suggestions.length, 0);
   assert.equal(C.classify(null).nonDeductible.length, 0);
 });
+
+test('parking and tolls on a business trip are an Other expense, not an actual car expense', () => {
+  assert.equal(top('12 parking for work'), 'se.other');
+  assert.equal(top('tolls for work'), 'se.other');
+  assert.equal(top('business parking'), 'se.other');
+  assert.equal(top('gas'), 'se.car', 'the vehicle line still holds the actual expenses');
+  assert.equal(C.classify('parking at work').nonDeductible.length, 1, 'commuting still warns');
+});

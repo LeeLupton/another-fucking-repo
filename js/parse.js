@@ -22,7 +22,14 @@
   // Words that, when they end the description, are worth keeping ("donated" tells the classifier a lot).
   const KEEP_IF_ALONE = new Set(['donated', 'gave']);
   // A bare integer followed by one of these is a quantity, not a dollar amount.
-  const COUNT_NOUNS = new Set(['bag', 'bags', 'box', 'boxes', 'item', 'items', 'piece', 'pieces', 'session', 'sessions', 'visit', 'visits', 'trip', 'trips', 'night', 'nights', 'day', 'days', 'week', 'weeks', 'month', 'months', 'hour', 'hours', 'people', 'kids', 'ticket', 'tickets', 'pair', 'pairs', 'unit', 'units', 'dose', 'doses', 'pill', 'pills', 'round', 'rounds', 'times', 'x', 'shirts', 'coats', 'shoes', 'books', 'chairs', 'tables', 'toys', 'gallons', 'gal', 'lbs', 'pounds', 'oz', 'pct', 'percent', '%', 'copies', 'pages', 'stamps', 'rolls', 'cans', 'bottles', 'cases', 'packs', 'meals', 'lunches', 'dinners', 'appointments', 'appts', 'prescriptions', 'refills', 'loads', 'cartons']);
+  // Units of time, distance and weight belong here too: "45 min" and "18 km" are measurements, not money.
+  const COUNT_NOUNS = new Set(['bag', 'bags', 'box', 'boxes', 'item', 'items', 'piece', 'pieces', 'session', 'sessions', 'visit', 'visits', 'trip', 'trips', 'night', 'nights', 'day', 'days', 'week', 'weeks', 'month', 'months', 'hour', 'hours', 'people', 'kids', 'ticket', 'tickets', 'pair', 'pairs', 'unit', 'units', 'dose', 'doses', 'pill', 'pills', 'round', 'rounds', 'times', 'x', 'shirts', 'coats', 'shoes', 'books', 'chairs', 'tables', 'toys', 'gallons', 'gal', 'lbs', 'pounds', 'oz', 'pct', 'percent', '%', 'copies', 'pages', 'stamps', 'rolls', 'cans', 'bottles', 'cases', 'packs', 'meals', 'lunches', 'dinners', 'appointments', 'appts', 'prescriptions', 'refills', 'loads', 'cartons', 'min', 'mins', 'minute', 'minutes', 'hr', 'hrs', 'sec', 'secs', 'km', 'kms', 'lb', 'kg', 'yr', 'yrs', 'year', 'years', 'mo', 'mos', 'wk', 'wks', 'pants', 'socks']);
+  // Period words are the one ambiguous case: "3 mo supply" counts months, but "800 mo rent" is a
+  // price per month. Nobody counts a hundred months or years, so a bigger number is read as money.
+  const PERIOD_NOUNS = new Set(['mo', 'mos', 'wk', 'wks', 'yr', 'yrs', 'year', 'years']);
+  const COUNT_MAX = 100;
+  // Number words accepted in "two days ago" and the like.
+  const WORD_N = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 
   const pad2 = (n) => String(n).padStart(2, '0');
   const iso = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
@@ -81,19 +88,46 @@
       result.dateSource = source;
     };
 
+    // Months are counted back from the first of the month, then the day is clamped: a month before Mar 31 is Feb 28.
+    const setMonthsBack = (n) => {
+      const dt = new Date(today);
+      const day = dt.getDate();
+      dt.setDate(1);
+      dt.setMonth(dt.getMonth() - n);
+      dt.setDate(Math.min(day, new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate()));
+      result.date = isoFromDate(dt);
+      result.dateSource = 'relative';
+    };
+
     let m;
     if (!result.date && (m = /\bday before yesterday\b/i.exec(s))) { setRelative(-2, 'relative'); s = cut(s, m); }
-    if (!result.date && (m = /\b(yesterday|yday)\b/i.exec(s))) { setRelative(-1, 'relative'); s = cut(s, m); }
-    if (!result.date && (m = /\b(today|tonight|this morning|this afternoon|just now)\b/i.exec(s))) { setRelative(0, 'relative'); s = cut(s, m); }
-    if (!result.date && (m = /\b(\d{1,2})\s+days?\s+ago\b/i.exec(s))) { setRelative(-Number(m[1]), 'relative'); s = cut(s, m); }
+    // The possessive is taken with the word, so "yesterday's lunch" does not leave a stray "'s" behind.
+    if (!result.date && (m = /\b(yesterday|yday)(?:'s)?\b/i.exec(s))) { setRelative(-1, 'relative'); s = cut(s, m); }
+    if (!result.date && (m = /\b(today|tonight|this morning|this afternoon|just now)(?:'s)?\b/i.exec(s))) { setRelative(0, 'relative'); s = cut(s, m); }
+    if (!result.date && (m = /\b(\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(day|week|month)s?\s+ago\b/i.exec(s))) {
+      const n = WORD_N[m[1].toLowerCase()] || Number(m[1]);
+      if (m[2].toLowerCase() === 'month') setMonthsBack(n);
+      else setRelative(-n * (m[2].toLowerCase() === 'week' ? 7 : 1), 'relative');
+      s = cut(s, m);
+    }
+    if (!result.date && (m = /\blast\s+(week|month)(?:'s)?\b/i.exec(s))) {
+      if (m[1].toLowerCase() === 'month') setMonthsBack(1);
+      else setRelative(-7, 'relative');
+      s = cut(s, m);
+    }
     // "last tue" / "this past Wed." take abbreviations; a bare "on" needs the full weekday so "on sunscreen" stays a word.
-    if (!result.date && (m = (new RegExp('\\b(?:last|this past)\\s+' + WEEKDAY_RE + '\\.?(?=\\s|$)', 'i').exec(s) || new RegExp('\\bon\\s+' + WEEKDAY_FULL_RE + '\\b', 'i').exec(s)))) {
-      const target = WEEKDAYS.findIndex((w) => w.startsWith(m[1].toLowerCase().slice(0, 3)));
-      if (target >= 0) {
-        let back = (today.getDay() - target + 7) % 7;
-        if (back === 0) back = 7;
-        setRelative(-back, 'relative');
-        s = cut(s, m);
+    if (!result.date) {
+      const lastForm = new RegExp('\\b(?:last|this past)\\s+' + WEEKDAY_RE + '(?:\'s)?\\.?(?=[\\s,;:!?]|$)', 'i').exec(s);
+      m = lastForm || new RegExp('\\bon\\s+' + WEEKDAY_FULL_RE + '(?:\'s)?\\b', 'i').exec(s);
+      if (m) {
+        const target = WEEKDAYS.findIndex((w) => w.startsWith(m[1].toLowerCase().slice(0, 3)));
+        if (target >= 0) {
+          let back = (today.getDay() - target + 7) % 7;
+          // "last Sunday" written on a Sunday means the week before; "on Sunday" written on a Sunday means today.
+          if (back === 0 && lastForm) back = 7;
+          setRelative(-back, 'relative');
+          s = cut(s, m);
+        }
       }
     }
     // ISO 2026-03-14
@@ -116,16 +150,19 @@
       }
     }
     // "Mar 14", "March 14th, 2026", "mar. 14"
+    // As with the numeric form, the span is consumed only when the number reads as a day, so "May 40" leaves the 40 for the amount.
     if (!result.date && (m = new RegExp('\\b' + MONTH_RE + '\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(20\\d{2}))?\\b', 'i').exec(s))) {
       const mon = MONTHS[m[1].toLowerCase()];
+      const day = Number(m[2]);
       const yearGiven = m[3] != null;
-      if (mon) { setDate(yearGiven ? Number(m[3]) : defaultYear, mon, Number(m[2]), 'month-name', yearGiven); s = cut(s, m); }
+      if (mon && (setDate(yearGiven ? Number(m[3]) : defaultYear, mon, day, 'month-name', yearGiven) || (day >= 1 && day <= 31))) s = cut(s, m);
     }
-    // "14 Mar", "14th of March 2026"
-    if (!result.date && (m = new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + MONTH_RE + '\\.?(?:,?\\s+(20\\d{2}))?\\b', 'i').exec(s))) {
+    // "14 Mar", "14th of March 2026" — the day must start a word, so the 20 in "$20 Dec" is money, not a day.
+    if (!result.date && (m = new RegExp('(?:^|[\\s(])(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + MONTH_RE + '\\.?(?:,?\\s+(20\\d{2}))?\\b', 'i').exec(s))) {
       const mon = MONTHS[m[2].toLowerCase()];
+      const day = Number(m[1]);
       const yearGiven = m[3] != null;
-      if (mon) { setDate(yearGiven ? Number(m[3]) : defaultYear, mon, Number(m[1]), 'month-name', yearGiven); s = cut(s, m); }
+      if (mon && (setDate(yearGiven ? Number(m[3]) : defaultYear, mon, day, 'month-name', yearGiven) || (day >= 1 && day <= 31))) s = cut(s, m);
     }
 
     // ---- miles -------------------------------------------------------------
@@ -136,27 +173,39 @@
 
     // ---- amount ------------------------------------------------------------
     // A period followed by a space or the end is punctuation ("Lunch 20."), so the lookaheads allow it.
+    // A rate written with a slash ("$800/mo rent") is one payment said another way: the suffix is taken
+    // with the amount so the description reads "Rent". Only period words follow, so a date cannot match.
+    const PER = '\\/(?:mo|month|wk|week|yr|year|day|hr|hour)s?\\b';
     const amountPatterns = [
-      /(^|\s)-?\$\s?(\d[\d,]*(?:\.\d{1,2})?)(?!\.?\d)(?=[\s,.;)]|$)/, // $42.13 / $1,200 — never truncates $42.135 or $1.2k
-      /(^|\s)(\d[\d,]*\.\d{1,2})(?=[\s,;)]|\.(?:\s|$)|$)/, // 42.13 / 12.5
+      new RegExp('(^|\\s)-?\\$\\s?(\\d[\\d,]*(?:\\.\\d{1,2})?|\\.\\d{1,2})(?!\\.?\\d)(?:' + PER + ')?(?=[\\s,.;)]|$)'), // $42.13 / $1,200 / $.50 — never truncates $42.135 or $1.2k
+      new RegExp('(^|\\s)(\\d[\\d,]*\\.\\d{1,2})(?:' + PER + ')?(?=[\\s,;)]|\\.(?:\\s|$)|$)'), // 42.13 / 12.5
       /(^|\s)(\d[\d,]*(?:\.\d+)?)\s*(?:dollars|bucks|usd)\b/i, // 40 dollars
-      /(^|\s)(\d[\d,]*)(?=[\s,;)]|\.(?:\s|$)|$)(?!\s*(?:st|nd|rd|th)\b)/g, // bare 40 (skipped when it is clearly a count: "4 bags")
+      new RegExp('(^|\\s)(\\d[\\d,]*)(?:' + PER + ')?(?=[\\s,;)]|\\.(?:\\s|$)|$)(?!\\s*(?:st|nd|rd|th)\\b)', 'g'), // bare 40 (skipped when it is clearly a count: "4 bags")
     ];
     const isBareYear = (str) => /^(19|20)\d{2}$/.test(str);
+    // "Dec 2025 property tax": a year that names a bill period is never the amount. Only the word
+    // before the number is needed, so a short window is read rather than the rest of the text.
+    const yearCtx = new RegExp('^(?:' + MONTH_RE + '\\.?,?|year|fy)$', 'i');
+    const prevWord = (c) => (/(\S+)$/.exec(s.slice(Math.max(0, c.index - 32), c.index)) || [])[1] || '';
     for (const re of amountPatterns) {
       re.lastIndex = 0;
       let found = null;
       const candidates = [];
       while ((m = re.exec(s))) {
-        const after = s.slice(m.index + m[0].length).trim().split(/\s+/)[0] || '';
-        if (re.global && COUNT_NOUNS.has(after.toLowerCase().replace(/[.,;]+$/, ''))) continue;
+        // Only the next word matters, so the remainder is not re-scanned for every candidate.
+        const end = m.index + m[0].length;
+        const after = (/^\s*(\S+)/.exec(s.slice(end, end + 64)) || [])[1] || '';
+        const unit = after.toLowerCase().replace(/[.,;]+$/, '');
+        if (re.global && COUNT_NOUNS.has(unit) && !(PERIOD_NOUNS.has(unit) && toNumber(m[2]) >= COUNT_MAX)) continue;
+        if (re.global && isBareYear(m[2]) && yearCtx.test(prevWord(m))) continue;
         candidates.push(m);
         if (!re.global) break;
       }
       // "property tax 2025 3120": a bare four-digit year is only the amount when nothing else could be.
       found = candidates.find((c) => !isBareYear(c[2])) || candidates[0] || null;
       if (found) {
-        const n = toNumber(found[2]);
+        // A typed minus is kept: "-$40 refund" is a credit, not a $40 expense.
+        const n = toNumber(found[2]) * (/^\s*-/.test(found[0]) ? -1 : 1);
         if (!isNaN(n)) { result.amount = n; s = cut(s, found); break; }
       }
     }
@@ -172,21 +221,31 @@
       if (tokens.length && isFiller(tokens[0]) && !KEEP_IF_ALONE.has(tokens[0].toLowerCase())) { tokens.shift(); changed = true; }
       if (tokens.length && isFiller(tokens[tokens.length - 1]) && !(tokens.length === 1 && KEEP_IF_ALONE.has(tokens[0].toLowerCase()))) { tokens.pop(); changed = true; }
       for (let i = 0; i < tokens.length - 1; i++) {
-        if (isFiller(tokens[i]) && isFiller(tokens[i + 1])) { tokens.splice(i, 2); changed = true; break; }
+        if (isFiller(tokens[i]) && isFiller(tokens[i + 1])) {
+          // "donated to goodwill": a leading verb worth keeping stays, and only the word after it goes.
+          const keep = i === 0 && KEEP_IF_ALONE.has(tokens[0].toLowerCase());
+          tokens.splice(keep ? 1 : i, keep ? 1 : 2);
+          changed = true;
+          break;
+        }
       }
     }
     let desc = tokens.join(' ').replace(/\s+([,.;])/g, '$1').replace(/^[,;.\-–—\s]+|[,;.\-–—\s]+$/g, '').trim();
-    if (desc) desc = desc.charAt(0).toUpperCase() + desc.slice(1);
+    // A first word the user capitalised themselves is left alone, so "iPhone" does not become "IPhone".
+    if (desc && !/[A-Z]/.test(tokens[0] || '')) desc = desc.charAt(0).toUpperCase() + desc.slice(1);
     result.description = desc;
     return result;
   }
+
+  // Built once: a date formatter is expensive to construct, and the ledger formats one date per row.
+  const DAY_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+  const DAY_YEAR_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   /** Human-readable date, e.g. "Mar 14, 2026". */
   function formatDate(isoStr, withYear) {
     if (!isoStr) return '';
     const [y, mo, d] = isoStr.split('-').map(Number);
-    const dt = new Date(y, mo - 1, d);
-    return dt.toLocaleDateString('en-US', withYear === false ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+    return (withYear === false ? DAY_FMT : DAY_YEAR_FMT).format(new Date(y, mo - 1, d));
   }
 
   function todayISO() { return isoFromDate(new Date()); }

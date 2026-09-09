@@ -40,6 +40,24 @@ test('the name on the return is a bounded string setting', () => {
   assert.equal(DB.sanitizeSettings(null).taxpayerName, '');
 });
 
+test('a section total is the sum of its own monthly bars, information lines included', () => {
+  // edu.expenses is an information line: it is a note for the preparer, so it belongs in neither figure.
+  const entries = [
+    { id: 'a', date: '2026-03-01', lineId: 'edu.expenses', amount: 1000, hasReceipt: true },
+    { id: 'b', date: '2026-04-01', lineId: 'edu.tuition', amount: 500, hasReceipt: true },
+    { id: 'c', date: '2026-05-01', lineId: 'med.miles', amount: 100, hasReceipt: true },
+    { id: 'd', date: '2026-08-01', lineId: 'se.total_miles', amount: 9000, hasReceipt: true },
+  ];
+  const r = R.compute(entries, { taxYear: 2026, filingStatus: 'single', agi: 50000, today: '2026-09-02' });
+  assert.equal(r.sections.education.value, 500);
+  assert.equal(r.sections.education.count, 2, 'both entries are still counted in the ledger badge');
+  for (const sec of S.SECTIONS) {
+    const bars = R.cents(r.sections[sec.id].months.reduce((a, b) => a + b, 0));
+    assert.equal(bars, r.sections[sec.id].value, sec.id);
+  }
+  assert.equal(R.cents(r.months.reduce((a, b) => a + b, 0)), R.cents(S.SECTIONS.reduce((a, sec) => a + r.sections[sec.id].value, 0)));
+});
+
 test('mileage rates print as cents per mile', () => {
   assert.equal(R.perMile(0.7), '70¢/mile');
   assert.equal(R.perMile(0.21), '21¢/mile');

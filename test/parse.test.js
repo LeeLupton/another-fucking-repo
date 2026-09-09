@@ -33,6 +33,14 @@ test('month names, ordinals, day-first', () => {
   assert.equal(parse('dentist $210 March 14th, 2025', ctx).date, '2025-03-14');
   assert.equal(parse('dentist $210 14 Mar', ctx).date, '2026-03-14');
   assert.equal(parse('dentist $210 on the 14th of March', ctx).date, '2026-03-14');
+  const sept = parse('dentist $210 Sept 3', ctx);
+  assert.equal(sept.date, '2026-09-03');
+  assert.equal(sept.dateSource, 'month-name');
+  assert.equal(parse('dentist $210 Sept. 3', ctx).date, '2026-09-03');
+  assert.equal(parse('dentist $210 Mar 14 2026', ctx).date, '2026-03-14');
+  const dashed = parse('dentist $210 3-14', ctx);
+  assert.equal(dashed.date, '2026-03-14');
+  assert.equal(dashed.dateSource, 'numeric');
 });
 
 test('a month/day in the future without a year rolls back to last year', () => {
@@ -40,6 +48,8 @@ test('a month/day in the future without a year rolls back to last year', () => {
   assert.equal(r.date, '2025-12-28');
   assert.equal(r.amount, null, 'a count of bags is not a dollar amount');
   assert.equal(r.description, 'Donated 4 bags of clothes to goodwill');
+  assert.equal(parse('dentist $210 Dec 31', ctx).date, '2025-12-31', 'the same rollback with a month name');
+  assert.equal(parse('dentist $210 12/31/25', ctx).date, '2025-12-31');
 });
 
 test('a different selected tax year wins over the current year for bare month/day', () => {

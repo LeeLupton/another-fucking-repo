@@ -86,8 +86,9 @@
     if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
     if (/\bCR\b/i.test(s)) { neg = true; s = s.replace(/\bCR\b/i, ''); }
     s = s.replace(/\bDR\b/i, '').replace(/[$€£\s]/g, '');
-    // European exports: 1.234,56 — a comma with one or two digits after it is the decimal mark
-    if (/^[-+]?\d{1,3}(\.\d{3})*,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
+    // European exports: 1.234,56 or 1234,56 — a comma with one or two digits after it is the decimal
+    // mark, since a US thousands comma is always followed by exactly three digits
+    if (/^[-+]?\d+(\.\d{3})*,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
     else s = s.replace(/,/g, '');
     if (s.startsWith('-')) { neg = !neg; s = s.slice(1); }
     if (s.startsWith('+')) s = s.slice(1);
