@@ -381,7 +381,7 @@ test('the calendar file gives the estimated-tax dates the Advisor gives, rolled 
 
 test('miles typed over a recorded drive keep the track, so the drive is not thrown away on a keystroke', () => {
   const T = { method: 'gps', miles: '12.4', recordedMiles: 12.4, points: [{ lat: 35.7, lon: -78.8 }, { lat: 35.8, lon: -78.9 }], startedAt: 1700000000000, endedAt: 1700003600000, oneWay: null, roundTrip: false, result: 'Recorded 12.4 mi' };
-  const ctx = load([fn('retypeMiles'), fn('hasUnsavedWork')], { G: { roundMiles: (n) => Math.round(n * 10) / 10 }, state: { trip: T, recorder: null, capture: null } });
+  const ctx = load([fn('retypeMiles'), fn('captureHasWork'), fn('hasUnsavedWork')], { G: { roundMiles: (n) => Math.round(n * 10) / 10 }, state: { trip: T, recorder: null, capture: null } });
   assert.equal(ctx.retypeMiles(T), false, 'the figure the recorder itself produced is not a hand edit');
   T.miles = '1'; // the first keystroke of a correction
   assert.equal(ctx.retypeMiles(T), true);
@@ -551,10 +551,11 @@ test('the tax year switch says whether the year really moved', async () => {
   assert.equal(failed.state.settings.taxYear, 2026);
 });
 
-test('prefilling asks before it replaces a capture, and releases the photo it drops', async () => {
+test('prefilling asks before it replaces a capture with a photo in it, and releases that photo', async () => {
   const revoked = [];
-  const base = () => ({
-    state: { view: 'capture', captureMode: 'expense', settings: { taxYear: 2026 }, capture: { receiptURL: 'blob:one', receiptBlob: {}, dirty: true, pinned: new Set() } },
+  const asked = [];
+  const base = (capture) => ({
+    state: { view: 'capture', captureMode: 'expense', settings: { taxYear: 2026 }, capture, recorder: null, trip: null },
     P: { todayISO: () => '2026-09-08' },
     S: { isMiles: () => false },
     URL: { revokeObjectURL: (u) => revoked.push(u) },
@@ -562,18 +563,26 @@ test('prefilling asks before it replaces a capture, and releases the photo it dr
     window: { scrollTo: () => {} },
     todayInYear: () => '2026-09-08', reclassify: () => {}, renderCapture: () => {}, go: () => {}, toast: () => {},
   });
-  const sources = [fn('discardCapture'), fn('freshCapture'), fn('prefillCapture')];
+  const withPhoto = () => ({ receiptURL: 'blob:one', receiptBlob: {}, dirty: true, text: '', pinned: new Set() });
+  const sources = [fn('discardCapture'), fn('freshCapture'), fn('captureHasWork'), fn('confirmDiscardCapture'), fn('prefillCapture')];
+  const donation = { lineId: 'ch.noncash', amount: 40, description: 'Donated goods' };
 
-  const kept = load(sources, Object.assign(base(), { confirmDiscardWork: async () => false }));
+  const kept = load(sources, Object.assign(base(withPhoto()), { confirmDialog: async (title, body) => { asked.push(body); return false; } }));
   const before = kept.state.capture;
-  assert.equal(await kept.prefillCapture({ lineId: 'ch.noncash', amount: 40, description: 'Donated goods' }), false);
+  assert.equal(await kept.prefillCapture(donation), false);
   assert.equal(kept.state.capture, before); // the typing and the photo are still on screen
   assert.deepEqual(revoked, []);
+  assert.equal(asked[0], 'The details you have typed, including the receipt photo you just took, will be lost. The prefilled entry will be shown instead.');
 
-  const replaced = load(sources, Object.assign(base(), { confirmDiscardWork: async () => true }));
-  assert.equal(await replaced.prefillCapture({ lineId: 'ch.noncash', amount: 40, description: 'Donated goods' }), true);
+  const replaced = load(sources, Object.assign(base(withPhoto()), { confirmDialog: async () => true }));
+  assert.equal(await replaced.prefillCapture(donation), true);
   assert.deepEqual(revoked, ['blob:one']);
   assert.equal(replaced.state.capture.amount, '40');
   assert.equal(replaced.state.capture.description, 'Donated goods');
   assert.equal(replaced.state.capture.receiptBlob, null);
+
+  // an empty form is replaced without a word
+  const empty = load(sources, Object.assign(base({ receiptURL: null, receiptBlob: null, dirty: false, text: '', pinned: new Set() }), { confirmDialog: async () => { throw new Error('must not ask'); } }));
+  assert.equal(await empty.prefillCapture(donation), true);
+  assert.equal(empty.state.capture.description, 'Donated goods');
 });

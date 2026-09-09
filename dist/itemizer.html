@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- Everything the app needs comes from this origin, so an escaping slip in a description or a receipt name cannot run as script. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-yWsKirO0cXRrPdAFFtgc/XO58h+Kud8W5+36LgOI1lc='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ee2QTDNAVyo0ftaO1nvsumjYmkwE4fvSUxNQ1GzQ6n4='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org https://www.fema.gov; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Itemizer</title>
 <meta name="description" content="Keep track of deductible expenses through the year, know the moment itemizing beats the standard deduction, and hand your preparer a filled-in worksheet.">
@@ -5618,12 +5618,22 @@ window.ITEMIZER_SINGLE_FILE = true;
     window.removeEventListener('beforeunload', warnBeforeLeaving);
     if (had) clearRecordingCheckpoint(); // the drive was thrown away on purpose: it must not come back at the next start
   }
+  /** The capture form holds something: typing, a photo, or fields a prefill filled in. The same three things the "understood" card is shown for. */
+  function captureHasWork() {
+    const cap = state.capture;
+    return !!(cap && (cap.dirty || cap.receiptBlob || (cap.text && cap.text.trim())));
+  }
   /** Work that exists only in memory: a live recording, a recorded drive not yet logged, or a capture form with typing or a photo in it. */
   function hasUnsavedWork() {
-    const cap = state.capture;
     return !!(state.recorder && state.recorder.state !== 'idle')
       || !!(state.trip && state.trip.points && state.trip.points.length)
-      || !!(cap && (cap.dirty || cap.receiptBlob || (cap.text && cap.text.trim()))); // the same three things the "understood" card is shown for
+      || captureHasWork();
+  }
+  /** Ask before the capture form alone is replaced. A prefill leaves a recording and a measured trip where they are, so it must not offer to discard them. */
+  async function confirmDiscardCapture(what) {
+    if (!captureHasWork()) return true;
+    const photo = !!(state.capture && state.capture.receiptBlob);
+    return confirmDialog('Throw away what you have entered?', `The details you have typed${photo ? ', including the receipt photo you just took,' : ''} will be lost. ${what}`, 'Discard', true);
   }
   /** Ask before throwing that work away. `what` is the sentence saying what happens instead. */
   async function confirmDiscardWork(what) {
@@ -6042,7 +6052,7 @@ window.ITEMIZER_SINGLE_FILE = true;
   /** Start a capture with the fields already filled; the user reviews and saves. False when the form on screen was kept instead. */
   async function prefillCapture(entry) {
     // the form being replaced can hold typing or a receipt photo that is nowhere else yet
-    if (!(await confirmDiscardWork('The prefilled entry will be shown instead.'))) return false;
+    if (!(await confirmDiscardCapture('The prefilled entry will be shown instead.'))) return false;
     state.captureMode = 'expense'; // the prefilled form lives in expense mode, wherever the user was
     const cap = freshCapture();
     cap.lineId = entry.lineId || null;
