@@ -1,10 +1,11 @@
 /*
- * app.js — the Itemizer UI.
+ * app.js — the Itemizer shell and the tax views.
  *
- * Plain DOM, no framework, no build step. Six views (Capture, Ledger, Advisor,
- * Insights, Worksheet, Settings) render from one state object; the tax engine in
- * rules.js and the recommender in advisor.js recompute after every change so
- * every view agrees.
+ * Plain DOM, no framework, no build step. The money views (Dashboard, Accounts, Transactions, Cash flow, Budget,
+ * Recurring, Goals, Investments) live in money-app.js; this file owns the shell they share (routing, navigation,
+ * the modal, the toast, settings, backups) and the tax views (Capture, Ledger, Advisor, Insights, Worksheet), which
+ * render from one state object. The tax engine in rules.js and the recommender in advisor.js recompute after every
+ * change so every view agrees.
  */
 (function () {
   'use strict';
@@ -20,7 +21,11 @@
   const VAL = globalThis.ItemizerValuation;
   const EXP = globalThis.ItemizerExperiments;
 
-  const VIEWS = ['capture', 'ledger', 'advisor', 'insights', 'worksheet', 'settings'];
+  const MONEY_VIEWS = ['dashboard', 'accounts', 'transactions', 'cashflow', 'budget', 'recurring', 'goals', 'investments'];
+  const TAX_VIEWS = ['capture', 'ledger', 'advisor', 'insights', 'worksheet'];
+  const VIEWS = MONEY_VIEWS.concat(TAX_VIEWS, ['settings']);
+  const MORE_VIEWS = ['cashflow', 'recurring', 'goals', 'investments', 'settings']; // reached from the phone's More sheet
+  const HOME = 'dashboard';
   const LEDGER_FILTERS = ['all', 'noreceipt', 'noack', 'dupes', 'samples'];
   const LEDGER_PAGE = 400; // rows drawn at once; the rest wait behind a button
   /** A filter the ledger cannot apply would leave every entry listed with no chip pressed, so anything else is "all". */
@@ -291,7 +296,7 @@
   }
   // The modal is a real dialog: the page behind it is inert, Tab stays inside, and focus returns to the opener on close.
   let modalOpener = null, modalOnCancel = null, modalScrollY = 0;
-  const behindModal = () => ['.topbar', '#main', '.tabbar'].map((sel) => document.querySelector(sel)).filter(Boolean);
+  const behindModal = () => ['.topbar', '#main', '.tabbar', '.sidenav'].map((sel) => document.querySelector(sel)).filter(Boolean);
   const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
   function trapTab(ev) {
     if (ev.key !== 'Tab') return;
@@ -421,10 +426,10 @@
 
   // ---- routing --------------------------------------------------------------
   function parseHash() {
-    const raw = (location.hash || '#capture').slice(1);
+    const raw = (location.hash || '#' + HOME).slice(1);
     const [view, query] = raw.split('?');
     const params = new URLSearchParams(query || '');
-    return { view: VIEWS.includes(view) ? view : 'capture', params };
+    return { view: VIEWS.includes(view) ? view : HOME, params };
   }
   function go(view, params) {
     const q = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -443,6 +448,7 @@
     state.view = view;
     const filter = params.get('filter');
     if (view === 'ledger' && filter) state.ledger.filter = normalizeLedgerFilter(filter);
+    if (MONEY && MONEY_VIEWS.includes(view)) MONEY.route(view, params);
     render();
     $('#main').scrollTo && window.scrollTo({ top: 0 });
   }
@@ -454,19 +460,44 @@
       recompute();
       for (const v of VIEWS) {
         const el = $('#view-' + v);
-        const active = v === state.view;
-        el.hidden = !active;
-        const tab = $('#tab-' + v);
-        if (active) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+        if (el) el.hidden = v !== state.view;
       }
+      markNav();
       renderYearSelect();
-      ({ capture: renderCapture, ledger: renderLedger, advisor: renderAdvisor, insights: renderInsights, worksheet: renderWorksheet, settings: renderSettings })[state.view]();
+      if (MONEY_VIEWS.includes(state.view)) { if (MONEY) MONEY.render(state.view); }
+      else ({ capture: renderCapture, ledger: renderLedger, advisor: renderAdvisor, insights: renderInsights, worksheet: renderWorksheet, settings: renderSettings })[state.view]();
       if (state.view !== 'worksheet') releaseSheetReceipts();
-      document.title = state.view === 'capture' ? 'Itemizer' : `Itemizer · ${state.view[0].toUpperCase()}${state.view.slice(1)}`;
+      document.title = state.view === HOME ? 'Itemizer' : `Itemizer · ${VIEW_TITLES[state.view] || state.view}`;
     } catch (err) {
       console.error(err);
       toast('Something went wrong drawing this view. Your entries are safe; try another tab or reload the page.', 8000);
     }
+  }
+
+  const VIEW_TITLES = { dashboard: 'Dashboard', accounts: 'Accounts', transactions: 'Transactions', cashflow: 'Cash flow', budget: 'Budget', recurring: 'Recurring', goals: 'Goals', investments: 'Investments', capture: 'Capture', ledger: 'Ledger', advisor: 'Advisor', insights: 'Insights', worksheet: 'Worksheet', settings: 'Settings' };
+  /**
+   * Mark where the reader is in each navigation: the sidebar names every view; the phone's bar has a Taxes tab for the
+   * five tax views and a More tab for the rest; the tax views share a row of their own. The tax-year picker belongs to
+   * the tax side and Settings, so the money views do without it.
+   */
+  function markNav() {
+    const v = state.view;
+    const isTax = TAX_VIEWS.includes(v);
+    for (const a of $$('[data-view]')) {
+      const on = a.dataset.view === v || (a.dataset.view === 'taxes' && isTax) || (a.dataset.view === 'more' && MORE_VIEWS.includes(v));
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    }
+    const taxNav = $('#taxNav'); if (taxNav) taxNav.hidden = !isTax;
+    const pick = $('#yearPick'); if (pick) pick.hidden = !(isTax || v === 'settings');
+  }
+  /** The phone's More tab: the views that do not fit on its bar, as a sheet of links. */
+  function openMoreSheet() {
+    const items = [['cashflow', 'Cash flow', 'Income and spending, month by month'], ['recurring', 'Recurring', 'Bills, subscriptions, and paychecks'], ['goals', 'Goals', 'Saving up and paying down'], ['investments', 'Investments', 'Holdings and their mix'], ['settings', 'Settings', 'Categories, rules, backups, tax figures']];
+    openModal(`<div class="card-head"><h2>More</h2><button class="btn btn-ghost btn-sm" type="button" data-more-close>Close</button></div><nav class="more-list" aria-label="More sections">${items.map(([id, label, sub]) => `<a href="#${id}" class="more-item" ${state.view === id ? 'aria-current="page"' : ''}><b>${esc(label)}</b><span class="muted small">${esc(sub)}</span></a>`).join('')}</nav>`, (panel) => {
+      panel.querySelector('[data-more-close]').onclick = closeModal;
+      // the link changes the hash; the sheet closes first so the route is not taken for a Back gesture
+      panel.querySelectorAll('.more-item').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); const to = a.getAttribute('href').slice(1); closeModal(); go(to); }));
+    });
   }
 
   function renderYearSelect() {
@@ -2606,6 +2637,7 @@
 
     $('#view-settings').innerHTML = `
       <div class="settings-grid">
+        ${MONEY ? MONEY.settingsHTML() : ''}
         <section class="card">
           <div class="card-head"><h2>About you</h2><span class="muted small">drives the standard deduction and floors</span></div>
           <div class="grid-2">
@@ -2651,7 +2683,7 @@
 
         <section class="card">
           <div class="card-head"><h2>Your data</h2><span class="muted small">${state.entries.length} ${plural(state.entries.length, 'entry', 'entries')}, all years · stored on this device</span></div>
-          <p class="note">Nothing leaves this device unless you export it. Back up before switching phones or clearing browser data; a backup includes receipt photos.</p>
+          <p class="note">Nothing leaves this device unless you export it. Back up before switching phones or clearing browser data; a backup includes receipt photos and every account, transaction, budget, and goal.</p>
           <div class="btn-row" style="margin-top:12px">
             <button class="btn" type="button" id="exportJson">Download backup</button>
             <button class="btn" type="button" id="importJson">Restore from backup</button>
@@ -2688,7 +2720,7 @@
 
         <section class="card danger-zone">
           <div class="card-head"><h2>Start over</h2></div>
-          <p class="note">Deletes every entry, receipt, and setting on this device. Download a backup first if there is any chance you want it back.</p>
+          <p class="note">Deletes every account, transaction, entry, receipt, and setting on this device. Download a backup first if there is any chance you want it back.</p>
           <div class="btn-row" style="margin-top:12px"><button class="btn btn-danger" type="button" id="wipeAll">Delete all data</button></div>
         </section>
 
@@ -2817,6 +2849,7 @@
     $('#importJson').onclick = () => $('#importInput').click();
     $('#exportAllCsv').onclick = () => downloadText('itemizer-all-years.csv', DB.toCSV(state.entries, S), 'text/csv');
     const ls = $('#loadSample2'); if (ls) ls.onclick = loadSampleData;
+    if (MONEY) MONEY.bindSettings($('#moneySettings'));
     const rs = $('#removeSamples2'); if (rs) rs.onclick = removeSampleData;
     $$('[data-forget]').forEach((b) => b.onclick = async () => {
       const key = b.dataset.forget, was = state.learned[key];
@@ -2850,7 +2883,7 @@
       state.dismissed = {}; recompute(); renderSettings(); toast('All recommendations are visible again.');
     };
     $('#wipeAll').onclick = async () => {
-      if (!(await confirmDialog('Delete everything?', 'All entries, receipts, learned categories, and settings on this device will be removed.', 'Delete all data', true))) return;
+      if (!(await confirmDialog('Delete everything?', 'All accounts, transactions, budgets, goals, tax entries, receipts, learned categories, and settings on this device will be removed.', 'Delete all data', true))) return;
       let failure = null;
       try { await DB.clearAll(); } catch (e) { failure = e; }
       // clearAll clears one store at a time, so whatever survived is what the views have to show: the state is re-read either way
@@ -3043,6 +3076,19 @@
     }
   }
 
+  // ---- the money side ------------------------------------------------------------
+  /** What money-app.js needs from the shell: the shared helpers, and the few ways it reaches into the tax side. */
+  const MONEY = typeof globalThis.ItemizerMoneyApp === 'function' && globalThis.ItemizerMoney ? globalThis.ItemizerMoneyApp({
+    $, $$, esc, listen, toast, openModal, closeModal, confirmDialog, focusKeyOf, restoreFocus, go, plural, downloadText, decodeStatement, lineSelectHTML,
+    state, render: () => render(),
+    updateSettings: async (patch) => { Object.assign(state.settings, await DB.updateSettings(patch)); },
+    /** Entries sent over from transactions; they are tax entries like any other once they land. */
+    addTaxEntries: async (entries) => { await DB.putEntries(entries); state.entries.push(...entries); for (const e of entries) if (e.description) rememberLine(e.description, e.lineId); },
+    deleteTaxEntries: async (ids) => { await DB.deleteEntries(ids); const gone = new Set(ids); state.entries = state.entries.filter((e) => !gone.has(e.id)); },
+    openTaxEntry: (id) => openEdit(id),
+    dismiss: async (id) => { const at = P.todayISO(); await DB.putDismissal(id, at); state.dismissed[id] = at; },
+  }) : null;
+
   // ---- bootstrap -------------------------------------------------------------
   let offerWaitingUpdate = null; // set by registerSW: re-offers a version that arrived while a drive was being recorded
   function registerSW() {
@@ -3101,6 +3147,7 @@
     state.entries = await DB.getEntries();
     for (const e of state.entries) { try { if (!e.taxYear && typeof e.date === 'string') e.taxYear = Number(e.date.slice(0, 4)); } catch (err) { /* a bad row never blocks start-up */ } }
     try { state.places = await DB.getPlaces(); state.trips = await DB.getTrips(); } catch (e) { state.places = []; state.trips = []; }
+    if (MONEY) await MONEY.load();
     discardCapture();
     state.trip = null; state.importer = null; state.captureMode = 'expense';
     clearLedgerSelection(); // the entries behind a selection may not have survived a restore or a wipe
@@ -3108,8 +3155,8 @@
   async function init() {
     const unfinished = readRecordingCheckpoint(); // read first: reloadState throws away any recorder, and with it the checkpoint
     // Every view is hidden until the first render, and an upgrade blocked by another tab never resolves: say where the app has got to.
-    const first = $('#view-capture');
-    if (first) { first.hidden = false; first.innerHTML = '<div class="empty"><h3>Opening your ledger…</h3><p class="note" id="bootNote"></p></div>'; }
+    const first = $('#view-' + parseHash().view);
+    if (first) { first.hidden = false; first.innerHTML = '<div class="empty"><h3>Opening your accounts…</h3><p class="note" id="bootNote"></p></div>'; }
     // store.js works out the sentence ("close other Itemizer tabs"); until the views exist there is nowhere else to show it
     const bootNotice = setInterval(() => { const p = $('#bootNote'); if (p && DB.notice) p.textContent = DB.notice; }, 800);
     try { await reloadState(); }
@@ -3126,6 +3173,8 @@
     $('#receiptPick').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onReceiptFile(f); };
     $('#importInput').onchange = importBackup;
     $('#csvInput').onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; onCSVFile(f); };
+    const moneyFile = $('#moneyFileInput'); if (moneyFile) moneyFile.onchange = (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (MONEY) MONEY.onFile(f); };
+    const more = $('#tabMore'); if (more) more.onclick = (ev) => { ev.preventDefault(); openMoreSheet(); };
     $('#modal').addEventListener('click', (ev) => { if (ev.target.classList.contains('modal-backdrop')) cancelModal(); });
     document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('#modal').hidden) cancelModal(); });
     // Escape hides a chart tip without moving the pointer; the next pointer move or Tab brings tips back.
@@ -3153,7 +3202,7 @@
   }
 
   // Expose a tiny surface for tests and power users.
-  globalThis.Itemizer = { state, render, loadSampleData, removeSampleData, compute: recompute, advice: () => state.advice, prefillCapture, measureTrip, logTrip, startRecording, stopRecording, onCSVFile, icsText };
+  globalThis.Itemizer = { state, render, loadSampleData, removeSampleData, compute: recompute, advice: () => state.advice, prefillCapture, measureTrip, logTrip, startRecording, stopRecording, onCSVFile, icsText, money: MONEY };
 
   const start = () => init().catch((e) => {
     try { toast(`Itemizer could not start: ${e && e.message ? e.message : 'unexpected error'}. Reload the page; your entries are still on the device.`, 30000); } catch (err) { /* nothing left to report with */ }

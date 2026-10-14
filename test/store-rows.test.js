@@ -31,9 +31,10 @@ const legacyDoc = {
   paramOverrides: { 2026: { mileage: { medical: 0.5 }, standardDeduction: { mfs: 0 } }, 1999: { mileage: { medical: 1 } } },
 };
 
-test('every store has a primary key, and the ledger, the settings row and the six memory stores are all accounted for', () => {
-  assert.equal(DB.DB_VERSION, 3);
-  assert.deepEqual(DB.STORE_NAMES, ['entries', 'receipts', 'places', 'trips', 'settings', 'learned', 'weights', 'dismissals', 'layouts', 'snapshots', 'overrides']);
+test('every store has a primary key, and the ledger, the settings row, the six memory stores and the money stores are all accounted for', () => {
+  assert.equal(DB.DB_VERSION, 4);
+  assert.deepEqual(DB.STORE_NAMES, ['entries', 'receipts', 'places', 'trips', 'settings', 'learned', 'weights', 'dismissals', 'layouts', 'snapshots', 'overrides', 'accounts', 'transactions', 'balances', 'holdings', 'goals', 'budgets', 'categories', 'rules', 'recurring']);
+  assert.deepEqual(DB.MONEY_STORES, DB.MONEY_DATA.concat(DB.MONEY_CONFIG));
   for (const name of DB.STORE_NAMES) assert.equal(typeof DB.STORES[name].key, 'string', name);
   assert.deepEqual(DB.DATA_STORES, ['entries', 'receipts', 'places', 'trips']);
   assert.deepEqual(DB.ROW_STORES, ['learned', 'weights', 'dismissals', 'layouts', 'snapshots', 'overrides']);
@@ -140,7 +141,7 @@ test('a spouse insured under a second long-term-care policy has an age band of t
   assert.equal(back.ltcAgeBracket, '41-50');
 });
 
-test('a version-2 backup imports into rows; a version-3 backup is rows already; the export is version 3', async () => {
+test('a version-2 backup imports into rows; a version-3 backup is rows already; the export is version 4', async () => {
   await DB.clearAll();
   const entry = { id: 'e1', date: '2026-01-05', taxYear: 2026, lineId: 'med.prescriptions', amount: 42.13, description: 'CVS', note: '', hasReceipt: false, receiptId: null };
   const v2 = { app: 'itemizer', version: 2, settings: legacyDoc, entries: [entry, { id: 'bad' }], places: [{ id: 'p1', name: 'Home', category: 'home', lat: 35, lon: -78 }, { id: 'p2' }], trips: [{ id: 't1', date: '2026-02-02', fromId: 'p1', toId: 'p1', miles: 3 }, { id: 't2', date: 'nope' }] };
@@ -153,8 +154,8 @@ test('a version-2 backup imports into rows; a version-3 backup is rows already; 
   const s = await DB.getSettings();
   assert.equal(s.filingStatus, 'mfj'); assert.equal(s.experimentCorrections, false); assert.equal(s.learned, undefined);
   const out = await DB.exportJSON();
-  assert.equal(out.version, 3);
-  assert.deepEqual(Object.keys(out), ['app', 'version', 'exportedAt', 'settings', 'learned', 'weights', 'dismissals', 'layouts', 'snapshots', 'overrides', 'entries', 'places', 'trips', 'receipts'], 'receipts stay last so the streamed backup can append them');
+  assert.equal(out.version, 4);
+  assert.deepEqual(Object.keys(out), ['app', 'version', 'exportedAt', 'settings', 'learned', 'weights', 'dismissals', 'layouts', 'snapshots', 'overrides', 'entries', 'places', 'trips', ...DB.MONEY_STORES, 'receipts'], 'receipts stay last so the streamed backup can append them');
   assert.equal(out.settings.learned, undefined);
   assert.deepEqual(out.learned.map((r) => r.key).sort(), ['cvs', 'joes auto']);
   assert.equal(out.overrides.length, 2);
@@ -177,7 +178,7 @@ test('a restore that replaces the ledger keeps what the app has learned; delete-
   const c = await DB.counts();
   assert.ok(Object.values(c).every((n) => n === 0), JSON.stringify(c));
   const info = await DB.storageInfo();
-  assert.equal(info.mode, 'memory'); assert.equal(info.version, 3); assert.deepEqual(info.stores, DB.STORE_NAMES); assert.equal(info.counts.entries, 0);
+  assert.equal(info.mode, 'memory'); assert.equal(info.version, 4); assert.deepEqual(info.stores, DB.STORE_NAMES); assert.equal(info.counts.entries, 0);
 });
 
 test('deleting an entry takes the trip that was logged for it, and leaves the other trips alone', async () => {

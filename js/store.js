@@ -19,6 +19,22 @@
  *                              filingStatus?, agi?, age65?, blind?, spouseAge65?, spouseBlind? }   the settings the forecast was made under
  *   overrides    id          { id: 'taxYear:path', taxYear, path, value, updatedAt }   one overridden tax parameter
  *
+ * The household's money (version 4):
+ *
+ *   accounts     id          { id, name, type, institution, mask, balanceMode, hidden, closed, excludeFromNetWorth, importKey, note, sample, createdAt, updatedAt }
+ *   transactions id          { id, accountId, date, amount, merchant, original, categoryId, notes, tags, reviewed, hidden, splits?, entryId?, fitid?, pair?, source, sample, createdAt, updatedAt }
+ *   balances     id          { id: 'accountId:date', accountId, date, balance, source, sample }   what an account was worth at the end of a day
+ *   holdings     id          { id, accountId, symbol, name, assetClass, shares, price, priceDate, costBasis, sample, updatedAt }
+ *   goals        id          { id, name, kind, target, targetDate, accountIds, startAmount, contributions, note, sample, createdAt, updatedAt }
+ *   budgets      id          { id: 'month:categoryId', month, categoryId, amount, sample }   carries forward until changed
+ *   categories   id          { id, name, groupId, budget, rollover, rolloverStart, hidden, custom, updatedAt }   edits laid over the built-ins
+ *   rules        id          { id, order, when: { field, op, text, sign, min, max, accountId }, then: { categoryId, merchant, addTags, hide, review }, createdAt, updatedAt }
+ *   recurring    id          { id: streamKey, status, name, amount, cadence, updatedAt }   what the user said about a recurring charge
+ *
+ * Amounts are signed from the owner's side (money in positive) and balances are what the account is worth (a debt is
+ * negative); see money.js. Account numbers are never stored: an imported account keeps a hash of its number and the
+ * last four digits.
+ *
  * Records reference other records by id (lineId, entryId, receiptId, fromId, toId); display labels are looked up
  * from the schema or the referenced row when shown. The two labels a trip keeps (fromLabel, toLabel) are the
  * mileage log's own record of where it went, kept so the log survives a deleted place. An entry's `source` is
@@ -32,7 +48,7 @@
   'use strict';
 
   const DB_NAME = 'itemizer';
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
   const LS_PREFIX = 'itemizer:store:'; // fallback: one key per store
   const LS_LEGACY_KEY = 'itemizer:fallback'; // the single document the fallback kept before version 3
   const SETTINGS_KEY = 'main';
@@ -50,11 +66,23 @@
     layouts: { key: 'signature' },
     snapshots: { key: 'id', indexes: { taxYear: 'taxYear' } },
     overrides: { key: 'id', indexes: { taxYear: 'taxYear' } },
+    accounts: { key: 'id' },
+    transactions: { key: 'id', indexes: { date: 'date', accountId: 'accountId' } },
+    balances: { key: 'id', indexes: { accountId: 'accountId' } },
+    holdings: { key: 'id', indexes: { accountId: 'accountId' } },
+    goals: { key: 'id' },
+    budgets: { key: 'id', indexes: { month: 'month' } },
+    categories: { key: 'id' },
+    rules: { key: 'id' },
+    recurring: { key: 'id' },
   };
   const STORE_NAMES = Object.keys(STORES);
   const DATA_STORES = ['entries', 'receipts', 'places', 'trips']; // the ledger itself
   const ROW_STORES = ['learned', 'weights', 'dismissals', 'layouts', 'snapshots', 'overrides']; // what the settings document used to carry
   const STAMPED = new Set(['learned', 'weights', 'layouts', 'overrides']); // rows that carry updatedAt
+  const MONEY_DATA = ['accounts', 'transactions', 'balances', 'holdings', 'goals', 'budgets']; // the household's records
+  const MONEY_CONFIG = ['categories', 'rules', 'recurring']; // what the user has taught the money side; kept by a ledger-only wipe
+  const MONEY_STORES = MONEY_DATA.concat(MONEY_CONFIG);
 
   /** The settings row: scalar configuration only. Collections have their own stores. */
   const DEFAULT_SETTINGS = {
@@ -81,6 +109,7 @@
     experimentSnapshots: true,
     experimentCorrections: true,
     experimentNudges: true,
+    budgetMode: 'category', // 'category': a budget per category; 'flex': fixed, one flexible pool, and non-monthly
   };
   const LEGACY_EXPERIMENT_FLAGS = { snapshots: 'experimentSnapshots', corrections: 'experimentCorrections', nudges: 'experimentNudges' };
 
@@ -103,6 +132,20 @@
   const FILING_STATUSES = ['single', 'mfj', 'mfs', 'hoh', 'qss'];
   const LTC_AGE_BRACKETS = ['', '40-', '41-50', '51-60', '61-70', '71+']; // LTC_BRACKETS in rules.js
   const PLACE_CATEGORIES = ['home', 'medical', 'business', 'charity', 'school', 'other']; // PLACE_CATEGORIES in geo.js
+  // the money side's fixed lists, as money.js defines them
+  const ACCOUNT_TYPES = ['checking', 'savings', 'cash', 'credit', 'brokerage', 'retirement', 'property', 'vehicle', 'other_asset', 'mortgage', 'loan', 'other_liability']; // ACCOUNT_TYPES
+  const GROUP_IDS = ['income', 'housing', 'bills', 'food', 'transport', 'shopping', 'health', 'lifestyle', 'financial', 'children', 'education', 'gifts', 'business', 'other', 'transfer']; // GROUPS
+  const BUDGET_BUCKETS = ['fixed', 'flexible', 'nonmonthly']; // BUDGET_TYPES
+  const ASSET_CLASSES = ['us_stock', 'intl_stock', 'bond', 'cash', 'real_estate', 'crypto', 'other']; // ASSET_CLASSES
+  const CADENCE_IDS = ['weekly', 'biweekly', 'monthly', 'quarterly', 'semiannual', 'annual']; // CADENCES
+  const TX_SOURCES = ['manual', 'csv', 'ofx', 'sample', 'split'];
+  const BALANCE_SOURCES = ['manual', 'ofx', 'csv', 'holdings'];
+  const MAX_MONEY = 1e9;
+  const okCat = (v) => typeof v === 'string' && ID.test(v) && !RESERVED_KEY.test(v); // category ids share the id alphabet
+  /** A calendar day that exists: the format alone would let 2026-13-01 or Feb 30 through. */
+  const realDay = (v) => { if (typeof v !== 'string' || !ISO_DAY.test(v)) return false; const [y, m, d] = v.split('-').map(Number); return y >= 1900 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= new Date(Date.UTC(y, m, 0)).getUTCDate(); };
+  const money2 = (v) => { const n = finite(v); return n == null || Math.abs(n) > MAX_MONEY ? null : Math.round(n * 100) / 100; };
+  const tagList = (v, max) => Array.from(new Set((Array.isArray(v) ? v : []).map((t) => str(t, 40).trim()).filter((t) => t && !RESERVED_KEY.test(t)))).slice(0, max || 20);
   const MAX_POINTS = 5000; // a recorded track is thinned to about one point per ten metres, so this is a very long drive
   const yearOf = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 2000 && n <= 2100 ? n : null; };
   const finite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -128,6 +171,7 @@
     if (!LTC_AGE_BRACKETS.includes(out.ltcAgeBracket)) out.ltcAgeBracket = '';
     if (!LTC_AGE_BRACKETS.includes(out.spouseLtcAgeBracket)) out.spouseLtcAgeBracket = '';
     if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
+    if (!['category', 'flex'].includes(out.budgetMode)) out.budgetMode = 'category';
     return out;
   }
 
@@ -187,6 +231,70 @@
       }
       case 'places': return sanitizePlace(r);
       case 'trips': return sanitizeTrip(r, schema);
+      case 'accounts': return sanitizeAccount(r);
+      case 'transactions': return sanitizeTransaction(r);
+      case 'balances': {
+        const balance = money2(r.balance);
+        if (!okId(r.accountId) || !realDay(r.date) || balance == null) return null;
+        const out = { id: `${r.accountId}:${r.date}`, accountId: r.accountId, date: r.date, balance, source: BALANCE_SOURCES.includes(r.source) ? r.source : 'manual' };
+        if (r.sample) out.sample = true;
+        return out;
+      }
+      case 'holdings': {
+        const shares = finite(r.shares), price = finite(r.price);
+        if (!okId(r.id) || !okId(r.accountId) || shares == null || Math.abs(shares) > MAX_MONEY || price == null || price < 0 || price > MAX_MONEY) return null;
+        const symbol = str(r.symbol, 16).trim().toUpperCase(), name = str(r.name, 120).trim();
+        if (!symbol && !name) return null;
+        const cost = r.costBasis === '' || r.costBasis == null ? null : money2(r.costBasis);
+        return { id: r.id, accountId: r.accountId, symbol, name, assetClass: ASSET_CLASSES.includes(r.assetClass) ? r.assetClass : 'other', shares: Math.round(shares * 1e6) / 1e6, price: Math.round(price * 1e4) / 1e4, priceDate: ISO_DAY.test(str(r.priceDate, 10)) ? r.priceDate : '', costBasis: cost, sample: !!r.sample, updatedAt: str(r.updatedAt, 40) || nowISO() };
+      }
+      case 'goals': {
+        const name = str(r.name, 80).trim(), target = money2(r.target);
+        if (!okId(r.id) || !name || target == null || target < 0) return null;
+        const contributions = (Array.isArray(r.contributions) ? r.contributions : []).map((c) => (c && realDay(c.date) && money2(c.amount) != null ? { date: c.date, amount: money2(c.amount) } : null)).filter(Boolean).slice(0, 1000);
+        return {
+          id: r.id, name, kind: r.kind === 'debt' ? 'debt' : 'save', target, targetDate: realDay(r.targetDate) ? r.targetDate : '',
+          accountIds: Array.from(new Set((Array.isArray(r.accountIds) ? r.accountIds : []).filter(okId))).slice(0, 20), startAmount: money2(r.startAmount) || 0, contributions,
+          note: str(r.note, 500), sample: !!r.sample, createdAt: str(r.createdAt, 40) || nowISO(), updatedAt: str(r.updatedAt, 40) || nowISO(),
+        };
+      }
+      case 'budgets': {
+        const month = str(r.month, 7), amount = money2(r.amount);
+        if (!MONTH.test(month) || !okCat(r.categoryId) || amount == null || amount < 0) return null;
+        const out = { id: `${month}:${r.categoryId}`, month, categoryId: r.categoryId, amount };
+        if (r.sample) out.sample = true;
+        return out;
+      }
+      case 'categories': {
+        if (!okCat(r.id)) return null;
+        const out = { id: r.id, updatedAt: str(r.updatedAt, 40) || nowISO() };
+        const name = str(r.name, 60).trim(); if (name) out.name = name;
+        if (GROUP_IDS.includes(r.groupId)) out.groupId = r.groupId;
+        if (BUDGET_BUCKETS.includes(r.budget)) out.budget = r.budget;
+        if (r.rollover) out.rollover = true;
+        if (MONTH.test(str(r.rolloverStart, 7))) out.rolloverStart = r.rolloverStart;
+        if (r.hidden) out.hidden = true;
+        if (r.custom) { if (!name || !out.groupId) return null; out.custom = true; }
+        return out;
+      }
+      case 'rules': {
+        const w = r.when && typeof r.when === 'object' ? r.when : null, t = r.then && typeof r.then === 'object' ? r.then : null;
+        if (!okId(r.id) || !w || !t) return null;
+        const text = str(w.text, 120).trim();
+        if (!text) return null;
+        const bound = (v) => (v === '' || v == null ? null : money2(v) != null && money2(v) >= 0 ? money2(v) : null);
+        const when = { field: ['merchant', 'original', 'any'].includes(w.field) ? w.field : 'any', op: ['contains', 'is', 'starts'].includes(w.op) ? w.op : 'contains', text, sign: ['in', 'out'].includes(w.sign) ? w.sign : '', min: bound(w.min), max: bound(w.max), accountId: okId(w.accountId) ? w.accountId : '' };
+        const then = { categoryId: okCat(t.categoryId) ? t.categoryId : '', merchant: str(t.merchant, 80).trim(), addTags: tagList(t.addTags, 10), hide: !!t.hide, review: !!t.review };
+        if (!then.categoryId && !then.merchant && !then.addTags.length && !then.hide && !then.review) return null; // a rule that does nothing
+        const order = finite(r.order);
+        return { id: r.id, order: order == null ? 0 : Math.round(order), when, then, createdAt: str(r.createdAt, 40) || nowISO(), updatedAt: str(r.updatedAt, 40) || nowISO() };
+      }
+      case 'recurring': {
+        const id = str(r.id, 64).trim();
+        if (!okKey(id) || !/^[a-z0-9]{1,40}\|(?:in|out)$/.test(id)) return null;
+        const amount = r.amount === '' || r.amount == null ? null : money2(r.amount);
+        return { id, status: ['ignored', 'confirmed'].includes(r.status) ? r.status : '', name: str(r.name, 80).trim(), amount: amount != null && amount > 0 ? amount : null, cadence: CADENCE_IDS.includes(r.cadence) ? r.cadence : '', updatedAt: str(r.updatedAt, 40) || nowISO() };
+      }
       case 'settings': return r && typeof r.key === 'string' ? { key: r.key, value: sanitizeSettings(r.value) } : null;
       default: return r && r[STORES[store].key] != null ? r : null;
     }
@@ -599,6 +707,61 @@
   const syncOverrides = (taxYear, nested) => syncRows('overrides', flattenOverrides(taxYear, nested).map((r) => sanitizeRow('overrides', r)).filter(Boolean), (r) => Number(r.taxYear) === Number(taxYear));
   const clearOverrides = () => clearStore('overrides');
 
+  // ---- the money side ----------------------------------------------------------------
+
+  /** Every money store as arrays of rows, read together at start-up. */
+  async function getMoney() {
+    const lists = await Promise.all(MONEY_STORES.map(allRows));
+    const out = {};
+    MONEY_STORES.forEach((store, i) => { out[store] = lists[i]; });
+    return out;
+  }
+  /**
+   * Write and delete rows across the money stores in one transaction, so an import or an edit that touches several
+   * stores lands whole or not at all. `batch`: { put: { store: [rows] }, delete: { store: [keys] } }. Every row is
+   * checked first; one that cannot be trusted refuses the whole batch and says which store it was for. Returns the
+   * rows as written.
+   */
+  async function writeMoney(batch) {
+    const put = {}, del = {};
+    for (const [store, rows] of Object.entries((batch && batch.put) || {})) {
+      if (!MONEY_STORES.includes(store)) throw new Error(`Not a money store: ${store}.`);
+      const clean = (rows || []).map((r) => sanitizeRow(store, r));
+      const bad = clean.findIndex((r) => !r);
+      if (bad >= 0) throw new Error(`A ${store.replace(/s$/, '')} could not be saved: it is missing something it needs.`);
+      if (clean.length) put[store] = clean;
+    }
+    for (const [store, keys] of Object.entries((batch && batch.delete) || {})) {
+      if (!MONEY_STORES.includes(store)) throw new Error(`Not a money store: ${store}.`);
+      if (keys && keys.length) del[store] = keys.slice();
+    }
+    const names = Array.from(new Set(Object.keys(put).concat(Object.keys(del))));
+    if (!names.length) return put;
+    const db = await openDB();
+    if (!db) {
+      for (const [store, keys] of Object.entries(del)) LS.delMany(store, keys);
+      for (const [store, rows] of Object.entries(put)) LS.putMany(store, rows);
+      return put;
+    }
+    // a list of names gives the object stores by name, even when the list has one name in it
+    await tx(db, names, 'readwrite', (os) => {
+      for (const [store, keys] of Object.entries(del)) keys.forEach((k) => os[store].delete(k));
+      for (const [store, rows] of Object.entries(put)) rows.forEach((r) => os[store].put(r));
+    });
+    return put;
+  }
+  /** An account and everything recorded under it: its transactions, balances, and holdings, and its place in any goal. */
+  async function deleteAccount(id) {
+    const [txs, bals, holds, goals] = await Promise.all(['transactions', 'balances', 'holdings', 'goals'].map(allRows));
+    const goalsTouched = goals.filter((g) => (g.accountIds || []).includes(id)).map((g) => Object.assign({}, g, { accountIds: g.accountIds.filter((a) => a !== id), updatedAt: nowISO() }));
+    const gone = { transactions: txs.filter((t) => t.accountId === id), balances: bals.filter((b) => b.accountId === id), holdings: holds.filter((h) => h.accountId === id) };
+    await writeMoney({
+      put: { goals: goalsTouched },
+      delete: { accounts: [id], transactions: gone.transactions.map((t) => t.id), balances: gone.balances.map((b) => b.id), holdings: gone.holdings.map((h) => h.id) },
+    });
+    return gone;
+  }
+
   // ---- backup / restore -------------------------------------------------------
 
   /** A stored photo as a data URL. Done from the bytes rather than with FileReader, so it works wherever the app and its tests run. */
@@ -631,8 +794,10 @@
   /** The backup without receipts: the settings row, then every other store as an array of rows. Receipts are appended by exportBackup. */
   async function exportJSON(opts) {
     opts = opts || {};
-    const [settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips] = await Promise.all([getSettings(), ...ROW_STORES.map(allRows), getEntries(), getPlaces(), getTrips()]);
-    const out = { app: 'itemizer', version: 3, exportedAt: nowISO(), settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips, receipts: [] };
+    const [settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips, ...money] = await Promise.all([getSettings(), ...ROW_STORES.map(allRows), getEntries(), getPlaces(), getTrips(), ...MONEY_STORES.map(allRows)]);
+    const out = { app: 'itemizer', version: 4, exportedAt: nowISO(), settings, learned, weights, dismissals, layouts, snapshots, overrides, entries, places, trips };
+    MONEY_STORES.forEach((store, i) => { out[store] = money[i]; });
+    out.receipts = []; // last, so the streamed backup can append the photos
     if (opts.includeReceipts !== false) {
       const all = await getAllReceipts();
       const orphans = new Set(orphanReceiptIds(all, entries));
@@ -684,6 +849,44 @@
     if (Array.isArray(e.items)) out.items = e.items.filter((x) => x && typeof x === 'object').slice(0, 200);
     if (e.fullAmount != null && Number.isFinite(Number(e.fullAmount))) out.fullAmount = Number(e.fullAmount);
     if (e.share != null && Number.isFinite(Number(e.share))) out.share = Number(e.share);
+    if (okId(e.txId)) out.txId = e.txId; // the transaction this entry was sent from
+    return out;
+  }
+
+  /** An account from a backup or an edit, or null. The account number itself has no field to arrive in. */
+  function sanitizeAccount(a) {
+    if (!a || typeof a !== 'object' || !okId(a.id)) return null;
+    const name = str(a.name, 80).trim();
+    if (!name || !ACCOUNT_TYPES.includes(a.type)) return null;
+    return {
+      id: a.id, name, type: a.type, institution: str(a.institution, 80).trim(), mask: str(a.mask, 40).replace(/\D/g, '').slice(-4),
+      balanceMode: a.balanceMode === 'manual' || a.balanceMode === 'transactions' ? a.balanceMode : '',
+      hidden: !!a.hidden, closed: !!a.closed, excludeFromNetWorth: !!a.excludeFromNetWorth,
+      importKey: /^ofx-[a-z0-9]{1,40}$/.test(str(a.importKey, 48)) ? a.importKey : '', note: str(a.note, 500),
+      sample: !!a.sample, createdAt: str(a.createdAt, 40) || nowISO(), updatedAt: str(a.updatedAt, 40) || nowISO(),
+    };
+  }
+  /**
+   * A transaction from a backup or an import, or null. Splits survive only when they add up to the transaction to the
+   * cent, since every report reads the splits instead of the whole.
+   */
+  function sanitizeTransaction(t) {
+    if (!t || typeof t !== 'object' || !okId(t.id) || !okId(t.accountId) || !realDay(t.date)) return null;
+    const amount = money2(t.amount);
+    if (amount == null) return null;
+    const out = {
+      id: t.id, accountId: t.accountId, date: t.date, amount, merchant: str(t.merchant, 80).trim(), original: str(t.original, 300).trim(),
+      categoryId: okCat(t.categoryId) ? t.categoryId : 'uncategorized', notes: str(t.notes, 1000), tags: tagList(t.tags, 20),
+      reviewed: !!t.reviewed, hidden: !!t.hidden, source: TX_SOURCES.includes(t.source) ? t.source : 'manual', sample: !!t.sample,
+      createdAt: str(t.createdAt, 40) || nowISO(), updatedAt: str(t.updatedAt, 40) || nowISO(),
+    };
+    if (Array.isArray(t.splits) && t.splits.length >= 2) {
+      const splits = t.splits.slice(0, 20).map((x) => (x && okCat(x.categoryId) && money2(x.amount) != null ? { categoryId: x.categoryId, amount: money2(x.amount), notes: str(x.notes, 300) } : null));
+      if (splits.every(Boolean) && Math.round(splits.reduce((a, x) => a + x.amount, 0) * 100) === Math.round(amount * 100)) out.splits = splits;
+    }
+    if (okId(t.entryId)) out.entryId = t.entryId;
+    if (okId(t.pair)) out.pair = t.pair;
+    const fitid = str(t.fitid, 120).trim(); if (fitid) out.fitid = fitid;
     return out;
   }
 
@@ -765,9 +968,13 @@
       const incoming = cleanRows(store, data[store], schema);
       rows[store] = legacy ? legacy[store].concat(incoming) : incoming;
     }
+    // the money side, in a version-4 file; an older file has none and leaves what is here alone
+    const money = {};
+    for (const store of MONEY_STORES) money[store] = cleanRows(store, data[store], schema);
     // a replace takes the old ledger away only once the new one is written, so a storage failure part-way leaves what
     // was here rather than nothing
-    const replaced = opts.replace ? await Promise.all(DATA_STORES.map(allKeys)) : null;
+    const REPLACED = DATA_STORES.concat(MONEY_DATA);
+    const replaced = opts.replace ? await Promise.all(REPLACED.map(allKeys)) : null;
     // photos first: an entry may only keep its receipt mark once the photo it names is really here. One at a time, so a
     // year of them is never all in memory at once.
     const known = new Set(entries.map((e) => e.id));
@@ -775,7 +982,7 @@
     let receipts = 0, badReceipts = 0, orphanReceipts = 0;
     const stored = new Set();
     // what has actually been committed, so a restore that fails part-way can say what landed instead of leaving the user guessing
-    const written = { entries: 0, receipts: 0, places: 0, trips: 0, rows: {} };
+    const written = { entries: 0, receipts: 0, places: 0, trips: 0, rows: {}, money: {} };
     try {
       for (const r of data.receipts || []) {
         if (!r || typeof r.id !== 'string' || !r.dataURL) { badReceipts++; continue; }
@@ -794,10 +1001,12 @@
       await putRows('places', places); written.places = places.length;
       await putRows('trips', trips); written.trips = trips.length;
       for (const store of ROW_STORES) { await putRows(store, rows[store]); written.rows[store] = rows[store].length; }
+      for (const store of MONEY_STORES) { await putRows(store, money[store]); written.money[store] = money[store].length; }
       if (replaced) {
         const fresh = { entries: entries.map((e) => e.id), receipts: Array.from(stored), places: places.map((p) => p.id), trips: trips.map((t) => t.id) };
-        for (let i = 0; i < DATA_STORES.length; i++) {
-          const store = DATA_STORES[i], kept = new Set(fresh[store]);
+        for (const store of MONEY_DATA) fresh[store] = money[store].map((r) => r[STORES[store].key]);
+        for (let i = 0; i < REPLACED.length; i++) {
+          const store = REPLACED[i], kept = new Set(fresh[store]);
           await deleteRows(store, replaced[i].filter((k) => !kept.has(k)));
         }
       }
@@ -811,7 +1020,8 @@
         await updateSettings(incoming);
       }
       const counts = {}; for (const store of ROW_STORES) counts[store] = rows[store].length;
-      return { entries: entries.length, skipped, receipts, badReceipts, dangling, orphanReceipts, rows: counts };
+      const moneyCounts = {}; for (const store of MONEY_STORES) moneyCounts[store] = money[store].length;
+      return { entries: entries.length, skipped, receipts, badReceipts, dangling, orphanReceipts, rows: counts, money: moneyCounts };
     } catch (err) {
       // the rows already written stay: the caller re-reads the store and shows whatever landed, and `written` says what that was
       const n = written.entries;
@@ -822,12 +1032,12 @@
     }
   }
 
-  /** Remove everything; with keepSettings, only the ledger (entries, receipts, places, trips) goes and what the app has learned stays. */
+  /** Remove everything; with keepSettings, only the records (the tax ledger and the money side's accounts, transactions, and the rest) go and what the app has learned stays. */
   async function clearAll(opts) {
     opts = opts || {};
     // one store at a time: a store that will not clear must not stop the others, and the user has to be told what is left
     const failed = [];
-    for (const store of opts.keepSettings ? DATA_STORES : STORE_NAMES) {
+    for (const store of opts.keepSettings ? DATA_STORES.concat(MONEY_DATA) : STORE_NAMES) {
       try { await clearStore(store); } catch (e) { failed.push(store); }
     }
     if (failed.length) throw new Error(`These were not cleared: ${failed.join(', ')}.`);
@@ -885,9 +1095,10 @@
   }
 
   root.ItemizerStore = {
-    DB_VERSION, STORES, STORE_NAMES, DATA_STORES, ROW_STORES, DEFAULT_SETTINGS,
-    sanitizeSettings, sanitizeRow, sanitizeEntry, sanitizePlace, sanitizeTrip, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides, orphanReceiptIds,
-    openDB, allRows, getRow, putRow, putRows, deleteRow, clearStore, syncRows, countRows, counts,
+    DB_VERSION, STORES, STORE_NAMES, DATA_STORES, ROW_STORES, MONEY_DATA, MONEY_CONFIG, MONEY_STORES, DEFAULT_SETTINGS,
+    sanitizeSettings, sanitizeRow, sanitizeEntry, sanitizePlace, sanitizeTrip, sanitizeAccount, sanitizeTransaction, splitLegacySettings, isLegacySettings, flattenOverrides, nestOverrides, orphanReceiptIds,
+    openDB, allRows, getRow, putRow, putRows, deleteRow, deleteRows, clearStore, syncRows, countRows, counts,
+    getMoney, writeMoney, deleteAccount,
     getEntries, putEntry, putEntries, deleteEntry, deleteEntries, putReceipt, getReceipt, deleteReceipt, getAllReceipts, putEntriesWithReceipt, putTripWithEntry,
     getPlaces, putPlace, deletePlace, getTrips, putTrip, deleteTrip, getSettings, saveSettings, updateSettings,
     getLearned, putLearned, deleteLearned, clearLearned, getWeights, syncWeights, clearWeights, getDismissals, putDismissal, clearDismissals,

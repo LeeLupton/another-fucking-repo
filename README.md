@@ -1,12 +1,40 @@
 # Itemizer
 
-A deductible-expense tracker built from the paper organizer sheet tax preparers hand out, the one headed **"Keep track of your expenses. List amounts for items you have. Save receipts for your deductions."** Every line on that sheet is here (Medical, Education, Self-Employed, Charitable Contributions, Volunteer Work, Taxes, Mortgage & Other Interest, Gambling Losses, Casualty Losses), plus the arithmetic the sheet leaves to you, the geography behind deductible miles, and a recommender that works for the person whose data it is.
+A household-finance app and a deductible-expense tracker in one page. The money side keeps accounts, transactions, budgets, cash flow, recurring bills, goals, and investments, the way a subscription budgeting app does, except that it runs on the device and the bank connection is the statement file the bank already lets you download. The tax side is built from the paper organizer sheet tax preparers hand out, the one headed **"Keep track of your expenses. List amounts for items you have. Save receipts for your deductions."** Every line on that sheet is here (Medical, Education, Self-Employed, Charitable Contributions, Volunteer Work, Taxes, Mortgage & Other Interest, Gambling Losses, Casualty Losses), plus the arithmetic the sheet leaves to you, the geography behind deductible miles, and a recommender that works for the person whose data it is. A transaction that is deductible goes to the worksheet in two taps.
 
 It runs entirely in the browser, stores everything on the device, installs to a phone home screen, and works offline. No server, no accounts, no tracking.
 
 **Use it:** https://leelupton.github.io/another-fucking-repo/ (deployed from `main` by the Actions workflow, which needs the repository's Pages source set to GitHub Actions) or download the single file `dist/itemizer.html` from the latest CI run and open it anywhere.
 
-## What it does
+## Money
+
+**Dashboard.** Net worth and its last twelve months, spending this month against last month by the same day, what is left of the budget, the transactions waiting for a look, the bills due in the next two weeks, the month's income and spending by group, goals, and the tax verdict with a count of transactions that look deductible and are not on the worksheet yet.
+
+**Accounts.** Checking, savings, cash, credit cards, brokerage and retirement accounts, real estate, vehicles, mortgages, loans, and anything else, grouped the way a balance sheet is. A transaction account's balance walks from the nearest balance you entered or imported through every transaction in between, forward or back; a house, a car, or a loan is worth the last figure you gave it. Net worth over one month to three years, with the numbers as a table. Account numbers are never stored: an imported account keeps a hash of its number and the last four digits.
+
+**Import.** OFX, QFX, and QBO, the files most banks offer as "Download for Quicken" or "for QuickBooks", in both the SGML and the XML dialect: transactions with the bank's own id for each, the statement balance, and a brokerage's positions with their prices. Any CSV the tax importer can read, plus the columns an export from another budgeting app carries (account, category, tags, notes, the original statement line, a running balance), so a year of history can move over with its categories. A second import of the same statement brings in nothing twice: rows match by the bank's id, or by account, day, amount, and merchant, counted, so two identical coffees on one day still come in. The same money seen leaving one account and landing in another is marked a transfer, or a card payment when it lands on a card, and stays out of spending.
+
+**Transactions.** Statement lines become merchant names people recognise (`SQ *BLUE OCEAN COFFEE 0042  MOREHEAD CITY NC` is Blue Ocean Coffee). Each one gets a category from your rules first, then from where you filed the same merchant before, then from keywords, and says which. Search by merchant, note, tag, or amount; filter by account, category, month, what still needs review, what is uncategorized, what looks deductible, and what is hidden. Split one charge between categories, tag it, hide it from reports, mark many at once. Change a category and you are offered a rule, and the merchant's other transactions with it. Export what is on screen as CSV.
+
+**Rules.** When the merchant or the statement text contains, is, or starts with some text, and optionally only money in or out, between two amounts, or in one account: file it under a category, rename the merchant, add tags, hide it, or mark it reviewed. Rules run on every import and on the existing transactions when you save one.
+
+**Categories.** Fifty-six built in, in fifteen groups, each with a budget style (fixed, flexible, or non-monthly). Rename, regroup, hide, turn on rollover, or add your own.
+
+**Budget.** A budget per category per month that carries into the months after it until you change it, so it is set once rather than every month. Rollover carries what was left, or overspent, into the next month. Flex budgeting keeps fixed bills by category, pools the day-to-day categories into one figure, and saves for the non-monthly ones a month at a time. Fill a month from the last three months' averages, or copy last month. A pace line on every meter shows where spending should be for the day of the month.
+
+**Cash flow.** Income, spending, what was kept, and the savings rate for a month, a quarter, a year, or twelve months; income beside spending month by month; a picture of where the money went, from income through to each group and what was kept; and a breakdown by category, group, merchant, or tag, each row a link to the transactions behind it.
+
+**Recurring.** Bills, subscriptions, and paychecks found from steady charges: two identical monthly charges, or three of anything else, holding to one interval and one amount. The weekly grocery run never counts, because its amount is all over the place; a power bill that varies still does. A month's calendar with what is paid, expected, and overdue; what is left to pay; and the full list, where a charge can be renamed, given an amount or a schedule, or marked as not recurring. A subscription whose price moved is expected at the new price, and the dashboard says so.
+
+**Goals.** Save toward a figure by a date, or pay a debt down. A goal tied to accounts fills in from their balances; one without is filled by the money you log against it. Each says what is needed a month, the pace of the last three months, and where that pace lands.
+
+**Investments.** Holdings by account with shares, price, value, and gain against cost basis; the mix by asset class; a brokerage statement's positions come in with its OFX. There is no price feed, so prices are the statement's or the ones you enter, and each change is kept in the account's balance history.
+
+**Worth a look.** Spending running ahead of last month, a category over budget or close to it with days left, a category well above its own average, bills due this week and whether the cash on hand covers them, a price rise, an unusually large charge, a goal falling behind, and the month going negative. Each can be dismissed.
+
+**Example household.** Nine accounts and seven months of ordinary life, generated the same way every time, so every view can be tried before any real data goes in. Every example row is marked, and Settings takes them all away again.
+
+## Taxes
 
 **Capture.** Type an expense the way you'd say it: `$42.13 CVS prescription 3/14`, `18 miles to physical therapy on Aug 3`, `$300 tithe yesterday`. The parser pulls out amount, miles, and date; the categorizer suggests the worksheet line and says why. Corrections are remembered per payee. Snap a receipt from the camera; it is downscaled and stored with the entry. Log a bill at its business-use share, repeat monthly premiums in one go, compute a simplified-method home office, or value a bag of donated goods item by item from a catalog of typical thrift-shop ranges; the itemized list is saved with the entry as the record the IRS expects.
 
@@ -66,13 +94,19 @@ A multi-lens review (tax rules, parser, classifier, advisor, importer, geo, stor
 - **Tests.** The follow-up lenses of that round added regression tests for what the first pass left untested: the GPS trip recorder's state machine and permission denial, FEMA lookups against a stubbed fetch, the advisor's co-occurrence and receipt-habit rules, weekly through yearly cadences with same-day merging and a tolerated miss, the year plan's three outcomes, the Schedule C mileage guards, the date-gated year-end checklist, the appraisal, escrow, casualty and tuition insights, the CSV export, withdrawal/deposit and type-column statements with the sign override, relative-date aliases and date sources, and the classifier's limit and key; three assertions that could pass by accident were tightened.
 - **Worksheet.** The sheet names the taxpayer (Settings → About you); Self-Employed continues at the foot of the right column as on paper, so a full sheet fits one page; the lender's Name and Address lines are always printed; mileage rows show the rate applied; the Education section has no total (its lines go to different forms); totals and notes never split across a page; the text copy carries the lender lines and the full preparer notes.
 
+## The money side, built
+
+The tax side's code came through two rounds of review (below); the money side is new and has had one pass of its own: 43 tests over the engine, the importer, and the stores, and a browser run of every flow against both themes at phone and desktop width. That run found what a test in Node could not, and it is fixed here: a change written to a single store reached the IndexedDB transaction under the wrong handle and was refused, so edits saved only when they happened to touch two stores; the page widened to the longest table on a phone, because its one grid column was sized to its content; and the labels of thin nodes in the cash-flow picture sat on top of each other.
+
+Chart colours come from eight categorical slots validated for colour-vision deficiency against this app's own surfaces in light and dark, assigned to category groups in a fixed order, so a group keeps its colour on every chart. Three of the light slots are under 3:1 against white, so every chart carries its numbers as labelled rows or a table.
+
 ## Run it locally
 
 No install, no build.
 
 ```bash
 npx serve -l 4173 .        # then open http://localhost:4173
-npm test                    # node --test: parser, categorizer, tax engine, advisor, geo, importer
+npm test                    # node --test: parser, categorizer, tax engine, advisor, geo, importer, the money engine, statement import, storage
 npm run build               # dist/itemizer.html, the whole app in one file
 ```
 
@@ -97,13 +131,22 @@ Everything is on the device, in the browser's IndexedDB, as a small database rat
 | `layouts` | `signature` | a statement header and the column layout chosen for it |
 | `snapshots` | `id` | one month's year-end forecast, keyed `taxYear:month` |
 | `overrides` | `id` | one overridden tax parameter, keyed `taxYear:path` |
+| `accounts` | `id` | an account: name, type, institution, last four digits, how its balance is known |
+| `transactions` | `id` | a transaction, signed from the owner's side (money in positive), referencing its account and category by id |
+| `balances` | `id` | what an account was worth at the end of a day, keyed `accountId:date` |
+| `holdings` | `id` | a holding: account, symbol, shares, price, cost basis |
+| `goals` | `id` | a goal and the money logged against it |
+| `budgets` | `id` | one category's budget from one month on, keyed `month:categoryId` |
+| `categories` | `id` | an edit to a built-in category, or one of your own |
+| `rules` | `id` | a rule: what it matches and what it sets |
+| `recurring` | `id` | what you said about a recurring charge: not recurring, a name, an amount, a schedule |
 
-Rows carry ids, not display labels: a line is `med.doctor`, never "Doctor"; labels come from the schema when shown. Database version 3 split the old settings document, which carried the last six collections as one JSON value, into those stores; the upgrade runs in place and keeps every row. JSON is used only for the backup file (version 3: the settings row plus each store as an array of rows; version 2 files still import). Without IndexedDB the same stores are kept in localStorage, one key per store.
+Rows carry ids, not display labels: a line is `med.doctor`, never "Doctor", and a category is `coffee`, never "Coffee shops"; labels come from the schema or the category list when shown. Database version 4 added the nine money stores; the upgrade creates them and touches nothing else. Database version 3 split the old settings document, which carried the last six collections as one JSON value, into those stores; the upgrade runs in place and keeps every row. JSON is used only for the backup file (version 4: the settings row plus each store as an array of rows; version 2 and 3 files still import, and leave the money side alone). Without IndexedDB the same stores are kept in localStorage, one key per store.
 
 ## How it's put together
 
 ```
-index.html            shell: header, six views, tab bar, camera/file inputs
+index.html            shell: header, sidebar and phone tab bar, fourteen views, camera/file inputs
 styles.css            design tokens (light + dark), layout, components, print sheet
 js/schema.js          the worksheet as data: sections, lines, tax treatment, hints, keywords
 js/rules.js           tax-year parameters and the computation: Schedule A/C, verdict, insights
@@ -112,10 +155,13 @@ js/classify.js        line suggestions with explanations; learned payee map
 js/advisor.js         the recommender: recurrences, projection, gaps, anomalies, bunching, habits
 js/geo.js             distances, GPS trip recorder, track sketch, geocoding/routing/FEMA lookups
 js/importer.js        CSV statement parsing, column detection, dedupe, line suggestions
+js/money.js           the money engine: categories, merchants, rules, balances, cash flow, budgets, recurring, goals, holdings, insights
+js/money-import.js    OFX/QFX/QBO and budgeting-app CSV import, duplicate matching, the review rows
 js/valuation.js       donated-goods catalog, condition-based values, itemized record
 js/experiments.js     forecast snapshots and correction learning; their expiry and calibration
 js/store.js           IndexedDB, one object store per kind of record; row-level writes; backup, CSV
-js/app.js             the UI
+js/money-app.js       the money views, the statement import, and the money part of Settings
+js/app.js             the shell (routing, navigation, dialogs, settings, backups) and the tax views
 sw.js                 offline cache for the app shell
 manifest.webmanifest  installable web app metadata
 test/                 node:test suites for the modules, the app shell, the service worker and the stylesheet
@@ -127,7 +173,7 @@ The pure modules use a small UMD wrapper so the same files run in the browser as
 
 ## Privacy
 
-Data never leaves the device. There is no server, no analytics, and no usage tracking. The only network calls are the lookups you trigger yourself, an address search, a road distance, a disaster-declaration check, and the two typefaces, which come from Google Fonts. Opening the page asks Google for them, so Google sees your IP address and browser; the request carries no referrer, and the service worker serves them from its cache for the rest of that version's life. The page still opens a connection to Google on every launch, because the preconnect hints run before the worker sees them, and the font cache is rebuilt after each update. The single-file build does not ask for them at all. Each lookup sends just the query it needs to OpenStreetMap or FEMA, and each works without a connection by falling back or asking you. GPS positions are recorded only while you have pressed Start, and they stay with the trip on the device. Back up from Settings before clearing browser data or switching phones.
+Data never leaves the device. There is no server, no analytics, and no usage tracking. There is no bank login either: the money side reads the statement files you download from your bank, so no aggregator ever holds your credentials or your transactions, and account numbers in those files are reduced to a hash and the last four digits before anything is stored. The only network calls are the lookups you trigger yourself, an address search, a road distance, a disaster-declaration check, and the two typefaces, which come from Google Fonts. Opening the page asks Google for them, so Google sees your IP address and browser; the request carries no referrer, and the service worker serves them from its cache for the rest of that version's life. The page still opens a connection to Google on every launch, because the preconnect hints run before the worker sees them, and the font cache is rebuilt after each update. The single-file build does not ask for them at all. Each lookup sends just the query it needs to OpenStreetMap or FEMA, and each works without a connection by falling back or asking you. GPS positions are recorded only while you have pressed Start, and they stay with the trip on the device. Back up from Settings before clearing browser data or switching phones.
 
 ## Tax figures and disclaimer
 

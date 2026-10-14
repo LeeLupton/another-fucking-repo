@@ -4,7 +4,7 @@
  *
  * The app needs no build to run (open index.html over http, or deploy the folder).
  * This script only inlines the stylesheet and scripts into one HTML file so the
- * whole tracker can be emailed, dropped on a phone, or published anywhere that
+ * whole app can be emailed, dropped on a phone, or published anywhere that
  * accepts a single page. Two outputs:
  *
  *   dist/itemizer.html           complete page: open it from disk or any host
@@ -18,7 +18,7 @@ const crypto = require('crypto');
 const root = __dirname;
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
-const SCRIPTS = ['js/schema.js', 'js/rules.js', 'js/parse.js', 'js/classify.js', 'js/advisor.js', 'js/geo.js', 'js/importer.js', 'js/valuation.js', 'js/experiments.js', 'js/store.js', 'js/app.js'];
+const SCRIPTS = ['js/schema.js', 'js/rules.js', 'js/parse.js', 'js/classify.js', 'js/advisor.js', 'js/geo.js', 'js/importer.js', 'js/money.js', 'js/money-import.js', 'js/valuation.js', 'js/experiments.js', 'js/store.js', 'js/money-app.js', 'js/app.js'];
 const ICONS = ['icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png'];
 
 let html = read('index.html');
