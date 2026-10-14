@@ -11211,9 +11211,11 @@ window.ITEMIZER_SINGLE_FILE = true;
     for (let i = 0; i < keys.length - 1; i++) { const child = parent[keys[i]]; if (child && typeof child === 'object' && !Object.keys(child).length) { delete parent[keys[i]]; return; } parent = child; }
   }
   let themeColors = null; // the pair index.html ships, read once so the colours are not written down twice
+  let themeSetHere = false; // a page that hosts this one may set the theme itself; "system" takes back only what the app set
   function applyTheme() {
     const t = state.settings && state.settings.theme;
-    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+    if (t === 'light' || t === 'dark') { document.documentElement.dataset.theme = t; themeSetHere = true; }
+    else if (themeSetHere) { delete document.documentElement.dataset.theme; themeSetHere = false; }
     // the metas are media-gated on the device setting, so a forced theme would otherwise leave the status bar the other colour
     const metas = $$('meta[name="theme-color"]');
     if (!metas.length) return;
