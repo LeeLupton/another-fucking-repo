@@ -1,7 +1,7 @@
 {
-  "name": "Itemizer — deductible expense tracker",
+  "name": "Itemizer — money and deductions",
   "short_name": "Itemizer",
-  "description": "Keep track of deductible expenses through the year and know the moment itemizing beats the standard deduction.",
+  "description": "Accounts, transactions, budgets, cash flow, recurring bills, goals, and investments on your own device, with the deductions worksheet your tax preparer asks for.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
