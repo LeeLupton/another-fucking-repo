@@ -98,6 +98,8 @@ A multi-lens review (tax rules, parser, classifier, advisor, importer, geo, stor
 
 The tax side's code came through two rounds of review (below); the money side is new and has had one pass of its own: 43 tests over the engine, the importer, and the stores, and a browser run of every flow against both themes at phone and desktop width. That run found what a test in Node could not, and it is fixed here: a change written to a single store reached the IndexedDB transaction under the wrong handle and was refused, so edits saved only when they happened to touch two stores; the page widened to the longest table on a phone, because its one grid column was sized to its content; and the labels of thin nodes in the cash-flow picture sat on top of each other.
 
+A review of that work asked whether the service worker's cache version had been typed by hand. It had not: the build reproduces it at every commit. The question still led somewhere. The worker refreshed its own cache from the network one file at a time, so after a deploy it could hold the new page beside old scripts, and after the money side shipped, a page asking for three money scripts its cache never had; an offline reload before the update was accepted left the home view waiting for accounts that could not load. Now the build writes the worker's whole list with a hash for every file, the worker checks each file before it stores any of them, and a stored file is never replaced. For the changeover from a worker of the old kind, the new one also brings that worker's cache to its own build, whole.
+
 Chart colours come from eight categorical slots validated for colour-vision deficiency against this app's own surfaces in light and dark, assigned to category groups in a fixed order, so a group keeps its colour on every chart. Three of the light slots are under 3:1 against white, so every chart carries its numbers as labelled rows or a table.
 
 ## Run it locally
@@ -110,7 +112,9 @@ npm test                    # node --test: parser, categorizer, tax engine, advi
 npm run build               # dist/itemizer.html, the whole app in one file
 ```
 
-`npm run build` also rewrites the cache version stamped into `sw.js`. Both `sw.js` and `dist/` are committed, so run the build after any change under `js/` (or to the page, styles, manifest, icons, or `sw.js` itself); CI fails if the committed build is out of date.
+`npm run build` also writes the service worker's file list into `sw.js`: every file of the app with the SHA-256 of its bytes, and a cache version made from them. Neither is edited by hand. Both `sw.js` and `dist/` are committed, so run the build after any change under `js/` (or to the page, styles, manifest, icons, or `sw.js` itself); CI fails if the committed build is out of date.
+
+The worker checks each file against its hash when it installs and never replaces a cached file afterwards. A browser that already has the app installed therefore shows a change only once the build has run and the new version has been accepted, or with the developer tools set to bypass the worker. A browser that does not have it yet installs no worker from an unbuilt tree, so offline use and the install prompt are missing until the build has run; the reason is in the worker's own console, not the page's. For the same reason the host has to serve the files byte for byte as they are committed, which GitHub Pages does: one that rewrites a file on the way out would never let a new version install.
 
 Opening `index.html` straight from disk also works in Chromium-based browsers. The service worker and the install prompt need http(s).
 
@@ -162,10 +166,10 @@ js/experiments.js     forecast snapshots and correction learning; their expiry a
 js/store.js           IndexedDB, one object store per kind of record; row-level writes; backup, CSV
 js/money-app.js       the money views, the statement import, and the money part of Settings
 js/app.js             the shell (routing, navigation, dialogs, settings, backups) and the tax views
-sw.js                 offline cache for the app shell
+sw.js                 offline cache for the app shell: one checked cache per build, in which no file of the app is replaced
 manifest.webmanifest  installable web app metadata
 test/                 node:test suites for the modules, the app shell, the service worker and the stylesheet
-build.js              single-file bundler (no dependencies)
+build.js              single-file bundler; also writes the worker's file list and cache version (no dependencies)
 .github/workflows     CI (syntax, tests, build, and a check that the committed build is current) and the Pages deploy from main
 ```
 

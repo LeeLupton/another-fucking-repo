@@ -10,10 +10,14 @@
  *   dist/itemizer.html           complete page: open it from disk or any host
  *   dist/itemizer.fragment.html  the same page without <html>/<head>/<body>
  *                                wrappers, for hosts that supply the skeleton
+ *
+ * It also writes the service worker's file list, file hashes and cache version into
+ * sw.js (see the end of this file), so those are always made from the files as they are.
  */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const vm = require('vm');
 
 const root = __dirname;
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
@@ -52,18 +56,38 @@ const style = (html.match(/<style>[\s\S]*?<\/style>/) || [''])[0];
 const body = (html.match(/<body>([\s\S]*?)<\/body>/) || ['', ''])[1];
 fs.writeFileSync(path.join(root, 'dist/itemizer.fragment.html'), `${title}\n${style}\n${body.trim()}\n`);
 
-// Stamp the service worker with a hash of everything it caches — the page, the styles, the manifest, the
-// scripts, the icons and the worker itself — so every change to the app is a new cache version and a
-// commit that touches only the README or a workflow is not.
+// The service worker's file list and cache version are written here, from the files themselves, and are never
+// edited by hand:
+//   SHELL  every file the worker caches, with the SHA-256 of its bytes. The worker checks each file against
+//          its hash before storing it, so the list can only name files that exist, as they are served.
+//   STAMP  a hash of the worker once SHELL is in it. Every change to the app, down to one byte of an icon,
+//          is therefore a new cache version, and a commit that touches only the README or a workflow is not.
 const swPath = path.join(root, 'sw.js');
 const sw = fs.readFileSync(swPath, 'utf8');
-const STAMP_LINE = /const STAMP = '[^']*';/;
-const hash = crypto.createHash('sha256');
-for (const p of ['index.html', 'styles.css', 'manifest.webmanifest', ...SCRIPTS]) hash.update(read(p)).update('\u0000');
-for (const p of ICONS) hash.update(fs.readFileSync(path.join(root, p))).update('\u0000');
-hash.update(sw.replace(STAMP_LINE, '')); // minus the line this stamp is about to rewrite, or the hash would chase itself
-const stamp = hash.digest('hex').slice(0, 12);
-const stamped = sw.replace(STAMP_LINE, `const STAMP = '${stamp}';`);
+// Both are found at the start of a line, so the same words in a comment are never taken for the declaration.
+const SHELL_BLOCK = /^const SHELL = \{[^}]*\};$/gm;
+const STAMP_LINE = /^const STAMP = '[^']*';/gm;
+// A build that could not find the lines it writes, or wrote them into the wrong place, would leave a stale or
+// broken worker behind and still exit 0. So the worker is checked before it is rewritten and again before it is saved.
+const mustDeclareOnce = (src, when) => {
+  for (const [name, line] of [['SHELL', SHELL_BLOCK], ['STAMP', STAMP_LINE]]) {
+    if ((src.match(line) || []).length !== 1) throw new Error(`sw.js ${when} must declare ${name} exactly once, on its own line, in the form build.js writes it`);
+  }
+};
+mustDeclareOnce(sw, 'as it is');
+const shellFiles = ['index.html', 'styles.css', 'manifest.webmanifest', ...SCRIPTS, ...ICONS];
+for (const p of shellFiles) {
+  if (/['\\{}\s]/.test(p)) throw new Error(`${p}: a shell file name cannot contain a quote, a backslash, a brace or a space`);
+}
+const sha256 = (p) => crypto.createHash('sha256').update(fs.readFileSync(path.join(root, p))).digest('hex');
+// The root is index.html under another name; everything else is cached under its own path.
+const shell = [['./', 'index.html'], ...shellFiles.map((p) => ['./' + p, p])];
+const listed = sw.replace(SHELL_BLOCK, () => `const SHELL = {\n${shell.map(([key, p]) => `  '${key}': '${sha256(p)}',`).join('\n')}\n};`);
+// minus the line this stamp is about to rewrite, or the hash would chase itself
+const stamp = crypto.createHash('sha256').update(listed.replace(STAMP_LINE, '')).digest('hex').slice(0, 12);
+const stamped = listed.replace(STAMP_LINE, () => `const STAMP = '${stamp}';`);
+mustDeclareOnce(stamped, 'as built');
+new vm.Script(stamped, { filename: 'sw.js' }); // throws if what is about to be saved is not a script at all
 if (stamped !== sw) fs.writeFileSync(swPath, stamped);
 console.log(`sw.js cache version         ${stamp}`);
 
